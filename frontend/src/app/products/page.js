@@ -3,6 +3,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { fetchApi } from '@/lib/api';
+import ImportSheetModal from '@/components/ImportSheetModal';
 import { 
     Search, 
     Download, 
@@ -24,6 +25,7 @@ function ProductsContent() {
     const searchParams = useSearchParams();
     const profileSlug = searchParams?.get('profile') || 'newland';
     const [currentProfile, setCurrentProfile] = useState(null);
+    const [showImportModal, setShowImportModal] = useState(false);
 
     // Gating permissions
     if (!hasPermission('products')) {
@@ -236,7 +238,7 @@ function ProductsContent() {
                     <button 
                         type="button"
                         className="btn"
-                        onClick={() => toast(`Nhập file Excel / Link Google Sheets cho ${currentProfile?.name || 'Profile'}`, 'info')}
+                        onClick={() => setShowImportModal(true)}
                         style={{ 
                             display: 'flex', 
                             alignItems: 'center', 
@@ -622,6 +624,12 @@ function ProductsContent() {
                     </div>
                 </div>
             )}
+            {/* Import Sheet & Excel Modal */}
+            <ImportSheetModal 
+                isOpen={showImportModal} 
+                onClose={() => setShowImportModal(false)} 
+                profileName={currentProfile?.name || 'Profile'} 
+            />
         </div>
     );
 }

@@ -3,6 +3,7 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const XLSX = require('xlsx');
 const { google } = require('googleapis');
 const { productQueries } = require('../db');
 
@@ -22,6 +23,7 @@ const storage = multer.diskStorage({
     }
 });
 const upload = multer({ storage });
+const uploadMemory = multer({ storage: multer.memoryStorage() });
 
 // Helper to read settings
 function getSettings() {
@@ -347,6 +349,69 @@ router.post('/write', async (req, res) => {
     } catch (err) {
         console.error('[Sheets Write] Error:', err.message);
         res.status(500).json({ error: 'Failed to write to Google Sheets', details: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/sheets/parse-excel — Parse uploaded Excel/CSV file (.xlsx, .xls, .csv)
+// ──────────────────────────────────────────────────────────────
+router.post('/parse-excel', uploadMemory.single('file'), (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'Vui lòng chọn file Excel hoặc CSV.' });
+        const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+        const sheets = workbook.SheetNames.map(sheetName => {
+            const sheet = workbook.Sheets[sheetName];
+            const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+            return { name: sheetName, data };
+        });
+        res.json({ sheets, fileName: req.file.originalname });
+    } catch (err) {
+        console.error('Failed to parse excel file:', err);
+        res.status(500).json({ error: 'Lỗi khi đọc file Excel: ' + err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/sheets/parse-url — Parse Google Sheets URL / Spreadsheet ID
+// ──────────────────────────────────────────────────────────────
+router.post('/parse-url', async (req, res) => {
+    try {
+        const { url } = req.body;
+        if (!url) return res.status(400).json({ error: 'Vui lòng nhập link Google Sheets.' });
+        
+        const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+        const spreadsheetId = match ? match[1] : url.trim();
+
+        if (!fs.existsSync(CREDENTIALS_PATH)) {
+            return res.status(400).json({ error: 'Chưa cấu hình credentials.json cho Google Sheets API.' });
+        }
+
+        const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf-8'));
+        const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+        });
+        const sheetsApi = google.sheets({ version: 'v4', auth });
+        
+        const metadata = await sheetsApi.spreadsheets.get({ spreadsheetId });
+        const tabNames = metadata.data.sheets.map(s => s.properties.title);
+
+        const sheetPromises = tabNames.map(async (sheetName) => {
+            const rangeRes = await sheetsApi.spreadsheets.values.get({
+                spreadsheetId,
+                range: `${sheetName}!A1:ZZ1000`,
+            });
+            return {
+                name: sheetName,
+                data: rangeRes.data.values || []
+            };
+        });
+
+        const sheetsData = await Promise.all(sheetPromises);
+        res.json({ sheets: sheetsData, spreadsheetId });
+    } catch (err) {
+        console.error('Failed to parse google sheet url:', err);
+        res.status(500).json({ error: 'Không thể đọc Google Sheet: ' + (err.message || 'Lỗi kết nối') });
     }
 });
 
