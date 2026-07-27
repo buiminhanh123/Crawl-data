@@ -1,5 +1,6 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { fetchApi } from '@/lib/api';
 import { 
@@ -11,12 +12,16 @@ import {
     X, 
     Filter,
     ChevronLeft,
-    ChevronRight
+    ChevronRight,
+    Loader2
 } from 'lucide-react';
 
-export default function ProductsPage() {
+function ProductsContent() {
     const { user, hasPermission } = useAuth();
-    
+    const searchParams = useSearchParams();
+    const profileSlug = searchParams?.get('profile') || 'newland';
+    const [currentProfile, setCurrentProfile] = useState(null);
+
     // Gating permissions
     if (!hasPermission('products')) {
         return (
@@ -83,8 +88,22 @@ export default function ProductsPage() {
     }, []);
 
     useEffect(() => {
+        const fetchProfileInfo = async () => {
+            try {
+                const data = await fetchApi('/api/products/profiles');
+                if (data?.profiles) {
+                    const match = data.profiles.find(p => p.slug === profileSlug);
+                    if (match) setCurrentProfile(match);
+                    else setCurrentProfile({ name: profileSlug.charAt(0).toUpperCase() + profileSlug.slice(1), slug: profileSlug });
+                }
+            } catch (err) {}
+        };
+        fetchProfileInfo();
+    }, [profileSlug]);
+
+    useEffect(() => {
         fetchProducts();
-    }, [searchTerm, selectedCategory, currentPage]);
+    }, [searchTerm, selectedCategory, currentPage, profileSlug]);
 
     const handleSearchSubmit = (e) => {
         e.preventDefault();
@@ -160,10 +179,10 @@ export default function ProductsPage() {
             <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
                 <div>
                     <h2 style={{ fontSize: 24, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Package style={{ color: 'var(--accent)' }} /> Products Explorer
+                        <Package style={{ color: 'var(--accent)' }} /> Products — {currentProfile?.name?.startsWith('Profile') ? currentProfile.name : `Profile ${currentProfile?.name || 'Newland'}`}
                     </h2>
                     <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>
-                        Search, filter, and inspect detailed technical specifications of crawled products.
+                        Quản lý dữ liệu sản phẩm, thông số kỹ thuật và tài liệu của {currentProfile?.brand_name || currentProfile?.name || 'Profile'}.
                     </p>
                 </div>
                 <button 
@@ -532,5 +551,17 @@ export default function ProductsPage() {
                 </div>
             )}
         </div>
+    );
+}
+
+export default function ProductsPage() {
+    return (
+        <Suspense fallback={
+            <div className="page-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '300px' }}>
+                <Loader2 className="spin" size={24} style={{ color: 'var(--accent)' }} />
+            </div>
+        }>
+            <ProductsContent />
+        </Suspense>
     );
 }

@@ -165,6 +165,7 @@ export default function Sidebar() {
                                             <Link
                                                 key={p.id}
                                                 href={`/products?profile=${p.slug}`}
+                                                onClick={() => setActiveProfileSlug(p.slug)}
                                                 className={`sidebar-submenu-item ${isProfileActive ? 'active' : ''}`}
                                             >
                                                 <Package size={16} style={{ color: isProfileActive ? 'var(--accent)' : 'var(--text-muted)' }} />
@@ -180,7 +181,7 @@ export default function Sidebar() {
                                         onClick={() => setShowAddModal(true)}
                                     >
                                         <Plus size={15} />
-                                        <span>+ Thêm Profile</span>
+                                        <span>Thêm Profile</span>
                                     </button>
                                 </div>
                             )}
