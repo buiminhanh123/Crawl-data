@@ -13,7 +13,6 @@ import { LayoutDashboard, Package, LogOut, Briefcase, ChevronLeft, ChevronRight,
 const menuItems = [
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/' },
     { key: 'products', label: 'Products', icon: <Package size={20} />, path: '/products' },
-    { key: 'products', label: 'Bảng dữ liệu', icon: <FileSpreadsheet size={20} />, path: '/sheets' },
     { key: 'products', label: 'AI Assistant', icon: <Bot size={20} />, path: '/ai-assistant' },
 ];
 
