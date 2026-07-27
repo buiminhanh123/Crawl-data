@@ -1,0 +1,547 @@
+// ==========================================
+// MENU & SIDEBAR
+// ==========================================
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('🤖 AI Content')
+    .addItem('Mở công cụ AI', 'showSidebar')
+    .addToUi();
+}
+
+function showSidebar() {
+  var html = HtmlService.createHtmlOutputFromFile('Sidebar')
+    .setTitle('🤖 AI Content Writer')
+    .setWidth(630);
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+// ==========================================
+// LẤY DỮ LIỆU SHEET
+// ==========================================
+
+function getSheetNames() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheets().map(function(s) { return s.getName(); });
+}
+
+function getActiveSheetName() {
+  return SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName();
+}
+
+function getSheetData(sheetName, sourceCols, startRow, endRow) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName) || ss.getActiveSheet();
+  var lastRow = sheet.getLastRow();
+
+  if (!startRow || startRow < 1) startRow = 3;
+  if (!endRow || endRow < 1 || endRow > lastRow) endRow = lastRow;
+
+  var cols = sourceCols.split(',').map(function(c) { return c.trim().toUpperCase(); });
+
+  // Đọc tất cả cột cần thiết 1 lần — tránh gọi getRange nhiều lần
+  var allData = [];
+  for (var ci = 0; ci < cols.length; ci++) {
+    var colIndex = colLetterToIndex(cols[ci]);
+    var vals = sheet.getRange(startRow, colIndex, endRow - startRow + 1, 1).getValues();
+    allData.push(vals);
+  }
+
+  var rows = [];
+  for (var r = 0; r < (endRow - startRow + 1); r++) {
+    var parts = [];
+    for (var ci2 = 0; ci2 < cols.length; ci2++) {
+      var val = allData[ci2][r][0];
+      if (val !== '' && val !== null && val !== undefined) {
+        parts.push(String(val));
+      }
+    }
+    if (parts.length > 0) {
+      rows.push({ row: startRow + r, data: parts.join(' ; ') });
+    }
+  }
+  return rows;
+}
+
+function colLetterToIndex(col) {
+  var result = 0;
+  for (var i = 0; i < col.length; i++) {
+    result = result * 26 + (col.charCodeAt(i) - 64);
+  }
+  return result;
+}
+
+// ==========================================
+// GHI KẾT QUẢ VÀO SHEET
+// ==========================================
+
+function writeResult(sheetName, row, destCol, value) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName) || ss.getActiveSheet();
+  sheet.getRange(row, colLetterToIndex(destCol.trim().toUpperCase())).setValue(value);
+}
+
+function writeError(sheetName, row, destCol, errorMsg) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName) || ss.getActiveSheet();
+  var errorColIndex = colLetterToIndex(destCol.trim().toUpperCase()) + 1;
+  sheet.getRange(row, errorColIndex).setValue('❌ ' + errorMsg);
+}
+
+function clearErrorCell(sheetName, row, destCol) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName) || ss.getActiveSheet();
+  var errorColIndex = colLetterToIndex(destCol.trim().toUpperCase()) + 1;
+  sheet.getRange(row, errorColIndex).setValue('');
+}
+
+// ==========================================
+// CLEAN HTML & FILTER
+// ==========================================
+
+var AUTO_FILTER_PATTERNS = [
+  'ECLASS', 'ETIM', 'UNSPSC',
+  'Tuyên bố', 'RoHS', 'Thông tin theo Điều',
+  'MTTFD', 'MTBF', 'MTTF'
+];
+
+function cleanAndFilterHtml(rawData, extraBlacklist, maxFields, maxChars) {
+  if (!rawData || rawData.trim() === '') return '';
+
+  if (!/<[^>]+>/.test(rawData)) {
+    if (maxChars && maxChars > 0 && rawData.length > maxChars) {
+      return rawData.substring(0, maxChars) + '...';
+    }
+    return rawData;
+  }
+
+  var blacklist = AUTO_FILTER_PATTERNS.slice();
+  if (extraBlacklist && extraBlacklist.trim()) {
+    extraBlacklist.split(',').map(function(k) { return k.trim(); })
+      .forEach(function(k) { if (k) blacklist.push(k); });
+  }
+
+  var trMatches = rawData.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+  var results = [];
+  var lastHeader = '';
+  var fieldCount = 0;
+
+  for (var i = 0; i < trMatches.length; i++) {
+    var tr = trMatches[i];
+    if (/<th[\s>]/i.test(tr)) continue;
+
+    var tdMatches = tr.match(/<td[^>]*>([\s\S]*?)<\/td>/gi) || [];
+    var cells = tdMatches.map(function(td) {
+      return td
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&nbsp;/g, ' ').replace(/&#160;/g, ' ')
+        .replace(/✔/g, '').replace(/✓/g, '')
+        .trim();
+    }).filter(function(c) { return c !== ''; });
+
+    if (cells.length === 0) continue;
+    var key = cells[0] || '';
+
+    var blocked = blacklist.some(function(p) {
+      return key.toLowerCase().indexOf(p.toLowerCase()) === 0 ||
+             key.toLowerCase() === p.toLowerCase();
+    });
+    if (blocked) continue;
+
+    var isHeader = /colspan\s*=\s*["']?2["']?/i.test(tr) || cells.length === 1;
+    if (isHeader) {
+      lastHeader = key;
+      results.push('[' + key + ']');
+      continue;
+    }
+
+    if (maxFields && maxFields > 0 && fieldCount >= maxFields) {
+      results.push('...[đã lược bỏ]');
+      break;
+    }
+
+    if (cells.length >= 2) {
+      var k = cells[0], v = cells[1];
+      if (!k && lastHeader) {
+        results.push('  ' + v);
+      } else {
+        results.push(k + ': ' + v);
+        fieldCount++;
+      }
+    }
+  }
+
+  var cleaned = results.join(' | ');
+
+  if (maxChars && maxChars > 0 && cleaned.length > maxChars) {
+    var truncated = cleaned.substring(0, maxChars);
+    var lastPipe = truncated.lastIndexOf(' | ');
+    if (lastPipe > 0) truncated = truncated.substring(0, lastPipe);
+    cleaned = truncated + ' | ...[đã rút gọn]';
+  }
+
+  return cleaned || rawData;
+}
+
+// ==========================================
+// GỌI API AI - RAW
+// ==========================================
+
+function callAIRaw(fullPrompt) {
+  var url = "https://aidesign.io.vn/api/chatbot/chat";
+  var payload = { "message": fullPrompt, "stream": false, "history": [] };
+  var options = {
+    "method": "post",
+    "contentType": "application/json",
+    "headers": { "Authorization": "Bearer chatgpt2api" },
+    "payload": JSON.stringify(payload),
+    "muteHttpExceptions": true
+  };
+
+  var maxRetry = 2, delay = 3000;
+  for (var attempt = 1; attempt <= maxRetry; attempt++) {
+    try {
+      var response = UrlFetchApp.fetch(url, options);
+      var code = response.getResponseCode();
+      if (code == 200) {
+        var json = JSON.parse(response.getContentText());
+        return { success: true, content: json.choices[0].message.content };
+      }
+      if (code == 502 || code == 503 || code == 429) {
+        if (attempt < maxRetry) { Utilities.sleep(delay); delay *= 2; continue; }
+        return { success: false, error: 'HTTP ' + code + ' sau ' + maxRetry + ' lần thử' };
+      }
+      return { success: false, error: 'HTTP ' + code };
+    } catch(e) {
+      if (attempt < maxRetry) { Utilities.sleep(delay); delay *= 2; continue; }
+      return { success: false, error: e.message };
+    }
+  }
+}
+
+// ==========================================
+// RÚT GỌN NẾU QUÁ DÀI
+// ==========================================
+
+function shortenIfNeeded(content, maxLength) {
+  if (!maxLength || maxLength <= 0) return content;
+  if (!content || content.trim() === '') return content; // guard rỗng
+  if (content.length <= maxLength) return content;
+
+  var shortenPrompt = 'Hãy rút gọn đoạn văn sau xuống còn tối đa ' + maxLength +
+    ' ký tự, giữ nguyên ý nghĩa, không cắt giữa chừng, không thêm giải thích:\n' + content;
+  var result = callAIRaw(shortenPrompt);
+  if (result.success && result.content && result.content.trim()) {
+    return result.content.trim();
+  }
+  return content;
+}
+
+// ==========================================
+// XỬ LÝ 1 HÀNG
+// ==========================================
+
+function processRow(params) {
+  Logger.log('params: ' + JSON.stringify(params));
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(params.sheetName) || ss.getActiveSheet();
+
+    // Bỏ qua nếu cột đích đã có dữ liệu
+    if (params.skipExisting) {
+      var destIdx = colLetterToIndex(params.destCol.trim().toUpperCase());
+      var existing = sheet.getRange(params.row, destIdx).getValue();
+      if (existing !== '' && existing !== null && existing !== undefined) {
+        return { success: true, row: params.row, skipped: true, content: '' };
+      }
+    }
+
+    var maxFields = params.maxFields ? parseInt(params.maxFields) : 0;
+    var maxChars  = params.maxChars  ? parseInt(params.maxChars)  : 0;
+    var moc       = params.maxOutputChars ? parseInt(params.maxOutputChars) : 0;
+
+    // Build prompt từ biến
+    var finalPrompt = params.prompt;
+    var hasData = false;
+    for (var i = 0; i < params.variables.length; i++) {
+      var v = params.variables[i];
+      if (!v || !v.col || !v.varName) continue;
+      var colIndex = colLetterToIndex(v.col.trim().toUpperCase());
+      var val = sheet.getRange(params.row, colIndex).getValue();
+      var valStr = (val !== '' && val !== null && val !== undefined) ? String(val) : '';
+      var cleanedVal = cleanAndFilterHtml(valStr, params.extraBlacklist || '', maxFields, maxChars);
+      finalPrompt = finalPrompt.split('{' + v.varName + '}').join(cleanedVal);
+      if (cleanedVal.trim()) hasData = true;
+    }
+
+    if (!hasData) {
+      return { success: false, row: params.row, error: 'Tất cả biến đều trống, bỏ qua' };
+    }
+
+    Utilities.sleep(1000);
+    var result = callAIRaw(finalPrompt);
+
+    if (result.success) {
+      // Retry nếu AI trả về rỗng
+      if (!result.content || result.content.trim() === '') {
+        for (var retry = 0; retry < 3; retry++) {
+          Utilities.sleep(2000);
+          result = callAIRaw(finalPrompt);
+          if (result.success && result.content && result.content.trim()) break;
+        }
+      }
+      if (!result.content || result.content.trim() === '') {
+        writeError(params.sheetName, params.row, params.destCol, 'AI trả về rỗng sau 3 lần thử');
+        addErrorRow(params.sheetName, params.row);
+        return { success: false, row: params.row, error: 'AI trả về rỗng sau 3 lần thử' };
+      }
+
+      // Rút gọn nếu cần
+      var finalContent = shortenIfNeeded(result.content, moc);
+
+      // Hàng rào 10%: tự retry tối đa 3 lần nếu vượt quá
+      if (moc > 0 && finalContent.length > moc * 1.1) {
+        var shortenRetry = 0;
+        while (shortenRetry < 3 && finalContent.length > moc * 1.1) {
+          shortenRetry++;
+          Utilities.sleep(1500);
+          var retryPrompt = 'Hãy viết lại đoạn sau, bắt buộc không được vượt quá ' + moc + 
+            ' ký tự, giữ nguyên ý nghĩa, không thêm giải thích:\n' + finalContent;
+          var retryResult = callAIRaw(retryPrompt);
+          if (retryResult.success && retryResult.content && retryResult.content.trim()) {
+            finalContent = retryResult.content.trim();
+          }
+        }
+        // Sau 3 lần vẫn vượt → đánh lỗi cache
+        if (finalContent.length > moc * 1.1) {
+          writeError(params.sheetName, params.row, params.destCol,
+            'Vượt giới hạn sau 3 lần rút gọn: ' + finalContent.length + '/' + moc);
+          addErrorRow(params.sheetName, params.row);
+          return { success: false, row: params.row, error: 'Vượt giới hạn: ' + finalContent.length + '/' + moc };
+        }
+      }
+
+      writeResult(params.sheetName, params.row, params.destCol, finalContent);
+      return { success: true, row: params.row, content: finalContent };
+
+    } else {
+      writeError(params.sheetName, params.row, params.destCol, result.error);
+      addErrorRow(params.sheetName, params.row);
+      return { success: false, row: params.row, error: result.error };
+    }
+  } catch(e) {
+    try {
+      writeError(params.sheetName, params.row, params.destCol, e.message);
+      addErrorRow(params.sheetName, params.row);
+    } catch(e2) {}
+    return { success: false, row: params.row, error: e.message };
+  }
+}
+
+// ==========================================
+// ERROR ROW TRACKING (cache)
+// ==========================================
+
+function addErrorRow(sheetName, row) {
+  if (!row || isNaN(parseInt(row))) return;
+  row = parseInt(row);
+  var props = PropertiesService.getUserProperties();
+  var key = 'error_rows_' + sheetName;
+  var rows = JSON.parse(props.getProperty(key) || '[]');
+  if (rows.indexOf(row) === -1) rows.push(row);
+  props.setProperty(key, JSON.stringify(rows));
+}
+function getErrorRowsFromTag(sheetName) {
+  var props = PropertiesService.getUserProperties();
+  var key = 'error_rows_' + sheetName;
+  var rows = JSON.parse(props.getProperty(key) || '[]');
+  return rows
+    .filter(function(r) { return r !== null && r !== undefined && !isNaN(r); })
+    .map(function(r) { return { row: parseInt(r), data: '' }; });
+}
+
+function clearErrorRows(sheetName) {
+  PropertiesService.getUserProperties().deleteProperty('error_rows_' + sheetName);
+}
+
+// ==========================================
+// GET ERROR ROWS - SMART (cache + scan theo batch 200)
+// ==========================================
+
+function getErrorRowsBatch(sheetName, destCol, startRow, endRow, batchStart) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName) || ss.getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  if (!endRow || endRow < 1) endRow = lastRow;
+  if (!batchStart || batchStart < startRow) batchStart = startRow;
+
+  var BATCH_SIZE = 200;
+  var batchEnd = Math.min(batchStart + BATCH_SIZE - 1, endRow);
+
+  var destColIndex  = colLetterToIndex(destCol.trim().toUpperCase());
+  var errorColIndex = destColIndex + 1;
+
+  // Đọc cả 2 cột 1 lần
+  var destValues  = sheet.getRange(batchStart, destColIndex,  batchEnd - batchStart + 1, 1).getValues();
+  var errorValues = sheet.getRange(batchStart, errorColIndex, batchEnd - batchStart + 1, 1).getValues();
+
+  var errorRows = [];
+  for (var i = 0; i < destValues.length; i++) {
+    var destVal = destValues[i][0];
+    var errVal  = String(errorValues[i][0] || '');
+    var hasError     = errVal.indexOf('❌') === 0;
+    var hasDestEmpty = (destVal === '' || destVal === null || destVal === undefined);
+    if (hasError || hasDestEmpty) {
+      errorRows.push({ row: batchStart + i, data: errVal });
+    }
+  }
+
+  return {
+    errorRows: errorRows,
+    batchStart: batchStart,
+    batchEnd: batchEnd,
+    hasMore: batchEnd < endRow,
+    nextBatch: batchEnd + 1
+  };
+}
+
+// ==========================================
+// PREVIEW PROMPT
+// ==========================================
+
+function previewPrompt(params) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(params.sheetName) || ss.getActiveSheet();
+  var maxFields = params.maxFields ? parseInt(params.maxFields) : 0;
+  var maxChars  = params.maxChars  ? parseInt(params.maxChars)  : 0;
+  var previews  = [];
+
+  for (var r = params.startRow; r <= params.startRow + 1; r++) {
+    var finalPrompt = params.prompt;
+    for (var i = 0; i < params.variables.length; i++) {
+      var v = params.variables[i];
+      if (!v || !v.col || !v.varName) continue;
+      var colIndex = colLetterToIndex(v.col.trim().toUpperCase());
+      var val = sheet.getRange(r, colIndex).getValue();
+      var valStr = (val !== '' && val !== null) ? String(val) : '';
+      var cleanedVal = cleanAndFilterHtml(valStr, params.extraBlacklist || '', maxFields, maxChars);
+      finalPrompt = finalPrompt.split('{' + v.varName + '}').join(cleanedVal);
+    }
+    previews.push({ row: r, prompt: finalPrompt });
+  }
+  return previews;
+}
+
+// ==========================================
+// TEST API
+// ==========================================
+
+function checkAPILimit() {
+  var results = [];
+  for (var i = 1; i <= 10; i++) {
+    var start = new Date().getTime();
+    var result = callAIRaw('Trả lời đúng 1 từ: OK');
+    var ms = new Date().getTime() - start;
+    results.push({
+      index: i,
+      success: result.success,
+      msg: result.success ? 'OK' : result.error,
+      ms: ms
+    });
+    Utilities.sleep(1000);
+  }
+  return results;
+}
+
+// ==========================================
+// CONFIG PROFILES
+// ==========================================
+
+function saveConfigProfile(profileName, config) {
+  var props = PropertiesService.getUserProperties();
+  var allProfiles = JSON.parse(props.getProperty('ai_profiles') || '{}');
+  allProfiles[profileName] = config;
+  props.setProperty('ai_profiles', JSON.stringify(allProfiles));
+  return Object.keys(allProfiles);
+}
+
+function loadConfigProfile(profileName) {
+  var props = PropertiesService.getUserProperties();
+  var allProfiles = JSON.parse(props.getProperty('ai_profiles') || '{}');
+  return allProfiles[profileName] || null;
+}
+
+function deleteConfigProfile(profileName) {
+  var props = PropertiesService.getUserProperties();
+  var allProfiles = JSON.parse(props.getProperty('ai_profiles') || '{}');
+  delete allProfiles[profileName];
+  props.setProperty('ai_profiles', JSON.stringify(allProfiles));
+  return Object.keys(allProfiles);
+}
+
+function getProfileList() {
+  var props = PropertiesService.getUserProperties();
+  var allProfiles = JSON.parse(props.getProperty('ai_profiles') || '{}');
+  return Object.keys(allProfiles);
+}
+
+// ==========================================
+// PROMPT TEMPLATES
+// ==========================================
+
+function saveTemplate(templateName, promptText) {
+  var props = PropertiesService.getUserProperties();
+  var templates = JSON.parse(props.getProperty('ai_templates') || '{}');
+  templates[templateName] = promptText;
+  props.setProperty('ai_templates', JSON.stringify(templates));
+  return Object.keys(templates);
+}
+
+function loadTemplate(templateName) {
+  var props = PropertiesService.getUserProperties();
+  var templates = JSON.parse(props.getProperty('ai_templates') || '{}');
+  return templates[templateName] || null;
+}
+
+function deleteTemplate(templateName) {
+  var props = PropertiesService.getUserProperties();
+  var templates = JSON.parse(props.getProperty('ai_templates') || '{}');
+  delete templates[templateName];
+  props.setProperty('ai_templates', JSON.stringify(templates));
+  return Object.keys(templates);
+}
+
+function getTemplateList() {
+  var props = PropertiesService.getUserProperties();
+  var templates = JSON.parse(props.getProperty('ai_templates') || '{}');
+  return Object.keys(templates);
+}
+
+// ==========================================
+// QUEUE HISTORY
+// ==========================================
+
+function saveHistory(entry) {
+  var props = PropertiesService.getUserProperties();
+  var history = JSON.parse(props.getProperty('ai_history') || '[]');
+  history.unshift(entry);
+  if (history.length > 20) history = history.slice(0, 20);
+  props.setProperty('ai_history', JSON.stringify(history));
+}
+
+function getHistory() {
+  var props = PropertiesService.getUserProperties();
+  return JSON.parse(props.getProperty('ai_history') || '[]');
+}
+
+function clearHistory() {
+  PropertiesService.getUserProperties().deleteProperty('ai_history');
+}
+function testErrorCache() {
+  var sheetName = 'tên sheet của bạn'; // đổi lại
+  addErrorRow(sheetName, 100);
+  addErrorRow(sheetName, 200);
+  var result = getErrorRowsFromTag(sheetName);
+  Logger.log('Cache: ' + JSON.stringify(result));
+}

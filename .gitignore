@@ -1,0 +1,25 @@
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Next.js
+.next/
+**/.next/
+out/
+build/
+
+# Logs & temp files
+*.log
+crawler_test.log
+__pycache__/
+*.pyc
+
+# Database & local data
+server/data/*.db
+server/data/*.db-journal
+server/data/credentials.json
+server/data/sheet_settings.json
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,594 @@
+const initSqlJs = require('sql.js');
+const path = require('path');
+const fs = require('fs');
+const bcrypt = require('bcryptjs');
+
+let db;
+const DB_PATH = path.join(__dirname, 'data', 'app.db');
+
+/**
+ * Initialize the SQLite database.
+ * Creates the data directory, loads or creates the DB file,
+ * and runs initial schema setup.
+ */
+async function initDatabase() {
+    const dataDir = path.join(__dirname, 'data');
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    const SQL = await initSqlJs();
+
+    if (fs.existsSync(DB_PATH)) {
+        const fileBuffer = fs.readFileSync(DB_PATH);
+        db = new SQL.Database(fileBuffer);
+    } else {
+        db = new SQL.Database();
+    }
+
+    // Enable WAL mode for better concurrency
+    db.run('PRAGMA journal_mode = WAL;');
+
+    // ──────────────────────────────────────────────────────────
+    //  SCHEMA: Users & Permissions (standard for all DACO apps)
+    // ──────────────────────────────────────────────────────────
+    db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT UNIQUE,
+            password_hash TEXT NOT NULL,
+            display_name TEXT DEFAULT '',
+            role TEXT DEFAULT 'user',
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            feature TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(user_id, feature)
+        )
+    `);
+
+    // ──────────────────────────────────────────────────────────
+    //  CUSTOMIZE: Local Sheets Tables
+    // ──────────────────────────────────────────────────────────
+    db.run(`
+        CREATE TABLE IF NOT EXISTS local_sheets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            parent_id INTEGER DEFAULT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+
+    try {
+        db.run('ALTER TABLE local_sheets ADD COLUMN parent_id INTEGER DEFAULT NULL');
+    } catch (e) {}
+
+    // Auto-migrate orphan sub-tabs (sheets named "Tab..." or "Trang tính...") to primary parent table
+    try {
+        const parentRes = db.exec("SELECT id FROM local_sheets WHERE parent_id IS NULL AND name NOT LIKE 'Tab %' AND name NOT LIKE 'Trang tính %' ORDER BY id ASC LIMIT 1");
+        if (parentRes[0]?.values[0]) {
+            const firstParentId = parentRes[0].values[0][0];
+            db.run("UPDATE local_sheets SET parent_id = ? WHERE parent_id IS NULL AND (name LIKE 'Tab %' OR name LIKE 'Trang tính %')", [firstParentId]);
+            saveDatabase();
+        }
+    } catch (e) {}
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS local_sheet_columns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sheet_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            header_label TEXT NOT NULL,
+            data_type TEXT DEFAULT 'text',
+            FOREIGN KEY (sheet_id) REFERENCES local_sheets(id) ON DELETE CASCADE,
+            UNIQUE(sheet_id, name)
+        )
+    `);
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS local_sheet_rows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sheet_id INTEGER NOT NULL,
+            row_number INTEGER NOT NULL,
+            cells_json TEXT NOT NULL,
+            FOREIGN KEY (sheet_id) REFERENCES local_sheets(id) ON DELETE CASCADE,
+            UNIQUE(sheet_id, row_number)
+        )
+    `);
+
+    // Seed default sheet template if none exists
+    const sheetCount = db.exec("SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='local_sheets'");
+    if (sheetCount[0]?.values[0]?.[0] > 0) {
+        const scRes = db.exec("SELECT COUNT(*) as c FROM local_sheets");
+        const sCount = scRes[0]?.values[0]?.[0] || 0;
+        if (sCount === 0) {
+            const defaultCols = [
+                { name: 'A', header_label: 'Link', data_type: 'text' },
+                { name: 'B', header_label: 'Danh mục', data_type: 'text' },
+                { name: 'C', header_label: 'Hãng', data_type: 'text' },
+                { name: 'D', header_label: 'Model', data_type: 'text' },
+                { name: 'E', header_label: 'Tên sản phẩm', data_type: 'text' },
+                { name: 'F', header_label: 'Đường dẫn ảnh', data_type: 'text' },
+                { name: 'G', header_label: 'Mô tả ngắn', data_type: 'text' },
+                { name: 'H', header_label: 'Đặc điểm', data_type: 'text' },
+                { name: 'I', header_label: 'Thông số kỹ thuật', data_type: 'html' },
+                { name: 'J', header_label: 'Sapo', data_type: 'text' },
+                { name: 'K', header_label: 'Meta Title', data_type: 'text' },
+                { name: 'L', header_label: 'Meta Description', data_type: 'text' },
+            ];
+            db.run("INSERT INTO local_sheets (name) VALUES (?)", ['Mẫu SEO & Sapo mặc định']);
+            const sheetRes = db.exec('SELECT last_insert_rowid()');
+            const sheetId = sheetRes[0].values[0][0];
+            defaultCols.forEach(col => {
+                db.run(
+                    'INSERT INTO local_sheet_columns (sheet_id, name, header_label, data_type) VALUES (?, ?, ?, ?)',
+                    [sheetId, col.name, col.header_label, col.data_type]
+                );
+            });
+        }
+    }
+    // ──────────────────────────────────────────────────────────
+
+    // Seed default admin user if none exists
+    const adminExists = db.exec("SELECT COUNT(*) as c FROM users WHERE role = 'admin'");
+    const count = adminExists[0]?.values[0]?.[0] || 0;
+    if (count === 0) {
+        const hash = bcrypt.hashSync('admin123', 10);
+        db.run(
+            `INSERT INTO users (username, email, password_hash, display_name, role)
+             VALUES (?, ?, ?, ?, ?)`,
+            ['admin', 'admin@example.com', hash, 'Administrator', 'admin']
+        );
+    }
+
+    saveDatabase();
+    console.log('Database initialized successfully');
+    
+    // Reset products.db crawler status to 'Idle' on startup so it doesn't get stuck in 'Running' if it crashed/interrupted
+    try {
+        const pdb = await openProductsDb();
+        pdb.run("UPDATE crawler_status SET status = 'Idle', last_message = 'Interrupted / Ready' WHERE status = 'Running' OR status = 'Starting'");
+        const pdbData = pdb.export();
+        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(pdbData));
+        pdb.close();
+        console.log('Products crawler status reset to Idle successfully');
+    } catch (e) {
+        console.error('Failed to reset crawler status:', e);
+    }
+}
+
+/**
+ * Save database to disk (call after any write operation)
+ */
+function saveDatabase() {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+}
+
+// ============================================================
+//  QUERY HELPERS — Users
+// ============================================================
+const userQueries = {
+    findById: (id) => {
+        const results = db.exec('SELECT id, username, email, display_name, role, is_active FROM users WHERE id = ?', [id]);
+        if (!results[0]?.values[0]) return null;
+        const cols = results[0].columns;
+        const vals = results[0].values[0];
+        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    },
+
+    findByEmail: (email) => {
+        const results = db.exec('SELECT * FROM users WHERE email = ?', [email]);
+        if (!results[0]?.values[0]) return null;
+        const cols = results[0].columns;
+        const vals = results[0].values[0];
+        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    },
+
+    findByUsername: (username) => {
+        const results = db.exec('SELECT * FROM users WHERE username = ?', [username]);
+        if (!results[0]?.values[0]) return null;
+        const cols = results[0].columns;
+        const vals = results[0].values[0];
+        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    },
+
+    updatePassword: (id, hash) => {
+        db.run('UPDATE users SET password_hash = ?, updated_at = datetime("now") WHERE id = ?', [hash, id]);
+        saveDatabase();
+    },
+};
+
+// ============================================================
+//  QUERY HELPERS — Permissions
+// ============================================================
+const permissionQueries = {
+    getByUserId: (userId) => {
+        const results = db.exec('SELECT feature FROM permissions WHERE user_id = ?', [userId]);
+        if (!results[0]) return [];
+        return results[0].values.map(v => v[0]);
+    },
+
+    hasPermission: (userId, feature) => {
+        const results = db.exec('SELECT COUNT(*) FROM permissions WHERE user_id = ? AND feature = ?', [userId, feature]);
+        return (results[0]?.values[0]?.[0] || 0) > 0;
+    },
+};
+
+const PRODUCTS_DB_PATH = path.join(__dirname, 'data', 'products.db');
+
+// Helper to open products DB
+async function openProductsDb() {
+    const SQL = await initSqlJs();
+    if (fs.existsSync(PRODUCTS_DB_PATH)) {
+        const fileBuffer = fs.readFileSync(PRODUCTS_DB_PATH);
+        return new SQL.Database(fileBuffer);
+    } else {
+        const db = new SQL.Database();
+        // Initialize schema
+        db.run(`
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT,
+                slug TEXT,
+                name TEXT,
+                description TEXT,
+                image_url TEXT,
+                url TEXT UNIQUE,
+                specifications TEXT,
+                part_number TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        db.run(`
+            CREATE TABLE IF NOT EXISTS crawler_status (
+                id INTEGER PRIMARY KEY,
+                status TEXT,
+                progress INTEGER,
+                total_items INTEGER,
+                current_item INTEGER,
+                last_message TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        db.run("INSERT OR IGNORE INTO crawler_status (id, status, progress, total_items, current_item, last_message) VALUES (1, 'Idle', 0, 0, 0, 'Ready')");
+        // Save database
+        const data = db.export();
+        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(data));
+        return db;
+    }
+}
+
+function saveProductsDb(productsDb) {
+    const data = productsDb.export();
+    fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(data));
+}
+
+// ============================================================
+//  QUERY HELPERS — Products & Crawler
+// ============================================================
+const productQueries = {
+    getAll: async (search = '', category = '', limit = 10, offset = 0) => {
+        const pdb = await openProductsDb();
+        let query = 'SELECT * FROM products WHERE 1=1';
+        const params = [];
+        if (search) {
+            query += ' AND (name LIKE ? OR description LIKE ? OR part_number LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        }
+        if (category) {
+            query += ' AND category = ?';
+            params.push(category);
+        }
+        
+        // Get total count first
+        let countQuery = query.replace('SELECT *', 'SELECT COUNT(*)');
+        const countRes = pdb.exec(countQuery, params);
+        const total = countRes[0]?.values[0]?.[0] || 0;
+        
+        query += ' ORDER BY id DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const res = pdb.exec(query, params);
+        pdb.close();
+        
+        if (!res[0]) return { total, items: [] };
+        
+        const cols = res[0].columns;
+        const items = res[0].values.map(vals => 
+            Object.fromEntries(cols.map((c, i) => [c, vals[i]]))
+        );
+        return { total, items };
+    },
+    
+    getById: async (id) => {
+        const pdb = await openProductsDb();
+        const res = pdb.exec('SELECT * FROM products WHERE id = ?', [id]);
+        pdb.close();
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        const vals = res[0].values[0];
+        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    },
+    
+    getCategories: async () => {
+        const pdb = await openProductsDb();
+        const res = pdb.exec('SELECT DISTINCT category FROM products ORDER BY category ASC');
+        pdb.close();
+        if (!res[0]) return [];
+        return res[0].values.map(v => v[0]);
+    },
+    
+    getStats: async () => {
+        const pdb = await openProductsDb();
+        const countRes = pdb.exec('SELECT COUNT(*) FROM products');
+        const totalProducts = countRes[0]?.values[0]?.[0] || 0;
+        
+        const catRes = pdb.exec('SELECT category, COUNT(*) as count FROM products GROUP BY category ORDER BY count DESC');
+        pdb.close();
+        
+        const categoryCounts = [];
+        if (catRes[0]) {
+            const cols = catRes[0].columns;
+            catRes[0].values.forEach(vals => {
+                categoryCounts.push(Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
+            });
+        }
+        
+        return { totalProducts, categoryCounts };
+    },
+    
+    getCrawlerStatus: async () => {
+        const pdb = await openProductsDb();
+        const res = pdb.exec('SELECT * FROM crawler_status WHERE id = 1');
+        pdb.close();
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        const vals = res[0].values[0];
+        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    },
+    
+    updateCrawlerStatus: async (status, progress, total_items, current_item, last_message) => {
+        const pdb = await openProductsDb();
+        pdb.run(`
+            UPDATE crawler_status 
+            SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, updated_at = datetime('now')
+            WHERE id = 1
+        `, [status, progress, total_items, current_item, last_message]);
+        saveProductsDb(pdb);
+        pdb.close();
+    },
+
+    getCrawlerLogs: async () => {
+        const pdb = await openProductsDb();
+        const res = pdb.exec('SELECT message, datetime(created_at, "localtime") as time FROM crawler_logs ORDER BY id DESC LIMIT 50');
+        pdb.close();
+        if (!res[0]) return [];
+        const cols = res[0].columns;
+        return res[0].values.map(vals => 
+            Object.fromEntries(cols.map((c, i) => [c, vals[i]]))
+        );
+    },
+
+    getFailedUrls: async () => {
+        const pdb = await openProductsDb();
+        // Table might not exist yet if crawler hasn't run — handle gracefully
+        try {
+            const res = pdb.exec('SELECT id, url, category, slug, error, attempts, datetime(failed_at, "localtime") as failed_at FROM crawler_failed ORDER BY failed_at DESC');
+            pdb.close();
+            if (!res[0]) return [];
+            const cols = res[0].columns;
+            return res[0].values.map(vals =>
+                Object.fromEntries(cols.map((c, i) => [c, vals[i]]))
+            );
+        } catch (e) {
+            pdb.close();
+            return [];
+        }
+    },
+
+    getFailedCount: async () => {
+        const pdb = await openProductsDb();
+        try {
+            const res = pdb.exec('SELECT COUNT(*) FROM crawler_failed');
+            pdb.close();
+            return res[0]?.values[0]?.[0] || 0;
+        } catch (e) {
+            pdb.close();
+            return 0;
+        }
+    },
+
+    clearFailedUrls: async () => {
+        const pdb = await openProductsDb();
+        try {
+            pdb.run('DELETE FROM crawler_failed');
+            saveProductsDb(pdb);
+            pdb.close();
+            return true;
+        } catch (e) {
+            pdb.close();
+            return false;
+        }
+    }
+};
+
+const localSheetQueries = {
+    getAll: () => {
+        const res = db.exec('SELECT * FROM local_sheets ORDER BY id DESC');
+        if (!res[0]) return [];
+        const cols = res[0].columns;
+        return res[0].values.map(vals => Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
+    },
+
+    getById: (id) => {
+        const res = db.exec('SELECT * FROM local_sheets WHERE id = ?', [id]);
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, res[0].values[0][i]]));
+    },
+
+    getByName: (name) => {
+        const res = db.exec('SELECT * FROM local_sheets WHERE name = ?', [name]);
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, res[0].values[0][i]]));
+    },
+
+    create: (name, columns = [], parent_id = null) => {
+        db.run('INSERT INTO local_sheets (name, parent_id) VALUES (?, ?)', [name, parent_id || null]);
+        const sheetRes = db.exec('SELECT last_insert_rowid()');
+        const sheetId = sheetRes[0].values[0][0];
+
+        // Insert columns
+        columns.forEach((col, idx) => {
+            db.run(
+                'INSERT INTO local_sheet_columns (sheet_id, name, header_label, data_type) VALUES (?, ?, ?, ?)',
+                [sheetId, col.name, col.header_label, col.data_type || 'text']
+            );
+        });
+
+        saveDatabase();
+        return sheetId;
+    },
+
+    delete: (id) => {
+        db.run('DELETE FROM local_sheets WHERE id = ? OR parent_id = ?', [id, id]);
+        saveDatabase();
+    },
+
+    getColumns: (sheetId) => {
+        const res = db.exec('SELECT * FROM local_sheet_columns WHERE sheet_id = ? ORDER BY id ASC', [sheetId]);
+        if (!res[0]) return [];
+        const cols = res[0].columns;
+        return res[0].values.map(vals => Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
+    },
+
+    getRows: (sheetId) => {
+        const res = db.exec('SELECT * FROM local_sheet_rows WHERE sheet_id = ? ORDER BY row_number ASC', [sheetId]);
+        if (!res[0]) return [];
+        const cols = res[0].columns;
+        return res[0].values.map(vals => {
+            const row = Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+            try {
+                row.cells = JSON.parse(row.cells_json);
+            } catch (e) {
+                row.cells = {};
+            }
+            return row;
+        });
+    },
+
+    writeCell: (sheetId, rowNumber, colName, value) => {
+        const res = db.exec('SELECT cells_json FROM local_sheet_rows WHERE sheet_id = ? AND row_number = ?', [sheetId, rowNumber]);
+        let cells = {};
+        if (res[0]?.values[0]) {
+            try {
+                cells = JSON.parse(res[0].values[0][0]);
+            } catch (e) {}
+            cells[colName] = value;
+            db.run(
+                'UPDATE local_sheet_rows SET cells_json = ? WHERE sheet_id = ? AND row_number = ?',
+                [JSON.stringify(cells), sheetId, rowNumber]
+            );
+        } else {
+            cells[colName] = value;
+            db.run(
+                'INSERT INTO local_sheet_rows (sheet_id, row_number, cells_json) VALUES (?, ?, ?)',
+                [sheetId, rowNumber, JSON.stringify(cells)]
+            );
+        }
+        db.run('UPDATE local_sheets SET updated_at = datetime("now") WHERE id = ?', [sheetId]);
+        saveDatabase();
+    },
+
+    writeCellsBatch: (sheetId, updates) => {
+        // Group by rowNumber
+        const rowUpdates = {};
+        for (const update of updates) {
+            const { rowNumber, colName, value } = update;
+            const rNum = parseInt(rowNumber);
+            if (!rowUpdates[rNum]) {
+                rowUpdates[rNum] = [];
+            }
+            rowUpdates[rNum].push({ colName: colName.toUpperCase().trim(), value });
+        }
+
+        for (const [rowNumberStr, cols] of Object.entries(rowUpdates)) {
+            const rowNumber = parseInt(rowNumberStr);
+            const res = db.exec('SELECT cells_json FROM local_sheet_rows WHERE sheet_id = ? AND row_number = ?', [sheetId, rowNumber]);
+            let cells = {};
+            if (res[0]?.values[0]) {
+                try {
+                    cells = JSON.parse(res[0].values[0][0]);
+                } catch (e) {}
+                for (const col of cols) {
+                    cells[col.colName] = col.value;
+                }
+                db.run(
+                    'UPDATE local_sheet_rows SET cells_json = ? WHERE sheet_id = ? AND row_number = ?',
+                    [JSON.stringify(cells), sheetId, rowNumber]
+                );
+            } else {
+                for (const col of cols) {
+                    cells[col.colName] = col.value;
+                }
+                db.run(
+                    'INSERT INTO local_sheet_rows (sheet_id, row_number, cells_json) VALUES (?, ?, ?)',
+                    [sheetId, rowNumber, JSON.stringify(cells)]
+                );
+            }
+        }
+        db.run('UPDATE local_sheets SET updated_at = datetime("now") WHERE id = ?', [sheetId]);
+        saveDatabase();
+    },
+
+    addColumn: (sheetId, name, headerLabel, dataType = 'text') => {
+        db.run(
+            'INSERT INTO local_sheet_columns (sheet_id, name, header_label, data_type) VALUES (?, ?, ?, ?)',
+            [sheetId, name, headerLabel, dataType]
+        );
+        saveDatabase();
+    },
+
+    addRow: (sheetId, rowNumber, cells = {}) => {
+        db.run(
+            'INSERT INTO local_sheet_rows (sheet_id, row_number, cells_json) VALUES (?, ?, ?)',
+            [sheetId, rowNumber, JSON.stringify(cells)]
+        );
+        db.run('UPDATE local_sheets SET updated_at = datetime("now") WHERE id = ?', [sheetId]);
+        saveDatabase();
+    },
+
+    clearRows: (sheetId) => {
+        db.run('DELETE FROM local_sheet_rows WHERE sheet_id = ?', [sheetId]);
+        saveDatabase();
+    },
+
+    rename: (sheetId, name) => {
+        db.run('UPDATE local_sheets SET name = ?, updated_at = datetime("now") WHERE id = ?', [name, sheetId]);
+        saveDatabase();
+    }
+};
+
+module.exports = {
+    initDatabase,
+    saveDatabase,
+    getDb: () => db,
+    userQueries,
+    permissionQueries,
+    productQueries,
+    openProductsDb,
+    localSheetQueries
+};
