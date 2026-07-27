@@ -184,6 +184,67 @@ body {
   flex-shrink: 0;
 }
 
+/* Sidebar Submenu & Profile button */
+.sidebar-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+  margin-top: 4px;
+  margin-left: 14px;
+  border-left: 2px solid var(--border-color);
+}
+
+.sidebar-submenu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.sidebar-submenu-item:hover {
+  background: #f1f5f9;
+  color: var(--text-primary);
+}
+
+.sidebar-submenu-item.active {
+  background: #fff7ed;
+  color: var(--accent);
+  border-color: #ffedd5;
+  font-weight: 600;
+}
+
+.btn-add-profile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-add-profile:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #fff7ed;
+}
+
 .sidebar-user {
   padding: 16px;
   border-top: 1px solid var(--border-color);

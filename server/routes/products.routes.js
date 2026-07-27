@@ -4,7 +4,44 @@ const { spawn } = require('child_process');
 const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
-const { productQueries } = require('../db');
+const { productQueries, profileQueries } = require('../db');
+
+// GET /api/products/profiles — get list of product profiles
+router.get('/profiles', (req, res) => {
+    try {
+        const profiles = profileQueries.getAll();
+        res.json({ profiles });
+    } catch (err) {
+        console.error('Failed to get profiles:', err);
+        res.status(500).json({ error: 'Failed to retrieve product profiles.' });
+    }
+});
+
+// POST /api/products/profiles — create a new product profile
+router.post('/profiles', (req, res) => {
+    try {
+        const { name, brand_name, target_url } = req.body;
+        if (!name || !name.trim()) {
+            return res.status(400).json({ error: 'Tên Profile là bắt buộc.' });
+        }
+        const profile = profileQueries.create(name, brand_name || '', target_url || '');
+        res.json({ message: 'Tạo Profile thành công.', profile });
+    } catch (err) {
+        console.error('Failed to create profile:', err);
+        res.status(500).json({ error: err.message || 'Lỗi khi tạo Profile.' });
+    }
+});
+
+// DELETE /api/products/profiles/:id — delete a product profile
+router.delete('/profiles/:id', (req, res) => {
+    try {
+        profileQueries.delete(req.params.id);
+        res.json({ message: 'Xóa Profile thành công.' });
+    } catch (err) {
+        console.error('Failed to delete profile:', err);
+        res.status(500).json({ error: 'Failed to delete profile.' });
+    }
+});
 
 // GET /api/products — get list of products (paginated, searched, filtered)
 router.get('/', async (req, res) => {

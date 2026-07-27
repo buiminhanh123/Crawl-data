@@ -136,6 +136,30 @@ async function initDatabase() {
                 );
             });
         }
+    // ──────────────────────────────────────────────────────────
+    // SCHEMA: Product Profiles (hãng / brand profiles)
+    // ──────────────────────────────────────────────────────────
+    db.run(`
+        CREATE TABLE IF NOT EXISTS product_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            slug TEXT NOT NULL UNIQUE,
+            brand_name TEXT DEFAULT '',
+            target_url TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+
+    try {
+        const profRes = db.exec("SELECT COUNT(*) FROM product_profiles");
+        const pCount = profRes[0]?.values[0]?.[0] || 0;
+        if (pCount === 0) {
+            db.run("INSERT INTO product_profiles (name, slug, brand_name, target_url) VALUES (?, ?, ?, ?)", ['Profile Newland', 'newland', 'Newland', 'https://www.newland-id.com']);
+            db.run("INSERT INTO product_profiles (name, slug, brand_name, target_url) VALUES (?, ?, ?, ?)", ['Profile Zebra', 'zebra', 'Zebra', '']);
+        }
+    } catch (e) {
+        console.error('Error initializing product_profiles:', e);
     }
     // ──────────────────────────────────────────────────────────
 
@@ -582,6 +606,50 @@ const localSheetQueries = {
     }
 };
 
+const profileQueries = {
+    getAll: () => {
+        const res = db.exec('SELECT * FROM product_profiles ORDER BY id ASC');
+        if (!res[0]) return [];
+        const cols = res[0].columns;
+        return res[0].values.map(vals => Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
+    },
+
+    getById: (id) => {
+        const res = db.exec('SELECT * FROM product_profiles WHERE id = ?', [id]);
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, res[0].values[0][i]]));
+    },
+
+    getBySlug: (slug) => {
+        const res = db.exec('SELECT * FROM product_profiles WHERE slug = ?', [slug]);
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, res[0].values[0][i]]));
+    },
+
+    create: (name, brandName = '', targetUrl = '') => {
+        let slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `profile-${Date.now()}`;
+        // Ensure unique slug
+        const existing = db.exec('SELECT id FROM product_profiles WHERE slug = ?', [slug]);
+        if (existing[0]?.values[0]) {
+            slug = `${slug}-${Date.now()}`;
+        }
+        db.run(
+            'INSERT INTO product_profiles (name, slug, brand_name, target_url) VALUES (?, ?, ?, ?)',
+            [name.trim(), slug, brandName.trim(), targetUrl.trim()]
+        );
+        const res = db.exec('SELECT last_insert_rowid()');
+        saveDatabase();
+        return { id: res[0].values[0][0], name: name.trim(), slug, brand_name: brandName.trim(), target_url: targetUrl.trim() };
+    },
+
+    delete: (id) => {
+        db.run('DELETE FROM product_profiles WHERE id = ?', [id]);
+        saveDatabase();
+    }
+};
+
 module.exports = {
     initDatabase,
     saveDatabase,
@@ -590,5 +658,6 @@ module.exports = {
     permissionQueries,
     productQueries,
     openProductsDb,
-    localSheetQueries
+    localSheetQueries,
+    profileQueries
 };
