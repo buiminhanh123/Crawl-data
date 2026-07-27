@@ -13,7 +13,10 @@ import {
     Filter,
     ChevronLeft,
     ChevronRight,
-    Loader2
+    Loader2,
+    Play,
+    Bot,
+    FileSpreadsheet
 } from 'lucide-react';
 
 function ProductsContent() {
@@ -176,7 +179,7 @@ function ProductsContent() {
             </div>
 
             {/* Page Header */}
-            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 16 }}>
                 <div>
                     <h2 style={{ fontSize: 24, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
                         <Package style={{ color: 'var(--accent)' }} /> Products — {currentProfile?.name?.startsWith('Profile') ? currentProfile.name : `Profile ${currentProfile?.name || 'Newland'}`}
@@ -185,25 +188,94 @@ function ProductsContent() {
                         Quản lý dữ liệu sản phẩm, thông số kỹ thuật và tài liệu của {currentProfile?.brand_name || currentProfile?.name || 'Profile'}.
                     </p>
                 </div>
-                <button 
-                    className="btn btn-primary" 
-                    onClick={handleExport}
-                    disabled={products.length === 0}
-                    style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: 8,
-                        background: 'var(--gradient-primary)',
-                        border: 'none',
-                        color: 'white',
-                        padding: '10px 16px',
-                        borderRadius: 'var(--radius-md)',
-                        cursor: 'pointer',
-                        fontWeight: 500
-                    }}
-                >
-                    <Download size={14} /> Export to Excel
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <button 
+                        type="button"
+                        className="btn"
+                        onClick={() => toast(`Sẵn sàng kích hoạt Crawl cho ${currentProfile?.name || 'Profile'}`, 'info')}
+                        style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 8, 
+                            background: 'var(--bg-card)', 
+                            border: '1px solid var(--border-color)', 
+                            color: 'var(--text-primary)', 
+                            padding: '9px 14px', 
+                            borderRadius: 'var(--radius-md)', 
+                            fontWeight: 500, 
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            boxShadow: 'var(--shadow-sm)'
+                        }}
+                    >
+                        <Play size={14} style={{ color: '#16a34a' }} /> Bắt đầu Crawl
+                    </button>
+
+                    <button 
+                        type="button"
+                        className="btn"
+                        onClick={() => toast(`Mở AI Assistant cho ${currentProfile?.name || 'Profile'}`, 'info')}
+                        style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 8, 
+                            background: 'var(--bg-card)', 
+                            border: '1px solid var(--border-color)', 
+                            color: 'var(--text-primary)', 
+                            padding: '9px 14px', 
+                            borderRadius: 'var(--radius-md)', 
+                            fontWeight: 500, 
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            boxShadow: 'var(--shadow-sm)'
+                        }}
+                    >
+                        <Bot size={14} style={{ color: '#2563eb' }} /> Mở AI Assistant
+                    </button>
+
+                    <button 
+                        type="button"
+                        className="btn"
+                        onClick={() => toast(`Nhập file Excel / Link Google Sheets cho ${currentProfile?.name || 'Profile'}`, 'info')}
+                        style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 8, 
+                            background: 'var(--bg-card)', 
+                            border: '1px solid var(--border-color)', 
+                            color: 'var(--text-primary)', 
+                            padding: '9px 14px', 
+                            borderRadius: 'var(--radius-md)', 
+                            fontWeight: 500, 
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            boxShadow: 'var(--shadow-sm)'
+                        }}
+                    >
+                        <FileSpreadsheet size={14} style={{ color: '#0284c7' }} /> Nhập file excel/link ggsheet
+                    </button>
+
+                    <button 
+                        className="btn btn-primary" 
+                        onClick={handleExport}
+                        disabled={products.length === 0}
+                        style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 8,
+                            background: 'var(--gradient-primary)',
+                            border: 'none',
+                            color: 'white',
+                            padding: '9px 16px',
+                            borderRadius: 'var(--radius-md)',
+                            cursor: 'pointer',
+                            fontWeight: 500,
+                            fontSize: 13
+                        }}
+                    >
+                        <Download size={14} /> Export to Excel
+                    </button>
+                </div>
             </div>
 
             {/* Filter Bar & Data Table Card */}
