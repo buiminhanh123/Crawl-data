@@ -382,33 +382,60 @@ router.post('/parse-url', async (req, res) => {
         const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
         const spreadsheetId = match ? match[1] : url.trim();
 
-        if (!fs.existsSync(CREDENTIALS_PATH)) {
-            return res.status(400).json({ error: 'Chưa cấu hình credentials.json cho Google Sheets API.' });
+        // 1. Try Google Sheets API with credentials.json
+        if (fs.existsSync(CREDENTIALS_PATH)) {
+            try {
+                const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf-8'));
+                const auth = new google.auth.GoogleAuth({
+                    credentials,
+                    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+                });
+                const sheetsApi = google.sheets({ version: 'v4', auth });
+                
+                const metadata = await sheetsApi.spreadsheets.get({ spreadsheetId });
+                const tabNames = metadata.data.sheets.map(s => s.properties.title);
+
+                const sheetPromises = tabNames.map(async (sheetName) => {
+                    const rangeRes = await sheetsApi.spreadsheets.values.get({
+                        spreadsheetId,
+                        range: `${sheetName}`,
+                    });
+                    return {
+                        name: sheetName,
+                        data: rangeRes.data.values || []
+                    };
+                });
+
+                const sheetsData = await Promise.all(sheetPromises);
+                return res.json({ sheets: sheetsData, spreadsheetId });
+            } catch (apiErr) {
+                console.warn('Google API fetch failed, trying public CSV fallback...', apiErr.message);
+            }
         }
 
-        const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf-8'));
-        const auth = new google.auth.GoogleAuth({
-            credentials,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-        });
-        const sheetsApi = google.sheets({ version: 'v4', auth });
-        
-        const metadata = await sheetsApi.spreadsheets.get({ spreadsheetId });
-        const tabNames = metadata.data.sheets.map(s => s.properties.title);
+        // 2. Fallback: Public Google Sheet CSV fetch via gviz API
+        try {
+            const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv`;
+            const resp = await fetch(csvUrl);
+            if (resp.ok) {
+                const csvText = await resp.text();
+                const workbook = XLSX.read(csvText, { type: 'string' });
+                const sheetName = workbook.SheetNames[0] || 'Sheet1';
+                const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+                return res.json({
+                    sheets: [{ name: sheetName, data }],
+                    spreadsheetId,
+                    isPublicFallback: true
+                });
+            }
+        } catch (pubErr) {
+            console.warn('Public CSV fallback failed:', pubErr.message);
+        }
 
-        const sheetPromises = tabNames.map(async (sheetName) => {
-            const rangeRes = await sheetsApi.spreadsheets.values.get({
-                spreadsheetId,
-                range: `${sheetName}!A1:ZZ1000`,
-            });
-            return {
-                name: sheetName,
-                data: rangeRes.data.values || []
-            };
+        return res.status(400).json({
+            error: 'Không thể đọc Google Sheet. Vui lòng nạp file credentials.json (Google Service Account) bên dưới hoặc bật chế độ "Bất kỳ ai có liên kết đều có thể xem" trên Google Sheet.'
         });
 
-        const sheetsData = await Promise.all(sheetPromises);
-        res.json({ sheets: sheetsData, spreadsheetId });
     } catch (err) {
         console.error('Failed to parse google sheet url:', err);
         res.status(500).json({ error: 'Không thể đọc Google Sheet: ' + (err.message || 'Lỗi kết nối') });

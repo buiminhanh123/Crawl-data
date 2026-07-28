@@ -188,17 +188,7 @@ export default function Sidebar() {
                         </div>
                     )}
 
-                    {/* AI Assistant */}
-                    {hasPermission('products') && (
-                        <Link
-                            href="/ai-assistant"
-                            className={`sidebar-nav-item ${pathname === '/ai-assistant' ? 'active' : ''}`}
-                            title={isCollapsed ? 'AI Assistant' : ''}
-                        >
-                            <span className="icon"><Bot size={20} /></span>
-                            <span className="nav-label">AI Assistant</span>
-                        </Link>
-                    )}
+
                 </nav>
 
                 <div className="sidebar-user">

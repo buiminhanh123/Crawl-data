@@ -59,16 +59,24 @@ app.use((err, req, res, next) => {
 async function start() {
     try {
         await initDatabase();
-        app.listen(PORT, () => {
+        const server = app.listen(PORT, () => {
             console.log(`
 ╔══════════════════════════════════════════════╗
-║   Newland Portal — Backend Server                ║
-║   🚀 Running on http://localhost:$3002        ║
+║   Newland Portal — Backend Server            ║
+║   🚀 Running on http://localhost:${PORT}        ║
 ║   🗄️  Database: ./data/app.db               ║
 ║                                              ║
 ║   Default admin: admin / admin123            ║
 ╚══════════════════════════════════════════════╝
             `);
+        });
+
+        server.on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                console.error(`\n⚠️  PORT ${PORT} ĐÃ ĐƯỢC MỞ SẴN BỞI TIẾN TRÌNH KHÁC (Server backend đang chạy ngầm trên http://localhost:${PORT}).`);
+            } else {
+                console.error('Lỗi khởi động Server:', err.message);
+            }
         });
     } catch (err) {
         console.error('Failed to start server:', err);

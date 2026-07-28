@@ -4,7 +4,34 @@ const { spawn } = require('child_process');
 const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
-const { productQueries, profileQueries } = require('../db');
+const { productQueries, profileQueries, profileSheetQueries } = require('../db');
+
+// GET /api/products/profile-sheet — get profile sheet data
+router.get('/profile-sheet', (req, res) => {
+    try {
+        const { profile = 'newland' } = req.query;
+        const sheets = profileSheetQueries.getBySlug(profile);
+        res.json({ sheets });
+    } catch (err) {
+        console.error('Failed to get profile sheet:', err);
+        res.status(500).json({ error: 'Failed to retrieve sheet data.' });
+    }
+});
+
+// POST /api/products/profile-sheet — save profile sheet data
+router.post('/profile-sheet', (req, res) => {
+    try {
+        const { profile, sheets } = req.body;
+        if (!profile || !sheets) {
+            return res.status(400).json({ error: 'profile and sheets are required.' });
+        }
+        profileSheetQueries.save(profile, sheets);
+        res.json({ message: 'Lưu dữ liệu Sheet thành công!' });
+    } catch (err) {
+        console.error('Failed to save profile sheet:', err);
+        res.status(500).json({ error: 'Failed to save sheet data.' });
+    }
+});
 
 // GET /api/products/profiles — get list of product profiles
 router.get('/profiles', (req, res) => {

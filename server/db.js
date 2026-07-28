@@ -163,6 +163,17 @@ async function initDatabase() {
         console.error('Error initializing product_profiles:', e);
     }
     // ──────────────────────────────────────────────────────────
+    // SCHEMA: Profile Sheet Data (Lưu dữ liệu sheet theo profile)
+    // ──────────────────────────────────────────────────────────
+    db.run(`
+        CREATE TABLE IF NOT EXISTS profile_sheet_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_slug TEXT NOT NULL UNIQUE,
+            sheets_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+    // ──────────────────────────────────────────────────────────
 
     // Seed default admin user if none exists
     const adminExists = db.exec("SELECT COUNT(*) as c FROM users WHERE role = 'admin'");
@@ -651,6 +662,35 @@ const profileQueries = {
     }
 };
 
+const profileSheetQueries = {
+    getBySlug: (slug) => {
+        const res = db.exec('SELECT sheets_json FROM profile_sheet_data WHERE profile_slug = ?', [slug]);
+        if (!res[0]?.values[0]) return [];
+        try {
+            return JSON.parse(res[0].values[0][0]);
+        } catch (e) {
+            return [];
+        }
+    },
+
+    save: (slug, sheets) => {
+        const json = JSON.stringify(sheets);
+        const existing = db.exec('SELECT id FROM profile_sheet_data WHERE profile_slug = ?', [slug]);
+        if (existing[0]?.values[0]) {
+            db.run(
+                'UPDATE profile_sheet_data SET sheets_json = ?, updated_at = datetime("now") WHERE profile_slug = ?',
+                [json, slug]
+            );
+        } else {
+            db.run(
+                'INSERT INTO profile_sheet_data (profile_slug, sheets_json) VALUES (?, ?)',
+                [slug, json]
+            );
+        }
+        saveDatabase();
+    }
+};
+
 module.exports = {
     initDatabase,
     saveDatabase,
@@ -660,5 +700,6 @@ module.exports = {
     productQueries,
     openProductsDb,
     localSheetQueries,
-    profileQueries
+    profileQueries,
+    profileSheetQueries
 };

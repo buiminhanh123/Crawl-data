@@ -1,9 +1,10 @@
 'use client';
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, Suspense, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { fetchApi } from '@/lib/api';
 import ImportSheetModal from '@/components/ImportSheetModal';
+import AiAssistantModal from '@/components/AiAssistantModal';
 import { 
     Search, 
     Download, 
@@ -17,7 +18,13 @@ import {
     Loader2,
     Play,
     Bot,
-    FileSpreadsheet
+    FileSpreadsheet,
+    Pin,
+    Edit3,
+    Merge,
+    Copy,
+    Check,
+    CheckCircle2
 } from 'lucide-react';
 
 function ProductsContent() {
@@ -87,6 +94,147 @@ function ProductsContent() {
             setLoading(false);
         }
     };
+
+    // Profile Sheet Data State
+    const [profileSheets, setProfileSheets] = useState([]);
+    const [activeSheetTabName, setActiveSheetTabName] = useState('');
+    const [viewMode, setViewMode] = useState('sheet'); // 'sheet' | 'products'
+    const [pageRowLimit, setPageRowLimit] = useState(100);
+
+    useEffect(() => {
+        setPageRowLimit(100);
+    }, [activeSheetTabName]);
+
+    const activePageSheetData = useMemo(() => {
+        return profileSheets.find(s => s.name === activeSheetTabName)?.data || [];
+    }, [profileSheets, activeSheetTabName]);
+
+    const maxPageCols = useMemo(() => {
+        if (!activePageSheetData.length) return 0;
+        const sample = activePageSheetData.slice(0, 200);
+        return sample.reduce((max, r) => Math.max(max, Array.isArray(r) ? r.length : 0), 0);
+    }, [activePageSheetData]);
+
+    const renderedPageRows = useMemo(() => {
+        return activePageSheetData.slice(0, pageRowLimit);
+    }, [activePageSheetData, pageRowLimit]);
+
+    // AI Assistant modal & background task state
+    const [showAiModal, setShowAiModal] = useState(false);
+    const [aiTaskState, setAiTaskState] = useState({
+        isRunning: false,
+        tabName: '',
+        targetColIdx: 3,
+        startRow: 1,
+        endRow: 100,
+        totalRows: 0,
+        completedRows: 0,
+        errorCount: 0,
+        statusText: '',
+        logs: []
+    });
+
+    // Active selected cell state (Google Sheets style border highlight)
+    const [selectedPageCell, setSelectedPageCell] = useState(null); // { rIdx, cIdx }
+
+    // Feature 1: Freeze rows (Ghim hàng)
+    const [pageFreezeRows, setPageFreezeRows] = useState(1);
+
+    // Feature 2: Double Click cell viewer / editor modal
+    const [pageCellDetailModal, setPageCellDetailModal] = useState(null);
+    const [copiedPageCell, setCopiedPageCell] = useState(false);
+
+    // Feature 3: Ghép Cột Hàng (Batch Merge Columns)
+    const [showPageMergeColsModal, setShowPageMergeColsModal] = useState(false);
+    const [pageMergeTemplate, setPageMergeTemplate] = useState('');
+    const [pageMergeTargetColIndex, setPageMergeTargetColIndex] = useState(0);
+    const [pageMergeStartRow, setPageMergeStartRow] = useState(1);
+    const [pageMergeEndRow, setPageMergeEndRow] = useState('');
+
+    const evaluatePageTemplate = (template, rowArray) => {
+        if (!template || !Array.isArray(rowArray)) return '';
+        return template.replace(/\{\{([A-Z]+)\}\}/g, (match, p1) => {
+            let colIndex = 0;
+            for (let i = 0; i < p1.length; i++) {
+                colIndex = colIndex * 26 + (p1.charCodeAt(i) - 64);
+            }
+            colIndex = colIndex - 1;
+            return rowArray[colIndex] !== undefined && rowArray[colIndex] !== null ? String(rowArray[colIndex]) : '';
+        });
+    };
+
+    const handleSavePageCellDetail = async (newVal) => {
+        if (!pageCellDetailModal) return;
+        const { rIdx, cIdx } = pageCellDetailModal;
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const newData = [...s.data];
+            if (!newData[rIdx]) newData[rIdx] = [];
+            const newRow = [...newData[rIdx]];
+            newRow[cIdx] = newVal;
+            newData[rIdx] = newRow;
+            return { ...s, data: newData };
+        });
+        setProfileSheets(updatedSheets);
+        setPageCellDetailModal(null);
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (e) {
+            console.error('Failed to auto-save sheet edit:', e);
+        }
+    };
+
+    const handleExecutePageMergeCols = async () => {
+        if (!pageMergeTemplate.trim()) return;
+        const start = Math.max(1, parseInt(pageMergeStartRow) || 1) - 1;
+        
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const end = pageMergeEndRow ? Math.min(s.data.length, parseInt(pageMergeEndRow)) : s.data.length;
+            const newData = s.data.map((row, idx) => {
+                if (idx < start || idx >= end) return row;
+                const mergedVal = evaluatePageTemplate(pageMergeTemplate, row);
+                const newRow = Array.isArray(row) ? [...row] : [];
+                newRow[pageMergeTargetColIndex] = mergedVal;
+                return newRow;
+            });
+            return { ...s, data: newData };
+        });
+        setProfileSheets(updatedSheets);
+        setShowPageMergeColsModal(false);
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+            toast('Ghép cột dữ liệu thành công!', 'success');
+        } catch (e) {
+            console.error('Failed to auto-save merged sheet:', e);
+        }
+    };
+
+    const fetchProfileSheetData = async () => {
+        try {
+            const data = await fetchApi(`/api/products/profile-sheet?profile=${profileSlug}`);
+            if (data?.sheets && data.sheets.length > 0) {
+                setProfileSheets(data.sheets);
+                setActiveSheetTabName(data.sheets[0].name);
+                setViewMode('sheet');
+            } else {
+                setProfileSheets([]);
+                setViewMode('products');
+            }
+        } catch (err) {
+            console.error('Failed to fetch profile sheet:', err);
+        }
+    };
+
+    useEffect(() => {
+        fetchProfileSheetData();
+    }, [profileSlug]);
 
     useEffect(() => {
         fetchCategories();
@@ -216,7 +364,7 @@ function ProductsContent() {
                     <button 
                         type="button"
                         className="btn"
-                        onClick={() => toast(`Mở AI Assistant cho ${currentProfile?.name || 'Profile'}`, 'info')}
+                        onClick={() => setShowAiModal(true)}
                         style={{ 
                             display: 'flex', 
                             alignItems: 'center', 
@@ -280,8 +428,284 @@ function ProductsContent() {
                 </div>
             </div>
 
-            {/* Filter Bar & Data Table Card */}
-            <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)' }}>
+            {/* View Mode Switcher Bar */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                <button
+                    type="button"
+                    className={`btn ${viewMode === 'sheet' ? 'btn-secondary' : 'btn-ghost'}`}
+                    onClick={() => setViewMode('sheet')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, padding: '8px 16px', fontWeight: viewMode === 'sheet' ? 600 : 500 }}
+                >
+                    <FileSpreadsheet size={16} style={{ color: viewMode === 'sheet' ? 'var(--accent)' : 'var(--text-muted)' }} />
+                    <span>Bảng Dữ Liệu Sheet {profileSheets.length > 0 ? `(${profileSheets.length} tab)` : ''}</span>
+                </button>
+
+                <button
+                    type="button"
+                    className={`btn ${viewMode === 'products' ? 'btn-secondary' : 'btn-ghost'}`}
+                    onClick={() => setViewMode('products')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, padding: '8px 16px', fontWeight: viewMode === 'products' ? 600 : 500 }}
+                >
+                    <Package size={16} style={{ color: viewMode === 'products' ? 'var(--accent)' : 'var(--text-muted)' }} />
+                    <span>Danh Sách Sản Phẩm Crawler ({totalProducts})</span>
+                </button>
+            </div>
+
+            {/* View Mode 1: Bảng Dữ Liệu Sheet (Google Sheets Style) */}
+            {viewMode === 'sheet' && (
+                <div className="card" style={{ padding: 0, background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)', marginBottom: 24 }}>
+                    {profileSheets.length > 0 ? (
+                        <>
+                            {/* Active Tab Header Bar */}
+                            <div style={{ padding: '12px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <FileSpreadsheet size={16} style={{ color: 'var(--accent)' }} /> 
+                                    Đang xem: {activeSheetTabName} ({profileSheets.find(s => s.name === activeSheetTabName)?.data?.length || 0} hàng)
+                                </span>
+                                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                                    <button
+                                        className="btn btn-outline"
+                                        onClick={() => setShowImportModal(true)}
+                                        style={{ fontSize: 12.5, padding: '6px 12px', background: 'var(--bg-card)' }}
+                                    >
+                                        + Cập nhật / Nạp lại Sheet
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => setShowAiModal(true)}
+                                        style={{
+                                            background: 'var(--gradient-primary)',
+                                            color: 'white',
+                                            border: 'none',
+                                            fontSize: 12.5,
+                                            padding: '6px 14px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            fontWeight: 600
+                                        }}
+                                    >
+                                        <Bot size={15} /> 🤖 AI Trợ Lý (Tự động hóa)
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Sheet View Tool Bar: Ghim hàng, Ghép cột, Mẹo click đúp */}
+                            <div style={{ padding: '8px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                                    {/* Freeze Rows selector */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                                        <Pin size={14} style={{ color: 'var(--accent)' }} />
+                                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Ghim hàng:</span>
+                                        <select
+                                            value={pageFreezeRows}
+                                            onChange={e => setPageFreezeRows(parseInt(e.target.value) || 0)}
+                                            style={{ padding: '3px 8px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                                        >
+                                            <option value={0}>Không ghim</option>
+                                            <option value={1}>Ghim Hàng 1 (Header)</option>
+                                            <option value={2}>Ghim 2 hàng đầu</option>
+                                            <option value={3}>Ghim 3 hàng đầu</option>
+                                            <option value={5}>Ghim 5 hàng đầu</option>
+                                        </select>
+                                    </div>
+
+                                    {/* Batch Merge Columns Button */}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setPageMergeTemplate('');
+                                            setPageMergeTargetColIndex(0);
+                                            setPageMergeStartRow(1);
+                                            setPageMergeEndRow('');
+                                            setShowPageMergeColsModal(true);
+                                        }}
+                                        style={{
+                                            padding: '4px 12px',
+                                            background: 'var(--bg-card)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            fontSize: 12.5,
+                                            fontWeight: 600,
+                                            color: 'var(--accent)',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 6
+                                        }}
+                                    >
+                                        <Merge size={14} /> 🔗 Ghép Cột / Hàng
+                                    </button>
+                                </div>
+
+                                <span style={{ fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    💡 Click đúp (Double-click) vào bất kỳ ô nào để xem chi tiết & sửa nội dung
+                                </span>
+                            </div>
+
+                            {/* Main Interactive Grid Table */}
+                            <div className="sheet-table-container" style={{ maxHeight: 540 }}>
+                                {(() => {
+                                    const getColLetter = (idx) => {
+                                        let temp, letter = '';
+                                        while (idx >= 0) {
+                                            temp = idx % 26;
+                                            letter = String.fromCharCode(temp + 65) + letter;
+                                            idx = Math.floor(idx / 26) - 1;
+                                        }
+                                        return letter;
+                                    };
+
+                                    if (activePageSheetData.length === 0) {
+                                        return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Tab này chưa có dữ liệu.</div>;
+                                    }
+
+                                    return (
+                                        <table className="sheet-grid-table">
+                                            <thead>
+                                                <tr style={pageFreezeRows > 0 ? { position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' } : {}}>
+                                                    <th className="row-index-header">#</th>
+                                                    {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => (
+                                                        <th key={cIdx}>{getColLetter(cIdx)}</th>
+                                                    ))}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {renderedPageRows.map((row, rIdx) => {
+                                                    const isRowPinned = rIdx < pageFreezeRows;
+                                                    const isLastPinnedRow = pageFreezeRows > 0 && rIdx === pageFreezeRows - 1;
+                                                    return (
+                                                        <tr
+                                                            key={rIdx}
+                                                            className={isLastPinnedRow ? 'pinned-row-last' : ''}
+                                                            style={isRowPinned ? { position: 'sticky', top: (rIdx + 1) * 32, zIndex: 9, background: '#fffbeb' } : {}}
+                                                        >
+                                                            <td className="row-index-cell" style={isRowPinned ? { background: '#fef3c7', fontWeight: 700, color: '#b45309' } : {}}>
+                                                                {rIdx + 1} {isRowPinned && '📌'}
+                                                            </td>
+                                                            {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => {
+                                                                const cellVal = Array.isArray(row) ? row[cIdx] : '';
+                                                                const valStr = cellVal !== undefined && cellVal !== null ? String(cellVal) : '';
+                                                                const trimmedVal = valStr.trim();
+                                                                const isUrl = trimmedVal.startsWith('http://') || trimmedVal.startsWith('https://') || trimmedVal.startsWith('www.');
+                                                                const targetUrl = trimmedVal.startsWith('www.') ? `https://${trimmedVal}` : trimmedVal;
+
+                                                                const isSelected = selectedPageCell?.rIdx === rIdx && selectedPageCell?.cIdx === cIdx;
+                                                                return (
+                                                                    <td
+                                                                        key={cIdx}
+                                                                        className={`${isSelected ? 'selected-cell' : ''} ${isUrl ? 'has-url-cell' : ''}`}
+                                                                        title="Click đúp để xem & sửa ô này"
+                                                                        onClick={() => setSelectedPageCell({ rIdx, cIdx })}
+                                                                        onDoubleClick={() => {
+                                                                            setSelectedPageCell({ rIdx, cIdx });
+                                                                            setPageCellDetailModal({
+                                                                                rIdx,
+                                                                                cIdx,
+                                                                                val: valStr,
+                                                                                newVal: valStr,
+                                                                                colLetter: getColLetter(cIdx)
+                                                                            });
+                                                                        }}
+                                                                        style={{ cursor: 'pointer' }}
+                                                                    >
+                                                                        {isUrl ? (
+                                                                            <div className="sheet-url-cell">
+                                                                                <span className="sheet-url-link">{valStr}</span>
+                                                                                {/* Google Sheets Hover Note Popup */}
+                                                                                <div className="sheet-url-tooltip">
+                                                                                    <span className="url-text">🌐 {valStr}</span>
+                                                                                    <a
+                                                                                        href={targetUrl}
+                                                                                        target="_blank"
+                                                                                        rel="noopener noreferrer"
+                                                                                        className="btn-open-link"
+                                                                                        onClick={e => e.stopPropagation()}
+                                                                                    >
+                                                                                        <ExternalLink size={12} /> Mở liên kết
+                                                                                    </a>
+                                                                                </div>
+                                                                            </div>
+                                                                        ) : (
+                                                                            valStr
+                                                                        )}
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    );
+                                })()}
+                            </div>
+
+                            {activePageSheetData.length > pageRowLimit && (
+                                <div style={{ padding: '8px 16px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5 }}>
+                                    <span style={{ color: 'var(--text-secondary)' }}>
+                                        Đang hiển thị <strong>{renderedPageRows.length}</strong> / <strong>{activePageSheetData.length.toLocaleString()}</strong> hàng (Tối ưu phản hồi mượt 60fps)
+                                    </span>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-outline btn-sm"
+                                            onClick={() => setPageRowLimit(prev => prev + 200)}
+                                            style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)' }}
+                                        >
+                                            + Xem thêm 200 hàng
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-ghost btn-sm"
+                                            onClick={() => setPageRowLimit(activePageSheetData.length)}
+                                            style={{ fontSize: 12, padding: '4px 10px', color: 'var(--accent)', fontWeight: 600 }}
+                                        >
+                                            Xem tất cả ({activePageSheetData.length.toLocaleString()} hàng)
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Google Sheets Bottom Tab Bar */}
+                            <div className="sheet-bottom-bar">
+                                {profileSheets.map(s => (
+                                    <div
+                                        key={s.name}
+                                        className={`sheet-bottom-tab ${activeSheetTabName === s.name ? 'active' : ''}`}
+                                        onClick={() => setActiveSheetTabName(s.name)}
+                                    >
+                                        <FileSpreadsheet size={14} />
+                                        <span>{s.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    ) : (
+                        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            <FileSpreadsheet size={42} style={{ color: 'var(--accent)', marginBottom: 12, opacity: 0.8 }} />
+                            <h4 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Chưa có Bảng dữ liệu Sheet cho {currentProfile?.name || 'Profile này'}</h4>
+                            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 18 }}>
+                                Vui lòng bấm nút "Nhập file excel/link ggsheet" ở trên để nạp dữ liệu vào Profile.
+                            </p>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => setShowImportModal(true)}
+                                style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none', padding: '10px 20px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                            >
+                                <FileSpreadsheet size={16} /> + Nhập file Excel / Link Google Sheets ngay
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* View Mode 2: Filter Bar & Data Table Card (Products List) */}
+            {viewMode === 'products' && (
+                <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)' }}>
                 
                 {/* Search & Filters */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 16 }}>
@@ -467,6 +891,7 @@ function ProductsContent() {
                     </div>
                 )}
             </div>
+            )}
 
             {/* Specifications Modal Overlay */}
             {showModal && selectedProduct && (
@@ -624,12 +1049,252 @@ function ProductsContent() {
                     </div>
                 </div>
             )}
+            {/* Sub-Modal 1: Cell Detail Viewer & Editor (Products Page) */}
+            {pageCellDetailModal && (
+                <div className="modal-backdrop" onClick={() => setPageCellDetailModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: 680, maxWidth: '92vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', padding: 24, borderRadius: 'var(--radius-lg)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', background: 'var(--bg-card)', boxSizing: 'border-box', overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <span style={{ fontWeight: 700, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Edit3 size={18} style={{ color: 'var(--accent)' }} /> 
+                                Chi Tiết Ô [{pageCellDetailModal.colLetter}{pageCellDetailModal.rIdx + 1}] — Hàng {pageCellDetailModal.rIdx + 1}
+                            </span>
+                            <button type="button" onClick={() => setPageCellDetailModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div style={{ marginBottom: 16, flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                Nội dung ô:
+                            </label>
+                            <textarea
+                                value={pageCellDetailModal.newVal}
+                                onChange={e => setPageCellDetailModal(p => ({ ...p, newVal: e.target.value }))}
+                                style={{
+                                    width: '100%',
+                                    minHeight: 220,
+                                    maxHeight: '55vh',
+                                    padding: '12px 14px',
+                                    fontSize: 13,
+                                    borderRadius: 'var(--radius-md)',
+                                    border: '1px solid var(--border-color)',
+                                    background: 'var(--bg-secondary)',
+                                    color: 'var(--text-primary)',
+                                    fontFamily: 'monospace',
+                                    outline: 'none',
+                                    boxSizing: 'border-box',
+                                    resize: 'vertical',
+                                    wordBreak: 'break-word',
+                                    lineHeight: 1.5
+                                }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <button
+                                type="button"
+                                className="btn btn-ghost"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(pageCellDetailModal.newVal);
+                                    setCopiedPageCell(true);
+                                    setTimeout(() => setCopiedPageCell(false), 2000);
+                                }}
+                                style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6 }}
+                            >
+                                {copiedPageCell ? <Check size={15} style={{ color: '#16a34a' }} /> : <Copy size={15} />}
+                                {copiedPageCell ? 'Đã sao chép!' : 'Sao chép nội dung'}
+                            </button>
+
+                            <div style={{ display: 'flex', gap: 10 }}>
+                                <button type="button" className="btn btn-ghost" onClick={() => setPageCellDetailModal(null)}>Hủy</button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={() => handleSavePageCellDetail(pageCellDetailModal.newVal)}
+                                    style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none', padding: '8px 18px', fontSize: 13 }}
+                                >
+                                    <CheckCircle2 size={15} /> Lưu chỉnh sửa ô
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Sub-Modal 2: Batch Merge Columns Modal (Products Page) */}
+            {showPageMergeColsModal && (
+                <div className="modal-backdrop" onClick={() => setShowPageMergeColsModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: 540, maxWidth: '95%', padding: 24, borderRadius: 'var(--radius-lg)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', background: 'var(--bg-card)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <span style={{ fontWeight: 700, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Merge size={18} style={{ color: 'var(--accent)' }} /> 🔗 Ghép Cột Hàng (Batch Merge Columns)
+                            </span>
+                            <button type="button" onClick={() => setShowPageMergeColsModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            <div>
+                                <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                    1. Chọn Cột Đích (Nơi lưu kết quả ghép):
+                                </label>
+                                <select
+                                    value={pageMergeTargetColIndex}
+                                    onChange={e => setPageMergeTargetColIndex(parseInt(e.target.value))}
+                                    style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                                >
+                                    {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => (
+                                        <option key={cIdx} value={cIdx}>
+                                            Cột {(() => {
+                                                let temp, letter = '';
+                                                let colIndex = cIdx;
+                                                while (colIndex >= 0) {
+                                                    temp = colIndex % 26;
+                                                    letter = String.fromCharCode(temp + 65) + letter;
+                                                    colIndex = Math.floor(colIndex / 26) - 1;
+                                                }
+                                                return letter;
+                                            })()} ({activePageSheetData[0]?.[cIdx] || `Cột`})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                    2. Cấu trúc Ghép (Template):
+                                </label>
+                                <input
+                                    type="text"
+                                    value={pageMergeTemplate}
+                                    onChange={e => setPageMergeTemplate(e.target.value)}
+                                    placeholder="Ví dụ: {{A}} - {{B}} (Model: {{D}})"
+                                    style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                                />
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                                    <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Chèn nhanh tag cột:</span>
+                                    {Array.from({ length: Math.min(maxPageCols, 12) }).map((_, cIdx) => {
+                                        let temp, letter = '';
+                                        let colIndex = cIdx;
+                                        while (colIndex >= 0) {
+                                            temp = colIndex % 26;
+                                            letter = String.fromCharCode(temp + 65) + letter;
+                                            colIndex = Math.floor(colIndex / 26) - 1;
+                                        }
+                                        return (
+                                            <button
+                                                key={letter}
+                                                type="button"
+                                                onClick={() => setPageMergeTemplate(prev => prev + `{{${letter}}}`)}
+                                                style={{ padding: '2px 7px', fontSize: 11.5, background: '#fff7ed', border: '1px solid #ffedd5', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                                            >
+                                                + {`{{${letter}}}`}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 12 }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                                        Từ hàng số:
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        value={pageMergeStartRow}
+                                        onChange={e => setPageMergeStartRow(e.target.value)}
+                                        style={{ width: '100%', padding: '6px 10px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}
+                                    />
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                                        Đến hàng số:
+                                    </label>
+                                    <input
+                                        type="number"
+                                        placeholder="Mặc định: Hàng cuối"
+                                        value={pageMergeEndRow}
+                                        onChange={e => setPageMergeEndRow(e.target.value)}
+                                        style={{ width: '100%', padding: '6px 10px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Live Preview Box */}
+                            {pageMergeTemplate.trim() && (
+                                <div style={{ padding: '10px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+                                    <strong style={{ color: '#16a34a', display: 'block', marginBottom: 2 }}>
+                                        🔍 Xem trước kết quả mẫu (Hàng 1):
+                                    </strong>
+                                    <span style={{ color: '#15803d', fontFamily: 'monospace' }}>
+                                        {evaluatePageTemplate(pageMergeTemplate, activePageSheetData[0] || []) || '(Rỗng)'}
+                                    </span>
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 10 }}>
+                                <button type="button" className="btn btn-ghost" onClick={() => setShowPageMergeColsModal(false)}>Hủy</button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleExecutePageMergeCols}
+                                    disabled={!pageMergeTemplate.trim()}
+                                    style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none', padding: '8px 18px', fontSize: 13 }}
+                                >
+                                    <Merge size={15} /> Bắt đầu Ghép Cột
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Import Sheet & Excel Modal */}
             <ImportSheetModal 
                 isOpen={showImportModal} 
                 onClose={() => setShowImportModal(false)} 
                 profileName={currentProfile?.name || 'Profile'} 
+                profileSlug={profileSlug}
+                onImportSuccess={fetchProfileSheetData}
             />
+
+            {/* AI Assistant Integrated Modal */}
+            <AiAssistantModal
+                isOpen={showAiModal}
+                onClose={() => setShowAiModal(false)}
+                profileName={currentProfile?.name || 'Profile'}
+                profileSlug={profileSlug}
+                sheets={profileSheets}
+                activeTabName={activeSheetTabName}
+                onUpdateSheets={(newSheets) => setProfileSheets(newSheets)}
+                aiState={aiTaskState}
+                setAiState={setAiTaskState}
+            />
+
+            {/* Floating Background AI Task Running Notification */}
+            {aiTaskState.isRunning && !showAiModal && (
+                <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 99999, background: '#0f172a', color: 'white', padding: '12px 18px', borderRadius: 12, boxShadow: '0 20px 40px rgba(0,0,0,0.5)', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: 14, animation: 'fadeIn 0.3s ease' }}>
+                    <Loader2 className="spin" size={20} style={{ color: '#38bdf8' }} />
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            🤖 AI Trợ Lý đang chạy ngầm... ({aiTaskState.completedRows}/{aiTaskState.totalRows} hàng)
+                        </div>
+                        <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 2 }}>
+                            {aiTaskState.statusText}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setShowAiModal(true)}
+                        style={{ padding: '6px 14px', fontSize: 12, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                        <Bot size={14} /> Mở AI
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
