@@ -1,25 +1,87 @@
-# Node dependencies
+# ==========================================
+# 1. Dependencies & Package Managers
+# ==========================================
 node_modules/
 **/node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
 
-# Next.js
-.next/
+# ==========================================
+# 2. Next.js & Frontend Builds
+# ==========================================
+frontend/.next/
 **/.next/
 out/
 build/
+dist/
+.vercel/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
 
-# Logs & temp files
-*.log
-crawler_test.log
-__pycache__/
-*.pyc
-
-# Database & local data
-server/data/*.db
-server/data/*.db-journal
+# ==========================================
+# 3. Environment & Secret Credentials
+# ==========================================
+.env
+.env*
+!.env.example
+*.pem
 server/data/credentials.json
+server/data/token.json
 server/data/sheet_settings.json
 
-# OS files
+# ==========================================
+# 4. Local Database & SQLite Data
+# ==========================================
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+server/data/*.db
+server/data/*.db-journal
+
+# ==========================================
+# 5. Logs & Temporary Files
+# ==========================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.tmp
+*.temp
+*.har
+crawler_test.log
+
+# ==========================================
+# 6. Python Cache & Virtual Environments
+# ==========================================
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+.venv/
+env/
+ENV/
+
+# ==========================================
+# 7. OS & IDE Configuration Files
+# ==========================================
 .DS_Store
 Thumbs.db
+Desktop.ini
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
