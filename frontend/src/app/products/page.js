@@ -1,10 +1,11 @@
-'use client';
-import { useState, useEffect, Suspense, useMemo } from 'react';
+﻿'use client';
+import { useState, useEffect, Suspense, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { fetchApi } from '@/lib/api';
 import ImportSheetModal from '@/components/ImportSheetModal';
 import AiAssistantModal from '@/components/AiAssistantModal';
+import CrawlerToSheetModal from '@/components/CrawlerToSheetModal';
 import { 
     Search, 
     Download, 
@@ -24,7 +25,14 @@ import {
     Merge,
     Copy,
     Check,
-    CheckCircle2
+    CheckCircle2,
+    Plus,
+    Trash2,
+    Scissors,
+    Clipboard,
+    Eraser,
+    Undo2,
+    Redo2
 } from 'lucide-react';
 
 function ProductsContent() {
@@ -33,6 +41,24 @@ function ProductsContent() {
     const profileSlug = searchParams?.get('profile') || 'newland';
     const [currentProfile, setCurrentProfile] = useState(null);
     const [showImportModal, setShowImportModal] = useState(false);
+
+    // Crawler to Sheet conversion state
+    const [showCrawlerToSheetModal, setShowCrawlerToSheetModal] = useState(false);
+    const [selectedCrawlerProductIds, setSelectedCrawlerProductIds] = useState([]);
+
+    const toggleSelectCrawlerProduct = (id) => {
+        setSelectedCrawlerProductIds(prev => 
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
+    };
+
+    const toggleSelectAllCrawlerProducts = () => {
+        if (selectedCrawlerProductIds.length === products.length) {
+            setSelectedCrawlerProductIds([]);
+        } else {
+            setSelectedCrawlerProductIds(products.map(p => p.id));
+        }
+    };
 
     // Gating permissions
     if (!hasPermission('products')) {
@@ -67,6 +93,22 @@ function ProductsContent() {
         const id = Date.now();
         setToasts(p => [...p, { id, message: msg, type }]);
         setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
+    };
+
+    const handleCrawlerToSheetSuccess = async ({ sheets: updatedSheets, targetTabName, convertedCount }) => {
+        setProfileSheets(updatedSheets);
+        setActiveSheetTabName(targetTabName);
+        setViewMode('sheet');
+        toast(`🎉 Đã chuyển ${convertedCount} sản phẩm sang Tab Sheet "${targetTabName}"!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save converted sheet:', err);
+        }
     };
 
     const fetchCategories = async () => {
@@ -115,9 +157,105 @@ function ProductsContent() {
         return sample.reduce((max, r) => Math.max(max, Array.isArray(r) ? r.length : 0), 0);
     }, [activePageSheetData]);
 
-    const renderedPageRows = useMemo(() => {
-        return activePageSheetData.slice(0, pageRowLimit);
-    }, [activePageSheetData, pageRowLimit]);
+    // Feature 1: Freeze rows (Ghim hàng)
+    const [pageFreezeRows, setPageFreezeRows] = useState(1);
+
+    // Google Sheets Style Data Filter State
+    const [sheetSearchQuery, setSheetSearchQuery] = useState('');
+    const [columnFilters, setColumnFilters] = useState({}); // { [cIdx]: string }
+    const [columnSelectedValues, setColumnSelectedValues] = useState({}); // { [cIdx]: string[] }
+    const [showFilterRow, setShowFilterRow] = useState(true);
+    const [activeFilterDropdownCol, setActiveFilterDropdownCol] = useState(null); // cIdx
+    const [dropdownSearch, setDropdownSearch] = useState('');
+
+    // Google Sheets Multi-Row & Multi-Column Selection States
+    const [selectedRowIndices, setSelectedRowIndices] = useState([]); // 0-based rIdx
+    const [selectedColIndices, setSelectedColIndices] = useState([]); // 0-based cIdx
+    const [isDraggingRowSelection, setIsDraggingRowSelection] = useState(false);
+    const [isDraggingColSelection, setIsDraggingColSelection] = useState(false);
+    const [dragStartRowIndex, setDragStartRowIndex] = useState(null);
+    const [dragStartColIndex, setDragStartColIndex] = useState(null);
+
+    // Google Sheets 2D Cell Range Selection (4-direction mouse drag & Ctrl+Shift+Arrows)
+    const [selectedPageCell, setSelectedPageCell] = useState(null); // { rIdx: number, cIdx: number }
+    const [cellSelectionBox, setCellSelectionBox] = useState(null); // { startRow, startCol, endRow, endCol }
+    const [isDraggingCellSelection, setIsDraggingCellSelection] = useState(false);
+    const cellClipboardRef = useRef(null); // { type: 'copy'|'cut', data: string[][] }
+    const [contextMenu, setContextMenu] = useState(null); // { x, y, minRow, maxRow, minCol, maxCol }
+
+    // Undo / Redo History Stack (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z)
+    const historyStackRef = useRef([]); // Array of profileSheets snapshots
+    const historyIndexRef = useRef(-1);
+
+    const pushUndoSnapshot = (sheetsData) => {
+        if (!sheetsData || !Array.isArray(sheetsData)) return;
+        const stack = historyStackRef.current;
+        const index = historyIndexRef.current;
+
+        const newStack = stack.slice(0, index + 1);
+        const snapshot = JSON.parse(JSON.stringify(sheetsData));
+        newStack.push(snapshot);
+
+        if (newStack.length > 50) newStack.shift();
+
+        historyStackRef.current = newStack;
+        historyIndexRef.current = newStack.length - 1;
+    };
+
+    const handleUndo = async () => {
+        const stack = historyStackRef.current;
+        const currentIndex = historyIndexRef.current;
+
+        if (currentIndex <= 0 || stack.length === 0) {
+            toast('ℹ️ Không có thao tác nào để hoàn tác (Undo)!', 'info');
+            return;
+        }
+
+        const newIndex = currentIndex - 1;
+        const previousSnapshot = JSON.parse(JSON.stringify(stack[newIndex]));
+        historyIndexRef.current = newIndex;
+
+        setProfileSheets(previousSnapshot);
+        toast(`↩️ Đã hoàn tác (Undo)!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: previousSnapshot })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save after undo:', err);
+        }
+    };
+
+    const handleRedo = async () => {
+        const stack = historyStackRef.current;
+        const currentIndex = historyIndexRef.current;
+
+        if (currentIndex >= stack.length - 1) {
+            toast('ℹ️ Không có thao tác nào để khôi phục (Redo)!', 'info');
+            return;
+        }
+
+        const newIndex = currentIndex + 1;
+        const nextSnapshot = JSON.parse(JSON.stringify(stack[newIndex]));
+        historyIndexRef.current = newIndex;
+
+        setProfileSheets(nextSnapshot);
+        toast(`↪️ Đã khôi phục (Redo)!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: nextSnapshot })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save after redo:', err);
+        }
+    };
+
+    const lastHoveredRowRef = useRef(null);
+    const lastHoveredColRef = useRef(null);
 
     // AI Assistant modal & background task state
     const [showAiModal, setShowAiModal] = useState(false);
@@ -134,22 +272,705 @@ function ProductsContent() {
         logs: []
     });
 
-    // Active selected cell state (Google Sheets style border highlight)
-    const [selectedPageCell, setSelectedPageCell] = useState(null); // { rIdx, cIdx }
-
-    // Feature 1: Freeze rows (Ghim hàng)
-    const [pageFreezeRows, setPageFreezeRows] = useState(1);
-
-    // Feature 2: Double Click cell viewer / editor modal
+    // Double Click cell viewer / editor modal
     const [pageCellDetailModal, setPageCellDetailModal] = useState(null);
     const [copiedPageCell, setCopiedPageCell] = useState(false);
 
-    // Feature 3: Ghép Cột Hàng (Batch Merge Columns)
+    // Ghép Cột Hàng (Batch Merge Columns)
     const [showPageMergeColsModal, setShowPageMergeColsModal] = useState(false);
     const [pageMergeTemplate, setPageMergeTemplate] = useState('');
     const [pageMergeTargetColIndex, setPageMergeTargetColIndex] = useState(0);
     const [pageMergeStartRow, setPageMergeStartRow] = useState(1);
     const [pageMergeEndRow, setPageMergeEndRow] = useState('');
+
+    // O(1) Set Lookups to eliminate rendering lag
+    const selectedRowSet = useMemo(() => new Set(selectedRowIndices), [selectedRowIndices]);
+    const selectedColSet = useMemo(() => new Set(selectedColIndices), [selectedColIndices]);
+
+    const selectedCellRange = useMemo(() => {
+        if (!cellSelectionBox) return null;
+        const minRow = Math.min(cellSelectionBox.startRow, cellSelectionBox.endRow);
+        const maxRow = Math.max(cellSelectionBox.startRow, cellSelectionBox.endRow);
+        const minCol = Math.min(cellSelectionBox.startCol, cellSelectionBox.endCol);
+        const maxCol = Math.max(cellSelectionBox.startCol, cellSelectionBox.endCol);
+        return { minRow, maxRow, minCol, maxCol };
+    }, [cellSelectionBox]);
+
+    useEffect(() => {
+        const handleGlobalMouseUp = () => {
+            setIsDraggingRowSelection(false);
+            setIsDraggingColSelection(false);
+            setIsDraggingCellSelection(false);
+            lastHoveredRowRef.current = null;
+            lastHoveredColRef.current = null;
+        };
+        const handleGlobalClick = () => {
+            setContextMenu(null);
+        };
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+        window.addEventListener('click', handleGlobalClick);
+        return () => {
+            window.removeEventListener('mouseup', handleGlobalMouseUp);
+            window.removeEventListener('click', handleGlobalClick);
+        };
+    }, []);
+
+    useEffect(() => {
+        setSheetSearchQuery('');
+        setColumnFilters({});
+        setColumnSelectedValues({});
+        setActiveFilterDropdownCol(null);
+        setSelectedRowIndices([]);
+        setSelectedColIndices([]);
+        setCellSelectionBox(null);
+        setContextMenu(null);
+    }, [activeSheetTabName]);
+
+    const filteredPageSheetData = useMemo(() => {
+        if (!activePageSheetData || activePageSheetData.length === 0) return [];
+
+        const headerCount = pageFreezeRows > 0 ? pageFreezeRows : 0;
+        const headerRows = activePageSheetData.slice(0, headerCount);
+        const dataRows = activePageSheetData.slice(headerCount);
+
+        const filteredData = dataRows.filter((row) => {
+            if (!Array.isArray(row)) return false;
+
+            // 1. Global Search Filter
+            if (sheetSearchQuery.trim()) {
+                const query = sheetSearchQuery.trim().toLowerCase();
+                const rowMatches = row.some(cell => 
+                    cell !== undefined && cell !== null && String(cell).toLowerCase().includes(query)
+                );
+                if (!rowMatches) return false;
+            }
+
+            // 2. Column Text Input Filters
+            for (const [cIdxStr, colQuery] of Object.entries(columnFilters)) {
+                const cIdx = parseInt(cIdxStr);
+                if (colQuery && colQuery.trim()) {
+                    const query = colQuery.trim().toLowerCase();
+                    const cellVal = row[cIdx] !== undefined && row[cIdx] !== null ? String(row[cIdx]).toLowerCase() : '';
+                    if (!cellVal.includes(query)) return false;
+                }
+            }
+
+            // 3. Column Unique Values Checkbox Filter
+            for (const [cIdxStr, selectedValues] of Object.entries(columnSelectedValues)) {
+                const cIdx = parseInt(cIdxStr);
+                if (Array.isArray(selectedValues) && selectedValues.length > 0) {
+                    const cellVal = row[cIdx] !== undefined && row[cIdx] !== null ? String(row[cIdx]).trim() : '(Trống)';
+                    if (!selectedValues.includes(cellVal)) return false;
+                }
+            }
+
+            return true;
+        });
+
+        return [...headerRows, ...filteredData];
+    }, [activePageSheetData, pageFreezeRows, sheetSearchQuery, columnFilters, columnSelectedValues]);
+
+    const renderedPageRows = useMemo(() => {
+        return filteredPageSheetData.slice(0, pageRowLimit);
+    }, [filteredPageSheetData, pageRowLimit]);
+
+    const hasActiveFilters = useMemo(() => {
+        const hasQuery = Boolean(sheetSearchQuery.trim());
+        const hasColText = Object.values(columnFilters).some(v => v && v.trim());
+        const hasColSelected = Object.values(columnSelectedValues).some(arr => Array.isArray(arr) && arr.length > 0);
+        return hasQuery || hasColText || hasColSelected;
+    }, [sheetSearchQuery, columnFilters, columnSelectedValues]);
+
+    const handleClearAllFilters = () => {
+        setSheetSearchQuery('');
+        setColumnFilters({});
+        setColumnSelectedValues({});
+        setActiveFilterDropdownCol(null);
+    };
+
+    const activeColUniqueValues = useMemo(() => {
+        if (activeFilterDropdownCol === null || !activePageSheetData.length) return [];
+        const headerCount = pageFreezeRows > 0 ? pageFreezeRows : 0;
+        const dataRows = activePageSheetData.slice(headerCount);
+        const map = new Map();
+
+        dataRows.forEach(row => {
+            if (!Array.isArray(row)) return;
+            const val = row[activeFilterDropdownCol] !== undefined && row[activeFilterDropdownCol] !== null ? String(row[activeFilterDropdownCol]).trim() : '(Trống)';
+            const key = val || '(Trống)';
+            map.set(key, (map.get(key) || 0) + 1);
+        });
+
+        return Array.from(map.entries()).map(([value, count]) => ({ value, count }));
+    }, [activeFilterDropdownCol, activePageSheetData, pageFreezeRows]);
+
+    // Feature 4: Add Rows & Add Columns to Active Sheet Tab with Custom Quantities
+    const getColLetter = (idx) => {
+        let temp, letter = '';
+        while (idx >= 0) {
+            temp = idx % 26;
+            letter = String.fromCharCode(temp + 65) + letter;
+            idx = Math.floor(idx / 26) - 1;
+        }
+        return letter;
+    };
+
+    const handleAddPageRows = async (defaultCount = 1) => {
+        if (!activeSheetTabName) return;
+        const inputVal = prompt('Nhập số lượng hàng trống muốn thêm vào cuối Tab (VD: 1, 5, 10, 50...):', String(defaultCount));
+        if (inputVal === null) return; // User cancelled
+        const count = Math.max(1, parseInt(inputVal) || 1);
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const newData = [...(s.data || [])];
+            const numCols = Math.max(maxPageCols, 1);
+            for (let i = 0; i < count; i++) {
+                newData.push(Array(numCols).fill(''));
+            }
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        setPageRowLimit(prev => Math.max(prev, activePageSheetData.length + count));
+        toast(`➕ Đã thêm ${count} hàng mới vào Tab "${activeSheetTabName}"!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after adding rows:', err);
+        }
+    };
+
+    const handleAddPageColumn = async (defaultCount = 1) => {
+        if (!activeSheetTabName) return;
+        const inputVal = prompt('Nhập số lượng cột mới muốn thêm vào Tab (VD: 1, 2, 5...):', String(defaultCount));
+        if (inputVal === null) return; // User cancelled
+        const count = Math.max(1, parseInt(inputVal) || 1);
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = s.data || [];
+            const currentNumCols = existingData.reduce((max, r) => Math.max(max, Array.isArray(r) ? r.length : 0), 0);
+
+            const newData = existingData.map((row, rIdx) => {
+                const newRow = Array.isArray(row) ? [...row] : [];
+                for (let i = 0; i < count; i++) {
+                    const colLetter = getColLetter(currentNumCols + i);
+                    if (rIdx === 0 && (pageFreezeRows > 0 || existingData.length > 1)) {
+                        newRow.push(`Cột Mới ${colLetter}`);
+                    } else {
+                        newRow.push('');
+                    }
+                }
+                return newRow;
+            });
+            return { ...s, data: newData };
+        });
+
+        setProfileSheets(updatedSheets);
+        toast(`➕ Đã thêm ${count} Cột mới vào Tab "${activeSheetTabName}"!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after adding column:', err);
+        }
+    };
+
+    // Direct Row & Column Deletion Handlers with Preview
+    const confirmDeleteRowDirect = async (rIdx) => {
+        if (!activeSheetTabName) return;
+        const rowNum = rIdx + 1;
+        const rowPreview = (activePageSheetData[rIdx] || []).filter(Boolean).slice(0, 3).join(' | ');
+
+        if (!confirm(`⚠️ Bạn có chắc chắn muốn XÓA Hàng ${rowNum} khỏi Tab "${activeSheetTabName}"?\n\n📍 Xem trước dữ liệu: ${rowPreview || '(Hàng trống)'}`)) {
+            return;
+        }
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = [...(s.data || [])];
+            existingData.splice(rIdx, 1);
+            return { ...s, data: existingData };
+        });
+
+        setProfileSheets(updatedSheets);
+        setSelectedPageCell(null);
+        toast(`🗑️ Đã xóa Hàng ${rowNum} khỏi Tab "${activeSheetTabName}"!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after deleting row:', err);
+        }
+    };
+
+    const confirmDeleteColDirect = async (cIdx) => {
+        if (!activeSheetTabName) return;
+        const colLetter = getColLetter(cIdx);
+        const colHeader = activePageSheetData[0]?.[cIdx] ? String(activePageSheetData[0][cIdx]).trim() : '';
+
+        if (!confirm(`⚠️ Bạn có chắc chắn muốn XÓA Cột ${colLetter} ${colHeader ? `("${colHeader}")` : ''} khỏi Tab "${activeSheetTabName}"?\n\nToàn bộ dữ liệu của Cột ${colLetter} sẽ bị xóa bỏ hoàn toàn.`)) {
+            return;
+        }
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = s.data || [];
+            const newData = existingData.map(row => {
+                if (!Array.isArray(row)) return row;
+                const newRow = [...row];
+                newRow.splice(cIdx, 1);
+                return newRow;
+            });
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        setSelectedPageCell(null);
+        toast(`🗑️ Đã xóa Cột ${colLetter} ${colHeader ? `("${colHeader}")` : ''} thành công!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after deleting column:', err);
+        }
+    };
+
+    // Drag Selection Handlers for Rows & Columns (Optimized for 60fps)
+    const handleRowMouseDown = (rIdx, e) => {
+        e.preventDefault();
+        lastHoveredRowRef.current = rIdx;
+        if (e.shiftKey && dragStartRowIndex !== null) {
+            const start = Math.min(dragStartRowIndex, rIdx);
+            const end = Math.max(dragStartRowIndex, rIdx);
+            const range = [];
+            for (let i = start; i <= end; i++) range.push(i);
+            setSelectedRowIndices(range);
+            setSelectedColIndices([]);
+        } else {
+            setIsDraggingRowSelection(true);
+            setDragStartRowIndex(rIdx);
+            setSelectedRowIndices([rIdx]);
+            setSelectedColIndices([]);
+        }
+    };
+
+    const handleRowMouseEnter = (rIdx) => {
+        if (isDraggingRowSelection && dragStartRowIndex !== null) {
+            if (lastHoveredRowRef.current === rIdx) return; // Skip redundant updates if staying on same row
+            lastHoveredRowRef.current = rIdx;
+
+            const start = Math.min(dragStartRowIndex, rIdx);
+            const end = Math.max(dragStartRowIndex, rIdx);
+            const range = [];
+            for (let i = start; i <= end; i++) range.push(i);
+            setSelectedRowIndices(range);
+        }
+    };
+
+    const handleColMouseDown = (cIdx, e) => {
+        e.preventDefault();
+        lastHoveredColRef.current = cIdx;
+        if (e.shiftKey && dragStartColIndex !== null) {
+            const start = Math.min(dragStartColIndex, cIdx);
+            const end = Math.max(dragStartColIndex, cIdx);
+            const range = [];
+            for (let i = start; i <= end; i++) range.push(i);
+            setSelectedColIndices(range);
+            setSelectedRowIndices([]);
+        } else {
+            setIsDraggingColSelection(true);
+            setDragStartColIndex(cIdx);
+            setSelectedColIndices([cIdx]);
+            setSelectedRowIndices([]);
+        }
+    };
+
+    const handleColMouseEnter = (cIdx) => {
+        if (isDraggingColSelection && dragStartColIndex !== null) {
+            if (lastHoveredColRef.current === cIdx) return; // Skip redundant updates if staying on same column
+            lastHoveredColRef.current = cIdx;
+
+            const start = Math.min(dragStartColIndex, cIdx);
+            const end = Math.max(dragStartColIndex, cIdx);
+            const range = [];
+            for (let i = start; i <= end; i++) range.push(i);
+            setSelectedColIndices(range);
+        }
+    };
+
+    const handleDeleteSelectedRows = async () => {
+        if (selectedRowIndices.length === 0 || !activeSheetTabName) return;
+        const sorted = [...selectedRowIndices].sort((a, b) => a - b);
+        const count = sorted.length;
+        const firstRowDisplay = sorted[0] + 1;
+        const lastRowDisplay = sorted[sorted.length - 1] + 1;
+
+        const labelText = count === 1 ? `Hàng ${firstRowDisplay}` : `từ Hàng ${firstRowDisplay} đến Hàng ${lastRowDisplay} (${count} hàng)`;
+
+        if (!confirm(`⚠️ Bạn có chắc chắn muốn XÓA ${labelText} khỏi Tab "${activeSheetTabName}"?\n\nDữ liệu các hàng này sẽ bị xóa bỏ hoàn toàn.`)) {
+            return;
+        }
+
+        const deleteSet = new Set(sorted);
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = [...(s.data || [])];
+            const newData = existingData.filter((_, idx) => !deleteSet.has(idx));
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        setSelectedRowIndices([]);
+        setSelectedPageCell(null);
+        toast(`🗑️ Đã xóa ${count} hàng thành công!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after deleting rows:', err);
+        }
+    };
+
+    const handleDeleteSelectedCols = async () => {
+        if (selectedColIndices.length === 0 || !activeSheetTabName) return;
+        const sorted = [...selectedColIndices].sort((a, b) => a - b);
+        const count = sorted.length;
+        const colLetters = sorted.map(c => getColLetter(c)).join(', ');
+
+        if (!confirm(`⚠️ Bạn có chắc chắn muốn XÓA ${count} Cột (${colLetters}) khỏi Tab "${activeSheetTabName}"?\n\nToàn bộ dữ liệu của các cột này sẽ bị xóa bỏ hoàn toàn.`)) {
+            return;
+        }
+
+        const deleteSet = new Set(sorted);
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = s.data || [];
+            const newData = existingData.map(row => {
+                if (!Array.isArray(row)) return row;
+                return row.filter((_, cIdx) => !deleteSet.has(cIdx));
+            });
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        setSelectedColIndices([]);
+        setSelectedPageCell(null);
+        toast(`🗑️ Đã xóa ${count} cột (${colLetters}) thành công!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after deleting columns:', err);
+        }
+    };
+
+    // 2D Cell Range Operations (Copy, Cut, Paste, Clear)
+    const handleCopyRangeContent = (minRow, maxRow, minCol, maxCol) => {
+        if (!activePageSheetData || activePageSheetData.length === 0) return;
+        const copiedRows = [];
+        for (let r = minRow; r <= maxRow; r++) {
+            const row = activePageSheetData[r] || [];
+            const rowData = [];
+            for (let c = minCol; c <= maxCol; c++) {
+                const val = row[c] !== undefined && row[c] !== null ? String(row[c]) : '';
+                rowData.push(val);
+            }
+            copiedRows.push(rowData);
+        }
+        cellClipboardRef.current = { type: 'copy', data: copiedRows };
+
+        // Copy TSV string to System Clipboard for Google Sheets / Excel interoperability
+        const tsvText = copiedRows.map(r => r.join('\t')).join('\n');
+        navigator.clipboard.writeText(tsvText).catch(() => {});
+
+        const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+        toast(`📋 Đã sao chép ${count} ô vào bộ nhớ tạm!`, 'info');
+    };
+
+    const handleClearRangeContent = async (minRow, maxRow, minCol, maxCol, silent = false) => {
+        if (!activeSheetTabName || !activePageSheetData) return;
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = [...(s.data || [])];
+            for (let r = minRow; r <= maxRow; r++) {
+                if (!existingData[r]) continue;
+                const newRow = Array.isArray(existingData[r]) ? [...existingData[r]] : [];
+                for (let c = minCol; c <= maxCol; c++) {
+                    newRow[c] = '';
+                }
+                existingData[r] = newRow;
+            }
+            return { ...s, data: existingData };
+        });
+
+        setProfileSheets(updatedSheets);
+        if (!silent) {
+            const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+            toast(`🧹 Đã xóa nội dung ${count} ô thành công!`, 'success');
+        }
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after clearing range content:', err);
+        }
+    };
+
+    const handleCutRangeContent = (minRow, maxRow, minCol, maxCol) => {
+        handleCopyRangeContent(minRow, maxRow, minCol, maxCol);
+        if (cellClipboardRef.current) cellClipboardRef.current.type = 'cut';
+        handleClearRangeContent(minRow, maxRow, minCol, maxCol, true);
+        const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+        toast(`✂️ Đã cắt ${count} ô!`, 'info');
+    };
+
+    const handlePasteRangeContent = async (startRow, startCol) => {
+        if (!activeSheetTabName || !activePageSheetData) return;
+
+        let pasteMatrix = [];
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text && text.trim()) {
+                pasteMatrix = text.split('\n').map(line => line.split('\t'));
+            }
+        } catch (err) {}
+
+        if ((!pasteMatrix || pasteMatrix.length === 0) && cellClipboardRef.current?.data) {
+            pasteMatrix = cellClipboardRef.current.data;
+        }
+
+        if (!pasteMatrix || pasteMatrix.length === 0) {
+            toast('⚠️ Bộ nhớ tạm không có dữ liệu để dán!', 'warning');
+            return;
+        }
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const existingData = [...(s.data || [])];
+
+            pasteMatrix.forEach((pasteRow, rOffset) => {
+                const targetR = startRow + rOffset;
+                if (!existingData[targetR]) {
+                    existingData[targetR] = [];
+                } else {
+                    existingData[targetR] = Array.isArray(existingData[targetR]) ? [...existingData[targetR]] : [];
+                }
+
+                pasteRow.forEach((val, cOffset) => {
+                    const targetC = startCol + cOffset;
+                    existingData[targetR][targetC] = val !== undefined ? String(val).trim() : '';
+                });
+            });
+
+            return { ...s, data: existingData };
+        });
+
+        setProfileSheets(updatedSheets);
+        const pasteCount = pasteMatrix.length * (pasteMatrix[0]?.length || 1);
+        toast(`📋 Đã dán ${pasteCount} ô thành công!`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (err) {
+            console.error('Failed to auto-save sheet after pasting content:', err);
+        }
+    };
+
+    // 4-Direction Drag & Keyboard Shortcuts Listener (Ctrl+C, Ctrl+X, Ctrl+V, Delete, Backspace, Ctrl+Shift+Arrows)
+    const handleCellMouseDown = (rIdx, cIdx, e) => {
+        if (e.button !== 0) return; // Left click only for dragging range
+        e.preventDefault(); // Prevents browser default text selection highlight
+        try { window.getSelection()?.removeAllRanges(); } catch (err) {}
+        setIsDraggingCellSelection(true);
+        setCellSelectionBox({ startRow: rIdx, startCol: cIdx, endRow: rIdx, endCol: cIdx });
+        setSelectedPageCell({ rIdx, cIdx });
+        setSelectedRowIndices([]);
+        setSelectedColIndices([]);
+        setContextMenu(null);
+    };
+
+    const handleCellMouseEnter = (rIdx, cIdx) => {
+        if (isDraggingCellSelection && cellSelectionBox) {
+            try { window.getSelection()?.removeAllRanges(); } catch (err) {}
+            if (lastHoveredRowRef.current === rIdx && lastHoveredColRef.current === cIdx) return;
+            lastHoveredRowRef.current = rIdx;
+            lastHoveredColRef.current = cIdx;
+            setCellSelectionBox(prev => prev ? { ...prev, endRow: rIdx, endCol: cIdx } : null);
+        }
+    };
+
+    const handleCellContextMenu = (rIdx, cIdx, e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        let range = selectedCellRange;
+        if (!range || rIdx < range.minRow || rIdx > range.maxRow || cIdx < range.minCol || cIdx > range.maxCol) {
+            setCellSelectionBox({ startRow: rIdx, startCol: cIdx, endRow: rIdx, endCol: cIdx });
+            setSelectedPageCell({ rIdx, cIdx });
+            range = { minRow: rIdx, maxRow: rIdx, minCol: cIdx, maxCol: cIdx };
+        }
+
+        setContextMenu({
+            x: Math.min(e.clientX, window.innerWidth - 220),
+            y: Math.min(e.clientY, window.innerHeight - 260),
+            ...range
+        });
+    };
+
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (pageCellDetailModal || showAiModal || showImportModal || showCrawlerToSheetModal || showPageMergeColsModal) return;
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+
+            // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z -> Undo & Redo
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+                return;
+            }
+
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                handleRedo();
+                return;
+            }
+
+            if (!selectedCellRange && !selectedPageCell) return;
+
+            const minRow = selectedCellRange ? selectedCellRange.minRow : selectedPageCell.rIdx;
+            const maxRow = selectedCellRange ? selectedCellRange.maxRow : selectedPageCell.rIdx;
+            const minCol = selectedCellRange ? selectedCellRange.minCol : selectedPageCell.cIdx;
+            const maxCol = selectedCellRange ? selectedCellRange.maxCol : selectedPageCell.cIdx;
+
+            const maxRowsInTab = activePageSheetData.length;
+            const maxColsInTab = maxPageCols;
+
+            // Delete / Backspace -> Clear cell contents
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                e.preventDefault();
+                handleClearRangeContent(minRow, maxRow, minCol, maxCol);
+                return;
+            }
+
+            // Ctrl+C -> Copy
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+                e.preventDefault();
+                handleCopyRangeContent(minRow, maxRow, minCol, maxCol);
+                return;
+            }
+
+            // Ctrl+X -> Cut
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
+                e.preventDefault();
+                handleCutRangeContent(minRow, maxRow, minCol, maxCol);
+                return;
+            }
+
+            // Ctrl+V -> Paste
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+                e.preventDefault();
+                handlePasteRangeContent(minRow, minCol);
+                return;
+            }
+
+            // Arrow Keys with Shift / Ctrl
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+
+                let targetRow = cellSelectionBox ? cellSelectionBox.endRow : selectedPageCell.rIdx;
+                let targetCol = cellSelectionBox ? cellSelectionBox.endCol : selectedPageCell.cIdx;
+
+                if (e.ctrlKey && e.shiftKey) {
+                    // Ctrl + Shift + Arrow -> Jump to bounds
+                    if (e.key === 'ArrowUp') targetRow = 0;
+                    if (e.key === 'ArrowDown') targetRow = Math.max(0, maxRowsInTab - 1);
+                    if (e.key === 'ArrowLeft') targetCol = 0;
+                    if (e.key === 'ArrowRight') targetCol = Math.max(0, maxColsInTab - 1);
+                } else if (e.shiftKey) {
+                    // Shift + Arrow -> Expand 1 step
+                    if (e.key === 'ArrowUp') targetRow = Math.max(0, targetRow - 1);
+                    if (e.key === 'ArrowDown') targetRow = Math.min(maxRowsInTab - 1, targetRow + 1);
+                    if (e.key === 'ArrowLeft') targetCol = Math.max(0, targetCol - 1);
+                    if (e.key === 'ArrowRight') targetCol = Math.min(maxColsInTab - 1, targetCol + 1);
+                } else {
+                    // Plain Arrow -> Move single cell selection
+                    if (e.key === 'ArrowUp') targetRow = Math.max(0, targetRow - 1);
+                    if (e.key === 'ArrowDown') targetRow = Math.min(maxRowsInTab - 1, targetRow + 1);
+                    if (e.key === 'ArrowLeft') targetCol = Math.max(0, targetCol - 1);
+                    if (e.key === 'ArrowRight') targetCol = Math.min(maxColsInTab - 1, targetCol + 1);
+
+                    setSelectedPageCell({ rIdx: targetRow, cIdx: targetCol });
+                    setCellSelectionBox({ startRow: targetRow, startCol: targetCol, endRow: targetRow, endCol: targetCol });
+                    return;
+                }
+
+                const startR = cellSelectionBox ? cellSelectionBox.startRow : selectedPageCell.rIdx;
+                const startC = cellSelectionBox ? cellSelectionBox.startCol : selectedPageCell.cIdx;
+                setCellSelectionBox({ startRow: startR, startCol: startC, endRow: targetRow, endCol: targetCol });
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [cellSelectionBox, selectedPageCell, selectedCellRange, activePageSheetData, maxPageCols, pageCellDetailModal, showAiModal, showImportModal, showCrawlerToSheetModal, showPageMergeColsModal]);
+
+    const handleDeletePageRow = () => {
+        if (selectedRowIndices.length > 0) {
+            handleDeleteSelectedRows();
+        } else if (selectedPageCell) {
+            confirmDeleteRowDirect(selectedPageCell.rIdx);
+        } else {
+            alert('💡 Vui lòng nhấp kéo giữ chuột ở cột số thứ tự (#) để bôi đen các Hàng muốn xóa!');
+        }
+    };
+
+    const handleDeletePageColumn = () => {
+        if (selectedColIndices.length > 0) {
+            handleDeleteSelectedCols();
+        } else if (selectedPageCell) {
+            confirmDeleteColDirect(selectedPageCell.cIdx);
+        } else {
+            alert('💡 Vui lòng nhấp kéo giữ chuột ở tiêu đề Cột (A, B, C...) để bôi đen các Cột muốn xóa!');
+        }
+    };
+
+
 
     const evaluatePageTemplate = (template, rowArray) => {
         if (!template || !Array.isArray(rowArray)) return '';
@@ -175,6 +996,7 @@ function ProductsContent() {
             newData[rIdx] = newRow;
             return { ...s, data: newData };
         });
+        pushUndoSnapshot(profileSheets);
         setProfileSheets(updatedSheets);
         setPageCellDetailModal(null);
         try {
@@ -203,6 +1025,7 @@ function ProductsContent() {
             });
             return { ...s, data: newData };
         });
+        pushUndoSnapshot(profileSheets);
         setProfileSheets(updatedSheets);
         setShowPageMergeColsModal(false);
         try {
@@ -221,6 +1044,10 @@ function ProductsContent() {
             const data = await fetchApi(`/api/products/profile-sheet?profile=${profileSlug}`);
             if (data?.sheets && data.sheets.length > 0) {
                 setProfileSheets(data.sheets);
+                if (historyStackRef.current.length === 0) {
+                    historyStackRef.current = [JSON.parse(JSON.stringify(data.sheets))];
+                    historyIndexRef.current = 0;
+                }
                 setActiveSheetTabName(data.sheets[0].name);
                 setViewMode('sheet');
             } else {
@@ -361,27 +1188,7 @@ function ProductsContent() {
                         <Play size={14} style={{ color: '#16a34a' }} /> Bắt đầu Crawl
                     </button>
 
-                    <button 
-                        type="button"
-                        className="btn"
-                        onClick={() => setShowAiModal(true)}
-                        style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: 8, 
-                            background: 'var(--bg-card)', 
-                            border: '1px solid var(--border-color)', 
-                            color: 'var(--text-primary)', 
-                            padding: '9px 14px', 
-                            borderRadius: 'var(--radius-md)', 
-                            fontWeight: 500, 
-                            fontSize: 13,
-                            cursor: 'pointer',
-                            boxShadow: 'var(--shadow-sm)'
-                        }}
-                    >
-                        <Bot size={14} style={{ color: '#2563eb' }} /> Mở AI Assistant
-                    </button>
+
 
                     <button 
                         type="button"
@@ -464,6 +1271,15 @@ function ProductsContent() {
                                 </span>
                                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                                     <button
+                                        type="button"
+                                        className="btn btn-outline"
+                                        onClick={() => setShowCrawlerToSheetModal(true)}
+                                        style={{ fontSize: 12.5, padding: '6px 12px', background: 'var(--bg-card)', color: '#2563eb', borderColor: '#bfdbfe', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                                    >
+                                        <FileSpreadsheet size={14} /> 📥 Nạp từ danh sách Crawler
+                                    </button>
+
+                                    <button
                                         className="btn btn-outline"
                                         onClick={() => setShowImportModal(true)}
                                         style={{ fontSize: 12.5, padding: '6px 12px', background: 'var(--bg-card)' }}
@@ -492,25 +1308,120 @@ function ProductsContent() {
                                 </div>
                             </div>
 
-                            {/* Sheet View Tool Bar: Ghim hàng, Ghép cột, Mẹo click đúp */}
-                            <div style={{ padding: '8px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                            {/* Sheet View Tool Bar: Ghim hàng, Lọc dữ liệu, Ghép cột, Mẹo click đúp */}
+                            <div style={{ padding: '10px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                                    {/* Quick Search Input */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
+                                        <Search size={14} style={{ position: 'absolute', left: 8, color: 'var(--text-muted)' }} />
+                                        <input
+                                            type="text"
+                                            value={sheetSearchQuery}
+                                            onChange={e => setSheetSearchQuery(e.target.value)}
+                                            placeholder="🔍 Tìm nhanh trong Tab..."
+                                            style={{ padding: '5px 8px 5px 28px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', width: 190 }}
+                                        />
+                                        {sheetSearchQuery && (
+                                            <button onClick={() => setSheetSearchQuery('')} style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-muted)' }}>
+                                                <X size={12} />
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* Toggle Filter Bar Button */}
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowFilterRow(prev => !prev)}
+                                        style={{
+                                            padding: '5px 10px',
+                                            background: showFilterRow ? 'rgba(99,102,241,0.12)' : 'var(--bg-card)',
+                                            border: `1px solid ${showFilterRow ? 'var(--accent)' : 'var(--border-color)'}`,
+                                            borderRadius: 4,
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            color: showFilterRow ? 'var(--accent)' : 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 6
+                                        }}
+                                    >
+                                        <Filter size={13} /> {showFilterRow ? 'Ẩn Ô Lọc Cột' : 'Bật Bộ Lọc Cột'}
+                                    </button>
+
+                                    {/* Active Filter Indicator Badge */}
+                                    {hasActiveFilters && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#eff6ff', border: '1px solid #bfdbfe', padding: '3px 10px', borderRadius: 4, fontSize: 12, color: '#1d4ed8', fontWeight: 600 }}>
+                                            <span>Đã lọc ({Math.max(0, filteredPageSheetData.length - (pageFreezeRows > 0 ? pageFreezeRows : 0))}/{Math.max(0, activePageSheetData.length - (pageFreezeRows > 0 ? pageFreezeRows : 0))} hàng)</span>
+                                            <button
+                                                onClick={handleClearAllFilters}
+                                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 700, padding: '0 2px', display: 'flex', alignItems: 'center', gap: 2 }}
+                                                title="Xóa tất cả bộ lọc"
+                                            >
+                                                <X size={13} /> Xóa Lọc
+                                            </button>
+                                        </div>
+                                    )}
+
                                     {/* Freeze Rows selector */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
                                         <Pin size={14} style={{ color: 'var(--accent)' }} />
-                                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Ghim hàng:</span>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Ghim:</span>
                                         <select
                                             value={pageFreezeRows}
                                             onChange={e => setPageFreezeRows(parseInt(e.target.value) || 0)}
                                             style={{ padding: '3px 8px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
                                         >
                                             <option value={0}>Không ghim</option>
-                                            <option value={1}>Ghim Hàng 1 (Header)</option>
-                                            <option value={2}>Ghim 2 hàng đầu</option>
-                                            <option value={3}>Ghim 3 hàng đầu</option>
-                                            <option value={5}>Ghim 5 hàng đầu</option>
+                                            <option value={1}>Ghim Hàng 1</option>
+                                            <option value={2}>Ghim 2 hàng</option>
+                                            <option value={3}>Ghim 3 hàng</option>
                                         </select>
                                     </div>
+
+                                     {/* Undo Button */}
+                                     <button
+                                         type="button"
+                                         onClick={handleUndo}
+                                         style={{
+                                             padding: '4px 10px',
+                                             background: 'var(--bg-card)',
+                                             border: '1px solid var(--border-color)',
+                                             borderRadius: 'var(--radius-sm)',
+                                             fontSize: 12,
+                                             fontWeight: 600,
+                                             color: 'var(--text-primary)',
+                                             cursor: 'pointer',
+                                             display: 'flex',
+                                             alignItems: 'center',
+                                             gap: 4
+                                         }}
+                                         title="Hoàn tác (Ctrl+Z)"
+                                     >
+                                         <Undo2 size={13} /> Hoàn tác
+                                     </button>
+
+                                     {/* Redo Button */}
+                                     <button
+                                         type="button"
+                                         onClick={handleRedo}
+                                         style={{
+                                             padding: '4px 10px',
+                                             background: 'var(--bg-card)',
+                                             border: '1px solid var(--border-color)',
+                                             borderRadius: 'var(--radius-sm)',
+                                             fontSize: 12,
+                                             fontWeight: 600,
+                                             color: 'var(--text-primary)',
+                                             cursor: 'pointer',
+                                             display: 'flex',
+                                             alignItems: 'center',
+                                             gap: 4
+                                         }}
+                                         title="Khôi phục (Ctrl+Y / Ctrl+Shift+Z)"
+                                     >
+                                         <Redo2 size={13} /> Khôi phục
+                                     </button>
 
                                     {/* Batch Merge Columns Button */}
                                     <button
@@ -536,28 +1447,92 @@ function ProductsContent() {
                                             gap: 6
                                         }}
                                     >
-                                        <Merge size={14} /> 🔗 Ghép Cột / Hàng
+                                        <Merge size={14} /> 🔗 Ghép Cột
+                                    </button>
+
+                                    {/* Add Row Button */}
+                                    <button
+                                        type="button"
+                                        onClick={() => handleAddPageRows(1)}
+                                        style={{
+                                            padding: '4px 10px',
+                                            background: 'var(--bg-card)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            color: '#16a34a',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 4
+                                        }}
+                                        title="Thêm hàng trống mới vào Tab"
+                                    >
+                                        <Plus size={13} /> Thêm Hàng
+                                    </button>
+                                    {/* Add Column Button */}
+                                    <button
+                                        type="button"
+                                        onClick={() => handleAddPageColumn(1)}
+                                        style={{
+                                            padding: '4px 10px',
+                                            background: 'var(--bg-card)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            color: '#2563eb',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 4
+                                        }}
+                                        title="Thêm cột mới vào Tab"
+                                    >
+                                        <Plus size={13} /> Thêm Cột
                                     </button>
                                 </div>
 
                                 <span style={{ fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    💡 Click đúp (Double-click) vào bất kỳ ô nào để xem chi tiết & sửa nội dung
+                                    💡 Mẹo: Nhấp kéo giữ chuột ở Cột số hàng (#) hoặc Tiêu đề cột (A, B, C...) để bôi đen chọn & xóa nhiều Hàng/Cột cùng lúc như Google Sheets!
                                 </span>
                             </div>
+
+                            {/* Multi-Row / Multi-Column Selection Action Banner */}
+                            {(selectedRowIndices.length > 0 || selectedColIndices.length > 0) && (
+                                <div style={{ padding: '8px 20px', background: '#eff6ff', borderBottom: '1px solid #bfdbfe', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 13, color: '#1e40af', fontWeight: 600, animation: 'fadeIn 0.2s ease' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            🟦 {selectedRowIndices.length > 0 ? (
+                                                `Đã bôi đen chọn ${selectedRowIndices.length} hàng (từ Hàng ${Math.min(...selectedRowIndices) + 1} đến Hàng ${Math.max(...selectedRowIndices) + 1})`
+                                            ) : (
+                                                `Đã bôi đen chọn ${selectedColIndices.length} cột (${selectedColIndices.map(c => getColLetter(c)).join(', ')})`
+                                            )}
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <button
+                                            type="button"
+                                            onClick={selectedRowIndices.length > 0 ? handleDeleteSelectedRows : handleDeleteSelectedCols}
+                                            style={{ background: '#ef4444', color: 'white', border: 'none', padding: '5px 14px', borderRadius: 4, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(239,68,68,0.2)' }}
+                                        >
+                                            <Trash2 size={14} /> Xóa {selectedRowIndices.length > 0 ? `${selectedRowIndices.length} Hàng Đã Chọn` : `${selectedColIndices.length} Cột Đã Chọn`}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setSelectedRowIndices([]); setSelectedColIndices([]); }}
+                                            style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                                        >
+                                            ❌ Bỏ chọn
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Main Interactive Grid Table */}
                             <div className="sheet-table-container" style={{ maxHeight: 540 }}>
                                 {(() => {
-                                    const getColLetter = (idx) => {
-                                        let temp, letter = '';
-                                        while (idx >= 0) {
-                                            temp = idx % 26;
-                                            letter = String.fromCharCode(temp + 65) + letter;
-                                            idx = Math.floor(idx / 26) - 1;
-                                        }
-                                        return letter;
-                                    };
-
                                     if (activePageSheetData.length === 0) {
                                         return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Tab này chưa có dữ liệu.</div>;
                                     }
@@ -565,25 +1540,111 @@ function ProductsContent() {
                                     return (
                                         <table className="sheet-grid-table">
                                             <thead>
+                                                {/* Header Row 1: Column Letters & Header Names */}
                                                 <tr style={pageFreezeRows > 0 ? { position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' } : {}}>
                                                     <th className="row-index-header">#</th>
-                                                    {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => (
-                                                        <th key={cIdx}>{getColLetter(cIdx)}</th>
-                                                    ))}
+                                                    {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => {
+                                                        const headerLabel = activePageSheetData[0]?.[cIdx] ? String(activePageSheetData[0][cIdx]).trim() : '';
+                                                        const isColFiltered = Boolean(columnFilters[cIdx]?.trim()) || (Array.isArray(columnSelectedValues[cIdx]) && columnSelectedValues[cIdx].length > 0);
+                                                        const isColSelected = selectedColSet.has(cIdx);
+                                                        return (
+                                                            <th 
+                                                                key={cIdx} 
+                                                                onMouseDown={(e) => handleColMouseDown(cIdx, e)}
+                                                                onMouseEnter={() => handleColMouseEnter(cIdx)}
+                                                                style={{ 
+                                                                    userSelect: 'none',
+                                                                    cursor: 'pointer',
+                                                                    background: isColSelected ? '#dbeafe' : undefined,
+                                                                    color: isColSelected ? '#1e40af' : undefined,
+                                                                    borderBottom: isColSelected ? '2px solid #2563eb' : undefined
+                                                                }}
+                                                            >
+                                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                                                    <span style={{ fontWeight: 700 }}>
+                                                                        {getColLetter(cIdx)} {headerLabel && pageFreezeRows > 0 ? `(${headerLabel.slice(0, 15)})` : ''}
+                                                                    </span>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                setDropdownSearch('');
+                                                                                setActiveFilterDropdownCol(activeFilterDropdownCol === cIdx ? null : cIdx);
+                                                                            }}
+                                                                            style={{
+                                                                                background: isColFiltered ? '#2563eb' : 'transparent',
+                                                                                color: isColFiltered ? '#ffffff' : 'var(--text-muted)',
+                                                                                border: 'none',
+                                                                                borderRadius: 3,
+                                                                                padding: '2px 4px',
+                                                                                cursor: 'pointer',
+                                                                                display: 'flex',
+                                                                                alignItems: 'center'
+                                                                            }}
+                                                                            title={`Bộ lọc Cột ${getColLetter(cIdx)}`}
+                                                                        >
+                                                                            <Filter size={11} />
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            </th>
+                                                        );
+                                                    })}
                                                 </tr>
+
+                                                {/* Header Row 2: Sticky Column Filter Input Controls */}
+                                                {showFilterRow && (
+                                                    <tr style={{ position: 'sticky', top: pageFreezeRows > 0 ? 32 : 0, zIndex: 10, background: 'var(--bg-card)' }}>
+                                                        <th style={{ background: 'var(--bg-secondary)', padding: '2px 4px', textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>
+                                                            <Filter size={10} />
+                                                        </th>
+                                                        {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => {
+                                                            const colVal = columnFilters[cIdx] || '';
+                                                            return (
+                                                                <th key={cIdx} style={{ padding: '2px 4px', background: 'var(--bg-card)' }}>
+                                                                    <input
+                                                                        type="text"
+                                                                        value={colVal}
+                                                                        onChange={e => setColumnFilters(prev => ({ ...prev, [cIdx]: e.target.value }))}
+                                                                        placeholder={`Lọc Cột ${getColLetter(cIdx)}...`}
+                                                                        style={{
+                                                                            width: '100%',
+                                                                            padding: '3px 6px',
+                                                                            fontWeight: colVal ? 600 : 400
+                                                                        }}
+                                                                    />
+                                                                </th>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                )}
                                             </thead>
                                             <tbody>
                                                 {renderedPageRows.map((row, rIdx) => {
                                                     const isRowPinned = rIdx < pageFreezeRows;
                                                     const isLastPinnedRow = pageFreezeRows > 0 && rIdx === pageFreezeRows - 1;
+                                                    const isRowSelected = selectedRowSet.has(rIdx);
                                                     return (
                                                         <tr
                                                             key={rIdx}
                                                             className={isLastPinnedRow ? 'pinned-row-last' : ''}
                                                             style={isRowPinned ? { position: 'sticky', top: (rIdx + 1) * 32, zIndex: 9, background: '#fffbeb' } : {}}
                                                         >
-                                                            <td className="row-index-cell" style={isRowPinned ? { background: '#fef3c7', fontWeight: 700, color: '#b45309' } : {}}>
-                                                                {rIdx + 1} {isRowPinned && '📌'}
+                                                            <td 
+                                                                className="row-index-cell" 
+                                                                onMouseDown={(e) => handleRowMouseDown(rIdx, e)}
+                                                                onMouseEnter={() => handleRowMouseEnter(rIdx)}
+                                                                style={{ 
+                                                                    position: 'relative', 
+                                                                    userSelect: 'none', 
+                                                                    cursor: 'pointer',
+                                                                    ...(isRowSelected ? { background: '#dbeafe', fontWeight: 700, color: '#1e40af', borderLeft: '3px solid #2563eb' } : isRowPinned ? { background: '#fef3c7', fontWeight: 700, color: '#b45309' } : {}) 
+                                                                }}
+                                                            >
+                                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, width: '100%', padding: '0 2px' }}>
+                                                                    <span>{rIdx + 1} {isRowPinned && '📌'}</span>
+                                                                </div>
                                                             </td>
                                                             {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => {
                                                                 const cellVal = Array.isArray(row) ? row[cIdx] : '';
@@ -593,12 +1654,19 @@ function ProductsContent() {
                                                                 const targetUrl = trimmedVal.startsWith('www.') ? `https://${trimmedVal}` : trimmedVal;
 
                                                                 const isSelected = selectedPageCell?.rIdx === rIdx && selectedPageCell?.cIdx === cIdx;
+                                                                const isColSelected = selectedColSet.has(cIdx);
+                                                                const isCellInRange = selectedCellRange && 
+                                                                    rIdx >= selectedCellRange.minRow && rIdx <= selectedCellRange.maxRow && 
+                                                                    cIdx >= selectedCellRange.minCol && cIdx <= selectedCellRange.maxCol;
+                                                                const isRowOrColSelected = isRowSelected || isColSelected || isCellInRange;
                                                                 return (
                                                                     <td
                                                                         key={cIdx}
-                                                                        className={`${isSelected ? 'selected-cell' : ''} ${isUrl ? 'has-url-cell' : ''}`}
-                                                                        title="Click đúp để xem & sửa ô này"
-                                                                        onClick={() => setSelectedPageCell({ rIdx, cIdx })}
+                                                                        className={`${isSelected ? 'selected-cell' : ''} ${isCellInRange ? 'range-selected-cell' : ''} ${isUrl ? 'has-url-cell' : ''}`}
+                                                                        title="Click đúp để xem & sửa ô (Kéo chuột 4 hướng để bôi đen chọn ô)"
+                                                                        onMouseDown={(e) => handleCellMouseDown(rIdx, cIdx, e)}
+                                                                        onMouseEnter={() => handleCellMouseEnter(rIdx, cIdx)}
+                                                                        onContextMenu={(e) => handleCellContextMenu(rIdx, cIdx, e)}
                                                                         onDoubleClick={() => {
                                                                             setSelectedPageCell({ rIdx, cIdx });
                                                                             setPageCellDetailModal({
@@ -609,7 +1677,9 @@ function ProductsContent() {
                                                                                 colLetter: getColLetter(cIdx)
                                                                             });
                                                                         }}
-                                                                        style={{ cursor: 'pointer' }}
+                                                                        style={{ 
+                                                                            background: isRowOrColSelected ? (isSelected ? undefined : 'rgba(59, 130, 246, 0.1)') : undefined
+                                                                        }}
                                                                     >
                                                                         {isUrl ? (
                                                                             <div className="sheet-url-cell">
@@ -643,28 +1713,38 @@ function ProductsContent() {
                                 })()}
                             </div>
 
-                            {activePageSheetData.length > pageRowLimit && (
-                                <div style={{ padding: '8px 16px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5 }}>
+                            {activePageSheetData.length > 0 && (
+                                <div style={{ padding: '8px 16px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, flexWrap: 'wrap', gap: 10 }}>
                                     <span style={{ color: 'var(--text-secondary)' }}>
-                                        Đang hiển thị <strong>{renderedPageRows.length}</strong> / <strong>{activePageSheetData.length.toLocaleString()}</strong> hàng (Tối ưu phản hồi mượt 60fps)
+                                        Đang hiển thị <strong>{renderedPageRows.length}</strong> / <strong>{activePageSheetData.length.toLocaleString()}</strong> hàng {activePageSheetData.length > pageRowLimit && '(Tối ưu phản hồi mượt 60fps)'}
                                     </span>
-                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                        <button
-                                            type="button"
-                                            className="btn btn-outline btn-sm"
-                                            onClick={() => setPageRowLimit(prev => prev + 200)}
-                                            style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)' }}
-                                        >
-                                            + Xem thêm 200 hàng
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="btn btn-ghost btn-sm"
-                                            onClick={() => setPageRowLimit(activePageSheetData.length)}
-                                            style={{ fontSize: 12, padding: '4px 10px', color: 'var(--accent)', fontWeight: 600 }}
-                                        >
-                                            Xem tất cả ({activePageSheetData.length.toLocaleString()} hàng)
-                                        </button>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        {/* Quick Add Rows & Columns */}
+                                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginRight: 8, borderRight: '1px solid var(--border-color)', paddingRight: 8 }}>
+                                            <button type="button" onClick={() => handleAddPageRows(1)} style={{ padding: '3px 8px', fontSize: 11.5, background: 'var(--bg-card)', border: '1px solid #bbf7d0', borderRadius: 3, cursor: 'pointer', color: '#15803d', fontWeight: 600 }} title="Thêm hàng mới vào cuối Tab">+ Hàng</button>
+                                            <button type="button" onClick={() => handleAddPageColumn(1)} style={{ padding: '3px 8px', fontSize: 11.5, background: 'var(--bg-card)', border: '1px solid #bfdbfe', borderRadius: 3, cursor: 'pointer', color: '#1d4ed8', fontWeight: 600 }} title="Thêm Cột mới vào Tab">+ Cột Mới</button>
+                                        </div>
+
+                                        {activePageSheetData.length > pageRowLimit && (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-outline btn-sm"
+                                                    onClick={() => setPageRowLimit(prev => prev + 200)}
+                                                    style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)' }}
+                                                >
+                                                    + Xem thêm 200 hàng
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-ghost btn-sm"
+                                                    onClick={() => setPageRowLimit(activePageSheetData.length)}
+                                                    style={{ fontSize: 12, padding: '4px 10px', color: 'var(--accent)', fontWeight: 600 }}
+                                                >
+                                                    Xem tất cả ({activePageSheetData.length.toLocaleString()} hàng)
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                             )}
@@ -733,6 +1813,28 @@ function ProductsContent() {
                                 ))}
                             </select>
                         </div>
+
+                        {/* Convert Crawler Products to Sheet Button */}
+                        <button
+                            type="button"
+                            onClick={() => setShowCrawlerToSheetModal(true)}
+                            style={{
+                                padding: '8px 16px',
+                                height: 40,
+                                background: 'var(--gradient-primary)',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: 'var(--radius-md)',
+                                fontWeight: 600,
+                                fontSize: 13,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8
+                            }}
+                        >
+                            <FileSpreadsheet size={16} /> 📥 Chuyển {selectedCrawlerProductIds.length > 0 ? `(${selectedCrawlerProductIds.length} chọn)` : 'tất cả'} sang Sheet
+                        </button>
                     </div>
 
                     <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -779,7 +1881,15 @@ function ProductsContent() {
                     <table className="table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                         <thead>
                             <tr style={{ borderBottom: '2px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                                <th style={{ padding: '12px 16px', width: 60 }}>#</th>
+                                <th style={{ padding: '12px 16px', width: 40, textAlign: 'center' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedCrawlerProductIds.length === products.length && products.length > 0}
+                                        onChange={toggleSelectAllCrawlerProducts}
+                                        style={{ cursor: 'pointer' }}
+                                    />
+                                </th>
+                                <th style={{ padding: '12px 16px', width: 50 }}>#</th>
                                 <th style={{ padding: '12px 16px', width: 90 }}>Thumbnail</th>
                                 <th style={{ padding: '12px 16px' }}>Product Name</th>
                                 <th style={{ padding: '12px 16px', width: 220 }}>Category</th>
@@ -790,20 +1900,28 @@ function ProductsContent() {
                         <tbody>
                             {loading ? (
                                 <tr>
-                                    <td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                                         <div style={{ width: 32, height: 32, border: '3px solid var(--border-color)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
                                         Fetching products list...
                                     </td>
                                 </tr>
                             ) : products.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                                         No products found. Start the crawler engine on the Dashboard to populate the database.
                                     </td>
                                 </tr>
                             ) : (
                                 products.map((prod, i) => (
-                                    <tr key={prod.id} style={{ borderBottom: '1px solid var(--border-color)', height: 72 }}>
+                                    <tr key={prod.id} style={{ borderBottom: '1px solid var(--border-color)', height: 72, background: selectedCrawlerProductIds.includes(prod.id) ? 'rgba(99,102,241,0.04)' : 'transparent' }}>
+                                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedCrawlerProductIds.includes(prod.id)}
+                                                onChange={() => toggleSelectCrawlerProduct(prod.id)}
+                                                style={{ cursor: 'pointer' }}
+                                            />
+                                        </td>
                                         <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>
                                             {(currentPage - 1) * limit + i + 1}
                                         </td>
@@ -1070,6 +2188,25 @@ function ProductsContent() {
                             <textarea
                                 value={pageCellDetailModal.newVal}
                                 onChange={e => setPageCellDetailModal(p => ({ ...p, newVal: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+                                        // Plain Enter → Save
+                                        e.preventDefault();
+                                        handleSavePageCellDetail(pageCellDetailModal.newVal);
+                                    } else if (e.key === 'Enter' && e.ctrlKey) {
+                                        // Ctrl+Enter → insert newline manually
+                                        e.preventDefault();
+                                        const ta = e.target;
+                                        const start = ta.selectionStart;
+                                        const end = ta.selectionEnd;
+                                        const val = pageCellDetailModal.newVal;
+                                        const newVal = val.slice(0, start) + '\n' + val.slice(end);
+                                        setPageCellDetailModal(p => ({ ...p, newVal }));
+                                        requestAnimationFrame(() => {
+                                            ta.selectionStart = ta.selectionEnd = start + 1;
+                                        });
+                                    }
+                                }}
                                 style={{
                                     width: '100%',
                                     minHeight: 220,
@@ -1088,6 +2225,10 @@ function ProductsContent() {
                                     lineHeight: 1.5
                                 }}
                             />
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, display: 'flex', gap: 12 }}>
+                                <span>⏎ <kbd style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Enter</kbd> Lưu nhanh</span>
+                                <span>↵ <kbd style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Ctrl+Enter</kbd> Xuống dòng</span>
+                            </div>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1274,6 +2415,155 @@ function ProductsContent() {
                 setAiState={setAiTaskState}
             />
 
+            {/* Column Unique Values Filter Dropdown Popover Modal */}
+            {activeFilterDropdownCol !== null && (
+                <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'fadeIn 0.15s ease' }} onClick={() => setActiveFilterDropdownCol(null)}>
+                    <div style={{ background: 'var(--bg-card)', width: 380, maxWidth: '90vw', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-xl)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '80vh' }} onClick={e => e.stopPropagation()}>
+                        {/* Header */}
+                        <div style={{ padding: '14px 18px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Filter size={15} style={{ color: 'var(--accent)' }} /> 
+                                Lọc Cột {String.fromCharCode(activeFilterDropdownCol % 26 + 65)} 
+                                {activePageSheetData[0]?.[activeFilterDropdownCol] ? `: ${String(activePageSheetData[0][activeFilterDropdownCol]).slice(0, 20)}` : ''}
+                            </div>
+                            <button type="button" onClick={() => setActiveFilterDropdownCol(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        {/* Dropdown Body */}
+                        <div style={{ padding: '14px 18px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            {/* Search inside unique values */}
+                            <div style={{ position: 'relative' }}>
+                                <Search size={13} style={{ position: 'absolute', left: 10, top: 9, color: 'var(--text-muted)' }} />
+                                <input
+                                    type="text"
+                                    value={dropdownSearch}
+                                    onChange={e => setDropdownSearch(e.target.value)}
+                                    placeholder="Tìm giá trị trong danh sách..."
+                                    style={{ width: '100%', padding: '6px 10px 6px 30px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                                />
+                            </div>
+
+                            {/* Select All / Clear All Buttons */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const allVals = activeColUniqueValues.map(v => v.value);
+                                            setColumnSelectedValues(prev => ({ ...prev, [activeFilterDropdownCol]: allVals }));
+                                        }}
+                                        style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600, padding: 0 }}
+                                    >
+                                        Chọn tất cả ({activeColUniqueValues.length})
+                                    </button>
+                                    <span style={{ color: 'var(--border-color)' }}>|</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setColumnSelectedValues(prev => ({ ...prev, [activeFilterDropdownCol]: [] }));
+                                        }}
+                                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 600, padding: 0 }}
+                                    >
+                                        Bỏ chọn tất cả
+                                    </button>
+                                </div>
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                    {(columnSelectedValues[activeFilterDropdownCol] || []).length} / {activeColUniqueValues.length} đã chọn
+                                </span>
+                            </div>
+
+                            {/* Checkbox List of Unique Column Values */}
+                            <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', maxHeight: 220, overflowY: 'auto', background: 'var(--bg-secondary)', padding: '6px 0' }}>
+                                {activeColUniqueValues
+                                    .filter(item => !dropdownSearch || item.value.toLowerCase().includes(dropdownSearch.toLowerCase()))
+                                    .map((item, i) => {
+                                        const currentSelected = columnSelectedValues[activeFilterDropdownCol];
+                                        const isChecked = !currentSelected || currentSelected.includes(item.value);
+                                        return (
+                                            <label
+                                                key={i}
+                                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 12px', fontSize: 12, cursor: 'pointer', userSelect: 'none', background: isChecked ? 'rgba(99,102,241,0.06)' : 'transparent' }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isChecked}
+                                                        onChange={e => {
+                                                            const isCheckedNow = e.target.checked;
+                                                            setColumnSelectedValues(prev => {
+                                                                const cur = prev[activeFilterDropdownCol] || activeColUniqueValues.map(v => v.value);
+                                                                let updated;
+                                                                if (isCheckedNow) {
+                                                                    updated = Array.from(new Set([...cur, item.value]));
+                                                                } else {
+                                                                    updated = cur.filter(v => v !== item.value);
+                                                                }
+                                                                return { ...prev, [activeFilterDropdownCol]: updated };
+                                                            });
+                                                        }}
+                                                    />
+                                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-primary)', fontWeight: isChecked ? 600 : 400 }}>
+                                                        {item.value}
+                                                    </span>
+                                                </div>
+                                                <span style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-card)', padding: '1px 6px', borderRadius: 10, border: '1px solid var(--border-color)', flexShrink: 0 }}>
+                                                    {item.count}
+                                                </span>
+                                            </label>
+                                        );
+                                    })}
+                            </div>
+                        </div>
+
+                        {/* Modal Footer */}
+                        <div style={{ padding: '10px 18px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setColumnFilters(prev => {
+                                        const cp = { ...prev };
+                                        delete cp[activeFilterDropdownCol];
+                                        return cp;
+                                    });
+                                    setColumnSelectedValues(prev => {
+                                        const cp = { ...prev };
+                                        delete cp[activeFilterDropdownCol];
+                                        return cp;
+                                    });
+                                    setActiveFilterDropdownCol(null);
+                                }}
+                                style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
+                            >
+                                Xóa lọc cột này
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                onClick={() => setActiveFilterDropdownCol(null)}
+                                style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none', padding: '6px 16px', fontSize: 12.5, borderRadius: 'var(--radius-md)' }}
+                            >
+                                <Check size={14} /> Áp dụng
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Crawler to Sheet Conversion Modal */}
+            <CrawlerToSheetModal
+                isOpen={showCrawlerToSheetModal}
+                onClose={() => setShowCrawlerToSheetModal(false)}
+                allProducts={products}
+                selectedProductIds={selectedCrawlerProductIds}
+                totalProductsCount={totalProducts}
+                profileSlug={profileSlug}
+                sheets={profileSheets}
+                activeTabName={activeSheetTabName}
+                onConvertSuccess={handleCrawlerToSheetSuccess}
+            />
+
             {/* Floating Background AI Task Running Notification */}
             {aiTaskState.isRunning && !showAiModal && (
                 <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 99999, background: '#0f172a', color: 'white', padding: '12px 18px', borderRadius: 12, boxShadow: '0 20px 40px rgba(0,0,0,0.5)', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: 14, animation: 'fadeIn 0.3s ease' }}>
@@ -1293,6 +2583,117 @@ function ProductsContent() {
                     >
                         <Bot size={14} /> Mở AI
                     </button>
+                </div>
+            )}
+            {/* Google Sheets Right-Click Context Menu */}
+            {contextMenu && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        left: contextMenu.x,
+                        top: contextMenu.y,
+                        zIndex: 999999,
+                        background: 'var(--bg-card)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-md)',
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+                        width: 220,
+                        padding: '6px 0',
+                        fontSize: 12.5,
+                        animation: 'fadeIn 0.1s ease',
+                        userSelect: 'none'
+                    }}
+                    onClick={e => e.stopPropagation()}
+                >
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-primary)' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            handleUndo();
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Undo2 size={14} /> Hoàn tác (Undo)</span>
+                        <kbd style={{ fontSize: 10, opacity: 0.6, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3 }}>Ctrl+Z</kbd>
+                    </div>
+
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-primary)' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            handleRedo();
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Redo2 size={14} /> Khôi phục (Redo)</span>
+                        <kbd style={{ fontSize: 10, opacity: 0.6, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3 }}>Ctrl+Y</kbd>
+                    </div>
+
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '4px 0' }} />
+
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-primary)' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            handleCopyRangeContent(contextMenu.minRow, contextMenu.maxRow, contextMenu.minCol, contextMenu.maxCol);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Copy size={14} /> Sao chép (Copy)</span>
+                        <kbd style={{ fontSize: 10, opacity: 0.6, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3 }}>Ctrl+C</kbd>
+                    </div>
+
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-primary)' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            handleCutRangeContent(contextMenu.minRow, contextMenu.maxRow, contextMenu.minCol, contextMenu.maxCol);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Scissors size={14} /> Cắt (Cut)</span>
+                        <kbd style={{ fontSize: 10, opacity: 0.6, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3 }}>Ctrl+X</kbd>
+                    </div>
+
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--text-primary)' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            handlePasteRangeContent(contextMenu.minRow, contextMenu.minCol);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Clipboard size={14} /> Dán (Paste)</span>
+                        <kbd style={{ fontSize: 10, opacity: 0.6, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3 }}>Ctrl+V</kbd>
+                    </div>
+
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '4px 0' }} />
+
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#ef4444' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            handleClearRangeContent(contextMenu.minRow, contextMenu.maxRow, contextMenu.minCol, contextMenu.maxCol);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Eraser size={14} /> Xóa sạch nội dung</span>
+                        <kbd style={{ fontSize: 10, opacity: 0.6, background: 'var(--bg-secondary)', padding: '1px 4px', borderRadius: 3 }}>Delete</kbd>
+                    </div>
+
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '4px 0' }} />
+
+                    <div
+                        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#ef4444' }}
+                        className="context-menu-item"
+                        onClick={() => {
+                            setSelectedRowIndices(Array.from({ length: contextMenu.maxRow - contextMenu.minRow + 1 }, (_, i) => contextMenu.minRow + i));
+                            setContextMenu(null);
+                            handleDeleteSelectedRows();
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Trash2 size={14} /> Xóa các Hàng này</span>
+                    </div>
                 </div>
             )}
         </div>

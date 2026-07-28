@@ -70,6 +70,25 @@ router.delete('/profiles/:id', (req, res) => {
     }
 });
 
+// PATCH /api/products/profiles/:slug — update profile name and target_url
+router.patch('/profiles/:slug', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { name, target_url } = req.body;
+        if (!name || !name.trim()) {
+            return res.status(400).json({ error: 'Tên Profile là bắt buộc.' });
+        }
+        const updated = profileQueries.update(slug, name, target_url || '');
+        if (!updated) {
+            return res.status(404).json({ error: 'Không tìm thấy Profile.' });
+        }
+        res.json({ message: 'Cập nhật Profile thành công.', profile: updated });
+    } catch (err) {
+        console.error('Failed to update profile:', err);
+        res.status(500).json({ error: err.message || 'Lỗi khi cập nhật Profile.' });
+    }
+});
+
 // GET /api/products — get list of products (paginated, searched, filtered)
 router.get('/', async (req, res) => {
     try {

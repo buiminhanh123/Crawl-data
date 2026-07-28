@@ -830,6 +830,25 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
                             <textarea
                                 value={cellDetailModal.newVal}
                                 onChange={e => setCellDetailModal(p => ({ ...p, newVal: e.target.value }))}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+                                        // Plain Enter → Save
+                                        e.preventDefault();
+                                        handleSaveCellDetail(cellDetailModal.newVal);
+                                    } else if (e.key === 'Enter' && e.ctrlKey) {
+                                        // Ctrl+Enter → insert newline manually
+                                        e.preventDefault();
+                                        const ta = e.target;
+                                        const start = ta.selectionStart;
+                                        const end = ta.selectionEnd;
+                                        const val = cellDetailModal.newVal;
+                                        const newVal = val.slice(0, start) + '\n' + val.slice(end);
+                                        setCellDetailModal(p => ({ ...p, newVal }));
+                                        requestAnimationFrame(() => {
+                                            ta.selectionStart = ta.selectionEnd = start + 1;
+                                        });
+                                    }
+                                }}
                                 style={{
                                     width: '100%',
                                     minHeight: 220,
@@ -848,6 +867,10 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
                                     lineHeight: 1.5
                                 }}
                             />
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, display: 'flex', gap: 12 }}>
+                                <span>⏎ <kbd style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Enter</kbd> Lưu nhanh</span>
+                                <span>↵ <kbd style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Ctrl+Enter</kbd> Xuống dòng</span>
+                            </div>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

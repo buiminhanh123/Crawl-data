@@ -29,27 +29,170 @@ import {
     Save
 } from 'lucide-react';
 
-// Clean AI chatbot artifact tags (e.g. :::writing{variant="document" id="48271"} ... :::)
+export function convertMarkdownTableToHtml(text) {
+    if (!text || typeof text !== 'string') return text;
+    let trimmed = text.trim();
+
+    // Clean artifact tags & backticks
+    trimmed = trimmed.replace(/:::[a-zA-Z0-9_-]+(\{[^}]*?\})?\s*\n?/gi, '').replace(/\s*:::\s*$/g, '');
+    trimmed = trimmed.replace(/^```[a-zA-Z0-9_-]*\s*\n?/gi, '').replace(/\n?\s*```$/gi, '');
+
+    const hasPipes = /^\s*\|.*\|/m.test(trimmed);
+    const hasHtmlRows = /<tr[^>]*>/i.test(trimmed) && /<td[^>]*>/i.test(trimmed);
+
+    // If it's already a clean HTML table with no markdown pipes, return as is
+    if (!hasPipes && trimmed.includes('<table') && trimmed.includes('</table>')) {
+        return trimmed;
+    }
+
+    // If there are neither pipes nor HTML table rows, return as is
+    if (!hasPipes && !hasHtmlRows) {
+        return trimmed;
+    }
+
+    const lines = trimmed.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const rows = [];
+    let headerRow = null;
+
+    for (const line of lines) {
+        // Case 1: Markdown Pipe table line e.g. | col1 | col2 |
+        if (line.startsWith('|') || line.endsWith('|')) {
+            if (/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(line)) {
+                continue;
+            }
+            const parts = line.split('|').map(c => c.trim());
+            if (parts.length > 0 && parts[0] === '') parts.shift();
+            if (parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
+            
+            if (parts.length > 0) {
+                if (!headerRow) {
+                    headerRow = parts;
+                } else {
+                    rows.push(parts);
+                }
+            }
+        } 
+        // Case 2: HTML table row <tr><td>col1</td><td>col2</td></tr>
+        else if (line.includes('<td')) {
+            const matches = [...line.matchAll(/<td[^>]*>(.*?)<\/td>/gi)];
+            if (matches.length > 0) {
+                const cells = matches.map(m => m[1].trim());
+                rows.push(cells);
+            }
+        }
+        // Case 3: HTML table header <tr><th>col1</th><th>col2</th></tr>
+        else if (line.includes('<th')) {
+            const matches = [...line.matchAll(/<th[^>]*>(.*?)<\/th>/gi)];
+            if (matches.length > 0 && !headerRow) {
+                headerRow = matches.map(m => m[1].trim());
+            }
+        }
+    }
+
+    if (!headerRow && rows.length === 0) {
+        return text;
+    }
+
+    if (!headerRow && rows.length > 0) {
+        headerRow = ['Thông số kỹ thuật', 'Chi tiết'];
+    }
+
+    let html = `<table class="Table_Products_Style">\n<thead>\n<tr>\n`;
+    headerRow.forEach(h => {
+        html += `  <th>${h}</th>\n`;
+    });
+    html += `</tr>\n</thead>\n<tbody>\n`;
+
+    rows.forEach(r => {
+        html += `  <tr>`;
+        for (let i = 0; i < headerRow.length; i++) {
+            const val = r[i] !== undefined ? r[i] : '';
+            html += `<td>${val}</td>`;
+        }
+        html += `</tr>\n`;
+    });
+
+    html += `</tbody>\n</table>`;
+    return html;
+}
+
+export function isValidHtmlTableStructure(text) {
+    if (!text || typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    
+    // Must contain <table and </table>
+    if (!trimmed.includes('<table') || !trimmed.includes('</table>')) return false;
+
+    // Must contain <tr> and <td> or <th>
+    if (!trimmed.includes('<tr') || (!trimmed.includes('<td') && !trimmed.includes('<th'))) return false;
+
+    // Must NOT contain raw Markdown pipe table syntax e.g. |---|---| or | 1D | ...
+    if (/^\s*\|.*\|/m.test(trimmed) || /\|--+/.test(trimmed)) return false;
+
+    return true;
+}
+
+// Clean AI chatbot artifact tags (e.g. :::writing{variant="document" id="48271"} ... :::) and trailing chatter
 export function cleanAiArtifactTags(text) {
     if (!text || typeof text !== 'string') return '';
     let cleaned = text.trim();
 
-    // 1. Remove :::writing{...} or :::whatever tags at the top
-    cleaned = cleaned.replace(/^:::[a-zA-Z0-9_-]+(\{[^}]*\})?\s*\n?/gi, '');
-    cleaned = cleaned.replace(/^:::\s*\n?/g, '');
+    // 1. Remove :::writing{variant="..." id="..."} or :::document tags anywhere
+    cleaned = cleaned.replace(/:::[a-zA-Z0-9_-]+(\{[^}]*?\})?\s*\n?/gi, '');
+    cleaned = cleaned.replace(/^\s*:::\s*$/gm, '');
+    cleaned = cleaned.replace(/\s*:::\s*$/g, '');
 
-    // 2. Remove trailing ::: tags at the end
-    cleaned = cleaned.replace(/\n?\s*:::$/g, '');
-    cleaned = cleaned.replace(/\s*:::$/g, '');
-
-    // 3. Remove enclosing ```html ... ``` or ``` codeblock wrappers if present
-    if (cleaned.startsWith('```html')) {
-        cleaned = cleaned.replace(/^```html\s*\n?/, '').replace(/\n?\s*```$/, '');
+    // 2. Remove codeblock wrappers ```html ... ```
+    if (/^```[a-zA-Z0-9_-]*\n/i.test(cleaned)) {
+        cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\n?/i, '').replace(/\n?```$/i, '');
     } else if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?\s*```$/, '');
+        cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\s*\n?/i, '').replace(/\n?\s*```$/i, '');
+    }
+    cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*/i, '').replace(/```$/i, '');
+
+    // 3. Remove leading conversational intro / preamble lines
+    let lines = cleaned.split('\n');
+    while (lines.length > 1) {
+        const firstLine = lines[0].trim();
+        const isIntro = /^(chắc chắn rồi|dưới đây|đây là|sau đây|bản dịch|kết quả|dữ liệu|sapo|lưu ý|ghi chú|dịch:)/i.test(firstLine) ||
+                        (firstLine.endsWith(':') && firstLine.length < 150 && !firstLine.includes('<') && !firstLine.includes('=') && !firstLine.includes('{'));
+        if (isIntro) {
+            lines.shift();
+            while (lines.length > 0 && lines[0].trim() === '') lines.shift();
+        } else {
+            break;
+        }
+    }
+    cleaned = lines.join('\n').trim();
+
+    // 4. Remove single line leading phrases
+    cleaned = cleaned.replace(/^(Chắc chắn rồi|Dưới đây là|Đây là|Dữ liệu đã được|Bản dịch:|Dịch:|SAPO:|Kết quả:)\s*/i, '');
+
+    // 5. Remove trailing chatbot conversational chatter (e.g. "Nếu cần, tôi có thể tiếp tục dịch...", "Hy vọng...", "Hãy cho tôi biết...")
+    lines = cleaned.split('\n');
+    while (lines.length > 0) {
+        const lastLine = lines[lines.length - 1].trim();
+        const isTrailingChatter = /^(nếu cần|nếu bạn|nếu có|tôi có thể|hy vọng|hi vọng|hãy|chúc bạn|bạn có thể|lưu ý rằng|ngoài ra|rất hân hạnh|bản dịch trên|kết quả trên|nếu muốn|có cần)/i.test(lastLine) ||
+                                  /tiếp tục dịch.*(khác|thông số|bảng)/i.test(lastLine) ||
+                                  /hỗ trợ thêm|giúp ích|thắc mắc|cần chỉnh sửa|bảng thông số/i.test(lastLine);
+        if (isTrailingChatter) {
+            lines.pop();
+            while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+        } else {
+            break;
+        }
+    }
+    cleaned = lines.join('\n').trim();
+
+    // 6. Clean residual standalone :::
+    cleaned = cleaned.replace(/^\s*:::\s*$/gm, '').replace(/\s*:::\s*$/g, '').trim();
+
+    // 7. If output contains mixed Markdown pipe table syntax or HTML table rows without <table> wrapper, convert automatically
+    if (/^\s*\|.*\|/m.test(cleaned) || (cleaned.includes('<td') && !cleaned.includes('<table'))) {
+        cleaned = convertMarkdownTableToHtml(cleaned);
     }
 
-    return cleaned.trim();
+    return cleaned;
 }
 
 // Web Audio API Crystal Chime Sound Generator (No external MP3 required)
@@ -208,6 +351,8 @@ export default function AiAssistantModal({
         if (p.promptText) setPromptText(p.promptText);
         if (Array.isArray(p.variables)) setVariables(p.variables);
         if (p.targetColIdx !== undefined) setTargetColIdx(p.targetColIdx);
+        if (p.startRow !== undefined) setStartRow(p.startRow);
+        if (p.endRow !== undefined) setEndRow(p.endRow);
         if (p.concurrency !== undefined) setConcurrency(p.concurrency);
         if (p.skipExisting !== undefined) setSkipExisting(p.skipExisting);
     };
@@ -226,6 +371,8 @@ export default function AiAssistantModal({
             promptText,
             variables,
             targetColIdx,
+            startRow,
+            endRow,
             concurrency,
             skipExisting
         };
@@ -387,7 +534,7 @@ export default function AiAssistantModal({
             });
 
             if (res?.content) {
-                setTestResult(res.content);
+                setTestResult(cleanAiArtifactTags(res.content));
             } else {
                 setTestResult('Không nhận được phản hồi từ AI.');
             }
@@ -451,6 +598,24 @@ export default function AiAssistantModal({
             logs: [`🚀 Khởi tạo tác vụ AI (${concurrency} luồng song song) cho ${initialJobs.length} hàng...`]
         }));
 
+        try {
+            const runnerObj = {
+                isRunning: true,
+                isPaused: false,
+                activeProfileName: profileName || 'Profile',
+                activeTabName: selectedTab || 'Sheet1',
+                activeTaskName: 'Tác vụ AI Modal',
+                totalRows: initialJobs.length,
+                completedCount: 0,
+                pendingCount: initialJobs.length,
+                errorCount: 0,
+                skipCount: 0,
+                currentProgressPercent: 0
+            };
+            localStorage.setItem('ai_runner_state', JSON.stringify(runnerObj));
+            window.dispatchEvent(new Event('ai_runner_update'));
+        } catch (e) {}
+
         // Run multi-threaded parallel batch execution
         runMultiThreadLoop(selectedTab, targetColIdx, initialJobs, promptText, skipExisting, concurrency);
     };
@@ -494,24 +659,60 @@ export default function AiAssistantModal({
                 }
 
                 const promptForThisRow = formatPromptForRow(templatePrompt, currentRow);
+                const isTableTask = /bảng|table|dịch|thông số|giao diện|html|spec/i.test(templatePrompt || promptForThisRow || '');
 
                 try {
-                    const res = await fetchApi('/api/ai/chat', {
-                        method: 'POST',
-                        body: JSON.stringify({ message: promptForThisRow })
-                    });
+                    let rowAttempts = 0;
+                    const maxRowAttempts = 3;
+                    let cleanedAiContent = '';
+                    let lastErrorMsg = '';
 
-                    if (res?.content) {
-                        const rawContent = res.content.trim();
-                        // Automatically clean :::writing{variant="document" id="48271"} ::: AI artifact tags
-                        const cleanedAiContent = cleanAiArtifactTags(rawContent);
+                while (rowAttempts < maxRowAttempts && !abortRef.current) {
+                    rowAttempts++;
+                    try {
+                        const res = await fetchApi('/api/ai/chat', {
+                            method: 'POST',
+                            body: JSON.stringify({ message: promptForThisRow })
+                        });
 
-                        if (!workingData[job.rowIdx]) workingData[job.rowIdx] = [];
-                        workingData[job.rowIdx][targetCol] = cleanedAiContent;
+                        if (res?.content) {
+                            let rawContent = res.content.trim();
+                            let cleaned = cleanAiArtifactTags(rawContent);
 
-                        job.status = 'done';
-                        job.result = cleanedAiContent;
-                        processedCount++;
+                            if (isTableTask) {
+                                const isValid = isValidHtmlTableStructure(cleaned);
+                                if (!isValid) {
+                                    if (rowAttempts < maxRowAttempts) {
+                                        setAiState(p => ({
+                                            ...p,
+                                            logs: [`⚠️ Hàng ${job.rowNum}: Bảng HTML lỗi cấu trúc/trộn Markdown, đang tự động dịch lại (Lần ${rowAttempts}/${maxRowAttempts})...`, ...p.logs.slice(0, 50)]
+                                        }));
+                                        await new Promise(r => setTimeout(r, 1200));
+                                        continue; // Rerun AI translation for current row!
+                                    } else {
+                                        cleaned = convertMarkdownTableToHtml(cleaned);
+                                    }
+                                }
+                            }
+                            cleanedAiContent = cleaned;
+                            lastErrorMsg = '';
+                            break;
+                        } else {
+                            lastErrorMsg = 'AI không trả về kết quả';
+                        }
+                    } catch (err) {
+                        lastErrorMsg = err.message || 'Lỗi mạng khi gọi AI';
+                        if (rowAttempts < maxRowAttempts) await new Promise(r => setTimeout(r, 1000));
+                    }
+                }
+
+                if (cleanedAiContent) {
+                    if (!workingData[job.rowIdx]) workingData[job.rowIdx] = [];
+                    workingData[job.rowIdx][targetCol] = cleanedAiContent;
+
+                    job.status = 'done';
+                    job.result = cleanedAiContent;
+                    processedCount++;
 
                         // Immediate Sheet Cell Update & Auto-Save
                         const updatedSheets = sheets.map(s => s.name === tabName ? { ...s, data: workingData } : s);
@@ -567,14 +768,33 @@ export default function AiAssistantModal({
 
         await Promise.all(workerThreadsList);
 
-        if (!abortRef.current) {
-            setAiState(p => ({
-                ...p,
-                isRunning: false,
-                statusText: `🎉 Hoàn tất xử lý ${processedCount} hàng!`,
-                logs: [`🎉 Tác vụ AI đã hoàn tất thành công!`, ...p.logs]
-            }));
+        const isAborted = abortRef.current;
+        setAiState(p => ({
+            ...p,
+            isRunning: false,
+            statusText: isAborted ? '⏹️ Đã dừng tiến trình AI' : `🎉 Hoàn tất xử lý ${processedCount} hàng!`,
+            logs: [isAborted ? '⏹️ Đã dừng tiến trình AI' : `🎉 Tác vụ AI đã hoàn tất thành công!`, ...p.logs]
+        }));
 
+        try {
+            const runnerObj = {
+                isRunning: false,
+                isPaused: false,
+                activeProfileName: profileName || 'Profile',
+                activeTabName: selectedTab || 'Sheet1',
+                activeTaskName: 'Tác vụ AI Modal',
+                totalRows: jobList.length,
+                completedCount: processedCount,
+                pendingCount: 0,
+                errorCount: errorsCount,
+                skipCount: 0,
+                currentProgressPercent: 100
+            };
+            localStorage.setItem('ai_runner_state', JSON.stringify(runnerObj));
+            window.dispatchEvent(new Event('ai_runner_update'));
+        } catch (e) {}
+
+        if (!isAborted) {
             playCompletionChime();
 
             if (typeof window !== 'undefined' && window.Notification && Notification.permission === 'granted') {
@@ -589,6 +809,23 @@ export default function AiAssistantModal({
     const handleStopAI = () => {
         abortRef.current = true;
         setAiState(p => ({ ...p, isRunning: false }));
+        try {
+            const runnerObj = {
+                isRunning: false,
+                isPaused: false,
+                activeProfileName: profileName || 'Profile',
+                activeTabName: selectedTab || 'Sheet1',
+                activeTaskName: 'Tác vụ AI Modal',
+                totalRows: 0,
+                completedCount: 0,
+                pendingCount: 0,
+                errorCount: 0,
+                skipCount: 0,
+                currentProgressPercent: 0
+            };
+            localStorage.setItem('ai_runner_state', JSON.stringify(runnerObj));
+            window.dispatchEvent(new Event('ai_runner_update'));
+        } catch (e) {}
     };
 
     if (!isOpen) return null;
@@ -635,14 +872,14 @@ export default function AiAssistantModal({
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 280 }}>
                             <Bookmark size={18} style={{ color: 'var(--accent)' }} />
                             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
-                                📁 Profile Lệnh Đã Lưu:
+                                📁 Cấu hình Prompt Đã Lưu:
                             </span>
                             <select
                                 value={selectedSavedProfileId}
                                 onChange={e => handleSelectSavedProfile(e.target.value)}
                                 style={{ flex: 1, padding: '7px 11px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontWeight: 600 }}
                             >
-                                <option value="">-- Chọn Profile Lệnh AI Đã Lưu --</option>
+                                <option value="">-- Chọn Cấu hình Prompt Đã Lưu --</option>
                                 {savedProfiles.map(p => (
                                     <option key={p.id} value={p.id}>
                                         ⭐ {p.name} ({p.variables?.length || 0} biến - Cột {getColLetter(p.targetColIdx)})
@@ -874,8 +1111,8 @@ export default function AiAssistantModal({
                             </div>
 
                             {/* Table Rows */}
-                            {variables.map((v) => (
-                                <div key={v.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 80px 1fr 34px', gap: 10, alignItems: 'center' }}>
+                            {variables.map((v, idx) => (
+                                <div key={v.id ? `mvar-${v.id}-${idx}` : `mvar-idx-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1.2fr 80px 1fr 34px', gap: 10, alignItems: 'center' }}>
                                     {/* TÊN BIẾN (Title / Header Label) */}
                                     <input
                                         type="text"
@@ -948,10 +1185,10 @@ export default function AiAssistantModal({
                         {/* Dynamic Column Tag & Variable Pills */}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
                             {/* Custom Mapped Variable Pills */}
-                            {variables.map(v => (
+                            {variables.map((v, idx) => (
                                 v.name && (
                                     <button
-                                        key={v.id}
+                                        key={v.id ? `mtag-${v.id}-${idx}` : `mtag-idx-${idx}`}
                                         type="button"
                                         onClick={() => setPromptText(prev => prev + ` {${v.name}}`)}
                                         style={{ padding: '3px 8px', fontSize: 11.5, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}

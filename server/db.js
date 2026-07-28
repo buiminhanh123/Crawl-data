@@ -659,6 +659,18 @@ const profileQueries = {
     delete: (id) => {
         db.run('DELETE FROM product_profiles WHERE id = ?', [id]);
         saveDatabase();
+    },
+
+    update: (slug, name, targetUrl) => {
+        db.run(
+            'UPDATE product_profiles SET name = ?, target_url = ?, updated_at = datetime("now") WHERE slug = ?',
+            [name.trim(), (targetUrl || '').trim(), slug]
+        );
+        saveDatabase();
+        const res = db.exec('SELECT * FROM product_profiles WHERE slug = ?', [slug]);
+        if (!res[0]?.values[0]) return null;
+        const cols = res[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, res[0].values[0][i]]));
     }
 };
 
