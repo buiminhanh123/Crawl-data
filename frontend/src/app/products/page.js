@@ -1717,76 +1717,270 @@ function ProductsContent() {
                                                          const sortDir = isColSorted ? columnSortState.direction : null;
                                                          const isColSelected = selectedColSet.has(cIdx);
                                                          return (
-                                                             <th 
-                                                                 key={cIdx} 
-                                                                 onMouseDown={(e) => handleColMouseDown(cIdx, e)}
-                                                                 onMouseEnter={() => handleColMouseEnter(cIdx)}
-                                                                 style={{ 
-                                                                     userSelect: 'none',
-                                                                     cursor: 'pointer',
-                                                                     background: isColSelected ? '#dbeafe' : '#f8fafc',
-                                                                     color: isColSelected ? '#1e40af' : '#1e293b',
-                                                                     borderBottom: isColSelected ? '2px solid #2563eb' : '2px solid #e2e8f0',
-                                                                     padding: '12px 14px',
-                                                                     whiteSpace: 'nowrap'
-                                                                 }}
-                                                             >
-                                                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                                                                     <span style={{ fontWeight: 700, fontSize: 12.5, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.02em' }} title={`Cột: ${displayTitle}`}>
-                                                                         {displayTitle}
-                                                                     </span>
-                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                                                         {/* Sort Button ↑↓ */}
-                                                                         <button
-                                                                             type="button"
-                                                                             onClick={(e) => {
-                                                                                 e.stopPropagation();
-                                                                                 if (!isColSorted) setColumnSortState({ colIndex: cIdx, direction: 'asc' });
-                                                                                 else if (sortDir === 'asc') setColumnSortState({ colIndex: cIdx, direction: 'desc' });
-                                                                                 else setColumnSortState({ colIndex: null, direction: null });
-                                                                             }}
-                                                                             style={{
-                                                                                 background: isColSorted ? 'rgba(37,99,235,0.12)' : 'transparent',
-                                                                                 color: isColSorted ? '#2563eb' : '#94a3b8',
-                                                                                 border: 'none',
-                                                                                 borderRadius: 4,
-                                                                                 padding: '2px 5px',
-                                                                                 cursor: 'pointer',
-                                                                                 fontSize: 11,
-                                                                                 fontWeight: 700,
-                                                                                 display: 'flex',
-                                                                                 alignItems: 'center'
-                                                                             }}
-                                                                             title="Sắp xếp cột này (A-Z / Z-A)"
-                                                                         >
-                                                                             {sortDir === 'asc' ? '↑' : sortDir === 'desc' ? '↓' : '↑↓'}
-                                                                         </button>
+                                                              <th 
+                                                                  key={cIdx} 
+                                                                  onMouseDown={(e) => handleColMouseDown(cIdx, e)}
+                                                                  onMouseEnter={() => handleColMouseEnter(cIdx)}
+                                                                  style={{ 
+                                                                      position: 'relative',
+                                                                      userSelect: 'none',
+                                                                      cursor: 'pointer',
+                                                                      background: isColSelected ? '#dbeafe' : (isColFiltered ? '#f1f5f9' : '#f8fafc'),
+                                                                      color: isColSelected ? '#1e40af' : '#1e293b',
+                                                                      borderBottom: isColSelected ? '2px solid #2563eb' : (isColFiltered ? '2px solid #3b82f6' : '2px solid #e2e8f0'),
+                                                                      padding: '12px 14px',
+                                                                      whiteSpace: 'nowrap'
+                                                                  }}
+                                                              >
+                                                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                                                      <span style={{ fontWeight: 700, fontSize: 12.5, color: isColFiltered ? '#2563eb' : '#334155', textTransform: 'uppercase', letterSpacing: '0.02em' }} title={`Cột: ${displayTitle}`}>
+                                                                          {displayTitle} {isColSorted && (sortDir === 'asc' ? '↑' : '↓')}
+                                                                      </span>
+                                                                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                          {/* Sort Button ↑↓ */}
+                                                                          <button
+                                                                              type="button"
+                                                                              className="sheet-filter-btn"
+                                                                              onClick={(e) => {
+                                                                                  e.stopPropagation();
+                                                                                  if (!isColSorted) setColumnSortState({ colIndex: cIdx, direction: 'asc' });
+                                                                                  else if (sortDir === 'asc') setColumnSortState({ colIndex: cIdx, direction: 'desc' });
+                                                                                  else setColumnSortState({ colIndex: null, direction: null });
+                                                                              }}
+                                                                              style={{
+                                                                                  background: isColSorted ? 'rgba(37,99,235,0.15)' : 'transparent',
+                                                                                  color: isColSorted ? '#2563eb' : '#94a3b8',
+                                                                                  border: isColSorted ? '1px solid #bfdbfe' : 'none',
+                                                                                  borderRadius: 4,
+                                                                                  padding: '2px 5px',
+                                                                                  cursor: 'pointer',
+                                                                                  fontSize: 11,
+                                                                                  fontWeight: 700,
+                                                                                  display: 'flex',
+                                                                                  alignItems: 'center'
+                                                                              }}
+                                                                              title={sortDir === 'asc' ? 'Đang sắp xếp A-Z (Bấm để đổi sang Z-A)' : sortDir === 'desc' ? 'Đang sắp xếp Z-A (Bấm để bỏ sắp xếp)' : 'Sắp xếp cột này (A-Z / Z-A)'}
+                                                                          >
+                                                                              {sortDir === 'asc' ? '↑' : sortDir === 'desc' ? '↓' : '↑↓'}
+                                                                          </button>
 
-                                                                         {/* Filter Button ∇ */}
-                                                                         <button
-                                                                             type="button"
-                                                                             onClick={(e) => {
-                                                                                 e.stopPropagation();
-                                                                                 setDropdownSearch('');
-                                                                                 setActiveFilterDropdownCol(activeFilterDropdownCol === cIdx ? null : cIdx);
-                                                                             }}
-                                                                             style={{
-                                                                                 background: isColFiltered ? '#2563eb' : 'transparent',
-                                                                                 color: isColFiltered ? '#ffffff' : '#94a3b8',
-                                                                                 border: 'none',
-                                                                                 borderRadius: 4,
-                                                                                 padding: '2px 5px',
-                                                                                 cursor: 'pointer',
-                                                                                 display: 'flex',
-                                                                                 alignItems: 'center'
-                                                                             }}
-                                                                             title={`Bộ lọc Cột ${displayTitle}`}
-                                                                         >
-                                                                             <Filter size={11} />
-                                                                         </button>
-                                                                     </div>
-                                                                 </div>
-                                                             </th>
+                                                                          {/* Filter Button ∇ */}
+                                                                          <button
+                                                                              type="button"
+                                                                              className="sheet-filter-btn"
+                                                                              onClick={(e) => {
+                                                                                  e.stopPropagation();
+                                                                                  setDropdownSearch('');
+                                                                                  setActiveFilterDropdownCol(activeFilterDropdownCol === cIdx ? null : cIdx);
+                                                                              }}
+                                                                              style={{
+                                                                                  background: isColFiltered ? '#2563eb' : (activeFilterDropdownCol === cIdx ? '#cbd5e1' : 'transparent'),
+                                                                                  color: isColFiltered ? '#ffffff' : (activeFilterDropdownCol === cIdx ? '#1e293b' : '#94a3b8'),
+                                                                                  border: 'none',
+                                                                                  borderRadius: 4,
+                                                                                  padding: '2px 5px',
+                                                                                  cursor: 'pointer',
+                                                                                  display: 'flex',
+                                                                                  alignItems: 'center'
+                                                                              }}
+                                                                              title={`Bộ lọc Cột ${displayTitle}`}
+                                                                          >
+                                                                              <Filter size={11} />
+                                                                          </button>
+                                                                      </div>
+                                                                  </div>
+
+                                                                  {/* Filter & Sort Popover Dropdown Card */}
+                                                                  {activeFilterDropdownCol === cIdx && (
+                                                                      <div
+                                                                          className="sheet-filter-popover"
+                                                                          onMouseDown={(e) => e.stopPropagation()}
+                                                                          onClick={(e) => e.stopPropagation()}
+                                                                          style={{
+                                                                              position: 'absolute',
+                                                                              top: '100%',
+                                                                              right: 0,
+                                                                              zIndex: 100,
+                                                                              marginTop: 4,
+                                                                              width: 250,
+                                                                              background: '#ffffff',
+                                                                              border: '1px solid #cbd5e1',
+                                                                              borderRadius: 8,
+                                                                              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)',
+                                                                              padding: 12,
+                                                                              textAlign: 'left',
+                                                                              fontWeight: 'normal',
+                                                                              color: '#1e293b',
+                                                                              whiteSpace: 'normal',
+                                                                              cursor: 'default'
+                                                                          }}
+                                                                      >
+                                                                          {/* Header Title */}
+                                                                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid #f1f5f9' }}>
+                                                                              <span style={{ fontWeight: 700, fontSize: 12, color: '#334155' }}>Lọc & Sắp xếp Cột {displayTitle}</span>
+                                                                              <button
+                                                                                  type="button"
+                                                                                  onClick={() => setActiveFilterDropdownCol(null)}
+                                                                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}
+                                                                              >
+                                                                                  <X size={13} />
+                                                                              </button>
+                                                                          </div>
+
+                                                                          {/* Quick Sort Options */}
+                                                                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid #f1f5f9' }}>
+                                                                              <button
+                                                                                  type="button"
+                                                                                  onClick={() => setColumnSortState({ colIndex: cIdx, direction: 'asc' })}
+                                                                                  style={{
+                                                                                      display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 8px',
+                                                                                      background: sortDir === 'asc' ? '#eff6ff' : 'transparent', color: sortDir === 'asc' ? '#2563eb' : '#334155',
+                                                                                      border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer', textAlign: 'left', fontWeight: sortDir === 'asc' ? 700 : 500
+                                                                                  }}
+                                                                              >
+                                                                                  <span>↑ Sắp xếp A → Z (Tăng dần)</span>
+                                                                              </button>
+                                                                              <button
+                                                                                  type="button"
+                                                                                  onClick={() => setColumnSortState({ colIndex: cIdx, direction: 'desc' })}
+                                                                                  style={{
+                                                                                      display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '6px 8px',
+                                                                                      background: sortDir === 'desc' ? '#eff6ff' : 'transparent', color: sortDir === 'desc' ? '#2563eb' : '#334155',
+                                                                                      border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer', textAlign: 'left', fontWeight: sortDir === 'desc' ? 700 : 500
+                                                                                  }}
+                                                                              >
+                                                                                  <span>↓ Sắp xếp Z → A (Giảm dần)</span>
+                                                                              </button>
+                                                                              {isColSorted && (
+                                                                                  <button
+                                                                                      type="button"
+                                                                                      onClick={() => setColumnSortState({ colIndex: null, direction: null })}
+                                                                                      style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 11, cursor: 'pointer', textAlign: 'left', padding: '2px 8px', fontWeight: 600 }}
+                                                                                  >
+                                                                                      ❌ Hủy sắp xếp cột này
+                                                                                  </button>
+                                                                              )}
+                                                                          </div>
+
+                                                                          {/* Text Filter Input */}
+                                                                          <div style={{ marginBottom: 10 }}>
+                                                                              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 4 }}>
+                                                                                  Lọc chứa từ khóa:
+                                                                              </label>
+                                                                              <input
+                                                                                  type="text"
+                                                                                  value={columnFilters[cIdx] || ''}
+                                                                                  onChange={(e) => setColumnFilters(prev => ({ ...prev, [cIdx]: e.target.value }))}
+                                                                                  placeholder={`Nhập từ khóa lọc...`}
+                                                                                  style={{
+                                                                                      width: '100%', padding: '5px 8px', fontSize: 12, borderRadius: 4,
+                                                                                      border: '1px solid #cbd5e1', background: '#f8fafc', color: '#0f172a'
+                                                                                  }}
+                                                                              />
+                                                                          </div>
+
+                                                                          {/* Unique Value Checklist (Google Sheets style) */}
+                                                                          {(() => {
+                                                                              const uniqueVals = getUniqueColumnValues(cIdx);
+                                                                              const filteredVals = uniqueVals.filter(v => !dropdownSearch || v.toLowerCase().includes(dropdownSearch.toLowerCase()));
+                                                                              const currentSelected = columnSelectedValues[cIdx] || [];
+
+                                                                              return (
+                                                                                  <div style={{ marginTop: 8 }}>
+                                                                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                                                                                          <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Giá trị xuất hiện ({uniqueVals.length}):</label>
+                                                                                          <div style={{ display: 'flex', gap: 6 }}>
+                                                                                              <button
+                                                                                                  type="button"
+                                                                                                  onClick={() => setColumnSelectedValues(prev => ({ ...prev, [cIdx]: [] }))}
+                                                                                                  style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: 10.5, cursor: 'pointer', fontWeight: 600, padding: 0 }}
+                                                                                              >
+                                                                                                  Tất cả
+                                                                                              </button>
+                                                                                              <button
+                                                                                                  type="button"
+                                                                                                  onClick={() => setColumnSelectedValues(prev => ({ ...prev, [cIdx]: ['__NONE__'] }))}
+                                                                                                  style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 10.5, cursor: 'pointer', padding: 0 }}
+                                                                                              >
+                                                                                                  Bỏ hết
+                                                                                              </button>
+                                                                                          </div>
+                                                                                      </div>
+
+                                                                                      <input
+                                                                                          type="text"
+                                                                                          value={dropdownSearch}
+                                                                                          onChange={(e) => setDropdownSearch(e.target.value)}
+                                                                                          placeholder="🔍 Tìm giá trị cụ thể..."
+                                                                                          style={{ width: '100%', padding: '4px 6px', fontSize: 11, borderRadius: 4, border: '1px solid #e2e8f0', marginBottom: 6 }}
+                                                                                      />
+
+                                                                                      <div style={{ maxHeight: 120, overflowY: 'auto', border: '1px solid #f1f5f9', borderRadius: 4, padding: 4, background: '#fafafa' }}>
+                                                                                          {filteredVals.length === 0 ? (
+                                                                                              <div style={{ fontSize: 11, color: '#94a3b8', padding: '6px', textAlign: 'center' }}>Không có giá trị nào</div>
+                                                                                          ) : (
+                                                                                              filteredVals.map((val) => {
+                                                                                                  const isChecked = currentSelected.length === 0 || currentSelected.includes(val);
+                                                                                                  return (
+                                                                                                      <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px', fontSize: 11.5, cursor: 'pointer', borderRadius: 3, userSelect: 'none' }}>
+                                                                                                          <input
+                                                                                                              type="checkbox"
+                                                                                                              checked={isChecked}
+                                                                                                              onChange={(e) => {
+                                                                                                                  const checked = e.target.checked;
+                                                                                                                  setColumnSelectedValues(prev => {
+                                                                                                                      const existing = prev[cIdx] ? [...prev[cIdx]] : [];
+                                                                                                                      if (existing.length === 0) {
+                                                                                                                          const allExceptVal = uniqueVals.filter(v => v !== val);
+                                                                                                                          return { ...prev, [cIdx]: allExceptVal };
+                                                                                                                      }
+                                                                                                                      if (checked) {
+                                                                                                                          const next = [...existing, val];
+                                                                                                                          return { ...prev, [cIdx]: next.length >= uniqueVals.length ? [] : next };
+                                                                                                                      } else {
+                                                                                                                          return { ...prev, [cIdx]: existing.filter(v => v !== val) };
+                                                                                                                      }
+                                                                                                                  });
+                                                                                                              }}
+                                                                                                          />
+                                                                                                          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', color: '#334155' }} title={val}>
+                                                                                                              {val}
+                                                                                                          </span>
+                                                                                                      </label>
+                                                                                                  );
+                                                                                              })
+                                                                                          )}
+                                                                                      </div>
+                                                                                  </div>
+                                                                              );
+                                                                          })()}
+
+                                                                          {/* Clear Filter & Close Footer */}
+                                                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 8, borderTop: '1px solid #f1f5f9' }}>
+                                                                              {isColFiltered ? (
+                                                                                  <button
+                                                                                      type="button"
+                                                                                      onClick={() => {
+                                                                                          setColumnFilters(prev => ({ ...prev, [cIdx]: '' }));
+                                                                                          setColumnSelectedValues(prev => ({ ...prev, [cIdx]: [] }));
+                                                                                      }}
+                                                                                      style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                                                                                  >
+                                                                                      🧹 Xóa lọc cột
+                                                                                  </button>
+                                                                              ) : <span />}
+
+                                                                              <button
+                                                                                  type="button"
+                                                                                  onClick={() => setActiveFilterDropdownCol(null)}
+                                                                                  style={{ background: '#2563eb', color: '#ffffff', border: 'none', borderRadius: 4, padding: '4px 10px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}
+                                                                              >
+                                                                                  Đóng
+                                                                              </button>
+                                                                          </div>
+                                                                      </div>
+                                                                  )}
+                                                              </th>
                                                          );
                                                     })}
                                                 </tr>
