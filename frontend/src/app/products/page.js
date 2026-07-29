@@ -461,19 +461,6 @@ function ProductsContent() {
         setContextMenu(null);
     }, [activeSheetTabName]);
 
-    const getUniqueColumnValues = useCallback((cIdx) => {
-        if (!activePageSheetData || activePageSheetData.length <= autoHeaderRowIdx + 1) return [];
-        const dataRows = activePageSheetData.slice(autoHeaderRowIdx + 1);
-        const set = new Set();
-        dataRows.forEach(row => {
-            if (Array.isArray(row)) {
-                const val = row[cIdx] !== undefined && row[cIdx] !== null ? String(row[cIdx]).trim() : '';
-                set.add(val || '(Trống)');
-            }
-        });
-        return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-    }, [activePageSheetData, autoHeaderRowIdx]);
-
     const autoHeaderRowIdx = useMemo(() => {
         if (!activePageSheetData || activePageSheetData.length === 0) return 0;
         for (let r = 0; r < Math.min(activePageSheetData.length, 5); r++) {
@@ -486,6 +473,19 @@ function ProductsContent() {
         }
         return 0;
     }, [activePageSheetData]);
+
+    const getUniqueColumnValues = useCallback((cIdx) => {
+        if (!activePageSheetData || activePageSheetData.length <= autoHeaderRowIdx + 1) return [];
+        const dataRows = activePageSheetData.slice(autoHeaderRowIdx + 1);
+        const set = new Set();
+        dataRows.forEach(row => {
+            if (Array.isArray(row)) {
+                const val = row[cIdx] !== undefined && row[cIdx] !== null ? String(row[cIdx]).trim() : '';
+                set.add(val || '(Trống)');
+            }
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    }, [activePageSheetData, autoHeaderRowIdx]);
 
     const filteredPageSheetData = useMemo(() => {
         if (!activePageSheetData || activePageSheetData.length === 0) return [];
