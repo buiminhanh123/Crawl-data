@@ -28,6 +28,7 @@ jobs:
             --exclude='node_modules' \
             --exclude='data' \
             --exclude='.env' \
+            --exclude='logs' \
             server/ /srv/marketing/crawl-data/server/
 
           cd /srv/marketing/crawl-data/server
@@ -41,11 +42,12 @@ jobs:
           rsync -av --delete \
             --exclude='node_modules' \
             --exclude='.next' \
+            --exclude='logs' \
             frontend/ /srv/marketing/crawl-data/frontend/
 
           cd /srv/marketing/crawl-data/frontend
           npm install
-          npm run build
+          NEXT_PUBLIC_API_URL=https://crawl.dacoautomation.io.vn npm run build
 
       # ================= RESTART PROCESSES VIA PM2 =================
       - name: Restart PM2 Apps
