@@ -1,0 +1,54 @@
+name: Deploy Crawl Data to Local Server (Self-Hosted Runner)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ================= DEPLOY BACKEND (SERVER) =================
+      - name: Deploy Backend (Server)
+        run: |
+          mkdir -p /srv/marketing/crawl-data/server
+
+          # [RẤT QUAN TRỌNG] Loại trừ data/ (chứa app.db & products.db) và .env để không bị xóa mất dữ liệu
+          rsync -av --delete \
+            --exclude='node_modules' \
+            --exclude='data' \
+            --exclude='.env' \
+            server/ /srv/marketing/crawl-data/server/
+
+          cd /srv/marketing/crawl-data/server
+          npm install --omit=dev
+
+      # ================= DEPLOY FRONTEND (Next.js) =================
+      - name: Deploy Frontend (Frontend)
+        run: |
+          mkdir -p /srv/marketing/crawl-data/frontend
+
+          rsync -av --delete \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            frontend/ /srv/marketing/crawl-data/frontend/
+
+          cd /srv/marketing/crawl-data/frontend
+          npm install
+          npm run build
+
+      # ================= RESTART PROCESSES VIA PM2 =================
+      - name: Restart PM2 Apps
+        run: |
+          pm2 reload /srv/marketing/crawl-data/ecosystem.config.js || pm2 start /srv/marketing/crawl-data/ecosystem.config.js
+          pm2 save
