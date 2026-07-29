@@ -41,8 +41,13 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
     // Active selected cell state (Google Sheets style border highlight)
     const [selectedCell, setSelectedCell] = useState(null); // { rIdx, cIdx }
 
+    // Header & Data Row Selection
+    const [headerRow, setHeaderRow] = useState(1);
+    const [dataStartRow, setDataStartRow] = useState(2);
+
     // Feature 1: Freeze rows (Ghim hàng)
     const [freezeRows, setFreezeRows] = useState(1);
+
 
     // Feature 2: Double Click cell viewer / editor modal
     const [cellDetailModal, setCellDetailModal] = useState(null); // { rIdx, cIdx, val, isEditing }
@@ -135,6 +140,26 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
         }
     };
 
+    const processSheetRows = (sheetsList, hRow, dStartRow) => {
+        const hIdx = Math.max(0, (parseInt(hRow) || 1) - 1);
+        const dStartIdx = Math.max(0, (parseInt(dStartRow) || 2) - 1);
+
+        return sheetsList.map(s => {
+            const rawData = s.data || [];
+            if (rawData.length === 0) return s;
+
+            // Pick header row
+            const headerLine = rawData[hIdx] ? [...rawData[hIdx]] : (rawData[0] ? [...rawData[0]] : []);
+            // Pick data rows starting from dStartIdx
+            const dataLines = rawData.slice(dStartIdx);
+
+            return {
+                ...s,
+                data: [headerLine, ...dataLines]
+            };
+        });
+    };
+
     const handleLoadExcel = async () => {
         if (!selectedFile) {
             setErrorMsg('Vui lòng chọn file Excel hoặc CSV.');
@@ -158,11 +183,12 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
             if (!res.ok) throw new Error(data.error || 'Lỗi khi đọc file Excel');
 
             if (data?.sheets && data.sheets.length > 0) {
-                setAllSheets(data.sheets);
-                const sheetNames = data.sheets.map(s => s.name);
+                const processedSheets = processSheetRows(data.sheets, headerRow, dataStartRow);
+                setAllSheets(processedSheets);
+                const sheetNames = processedSheets.map(s => s.name);
                 setSelectedSheetNames(sheetNames);
                 setActiveTabName(sheetNames[0]);
-                setSuccessMsg(`Đã tải thành công ${data.sheets.length} tab từ file '${data.fileName}'.`);
+                setSuccessMsg(`Đã tải thành công ${processedSheets.length} tab từ file '${data.fileName}'. (Header: Hàng ${headerRow}, Dữ liệu từ: Hàng ${dataStartRow})`);
             } else {
                 setErrorMsg('Không tìm thấy tab dữ liệu nào trong file.');
             }
@@ -188,11 +214,12 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
             });
 
             if (data?.sheets && data.sheets.length > 0) {
-                setAllSheets(data.sheets);
-                const sheetNames = data.sheets.map(s => s.name);
+                const processedSheets = processSheetRows(data.sheets, headerRow, dataStartRow);
+                setAllSheets(processedSheets);
+                const sheetNames = processedSheets.map(s => s.name);
                 setSelectedSheetNames(sheetNames);
                 setActiveTabName(sheetNames[0]);
-                setSuccessMsg(`Đã tải thành công ${data.sheets.length} tab từ Google Sheets.`);
+                setSuccessMsg(`Đã tải thành công ${processedSheets.length} tab từ Google Sheets. (Header: Hàng ${headerRow}, Dữ liệu từ: Hàng ${dataStartRow})`);
             } else {
                 setErrorMsg('Không tìm thấy tab dữ liệu nào.');
             }
@@ -202,6 +229,7 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
             setLoading(false);
         }
     };
+
 
     const toggleSelectSheet = (name) => {
         if (selectedSheetNames.includes(name)) {
@@ -436,7 +464,41 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
                         </div>
                     )}
 
+                    {/* Row selection configuration (Header Row & Data Start Row) */}
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--border-color)', display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                📌 Hàng chứa Header:
+                            </label>
+                            <input
+                                type="number"
+                                min="1"
+                                value={headerRow}
+                                onChange={e => setHeaderRow(Math.max(1, parseInt(e.target.value) || 1))}
+                                style={{ width: 64, padding: '5px 8px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)' }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                📊 Dữ liệu bắt đầu từ hàng:
+                            </label>
+                            <input
+                                type="number"
+                                min="1"
+                                value={dataStartRow}
+                                onChange={e => setDataStartRow(Math.max(1, parseInt(e.target.value) || 1))}
+                                style={{ width: 64, padding: '5px 8px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)' }}
+                            />
+                        </div>
+
+                        <span style={{ fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            (Mặc định: Hàng 1 làm Header, Dữ liệu từ Hàng 2)
+                        </span>
+                    </div>
+
                     {errorMsg && (
+
                         <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontSize: 13 }}>
                             <AlertCircle size={15} /> {errorMsg}
                         </div>

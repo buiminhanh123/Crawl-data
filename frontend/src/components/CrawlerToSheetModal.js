@@ -276,10 +276,11 @@ export default function CrawlerToSheetModal({
             }
 
             if (targetProducts.length === 0) {
-                alert('Không tìm thấy sản phẩm nào để chuyển!');
+                alert('⚠️ Profile này chưa có dữ liệu sản phẩm Crawler nào để nạp vào Sheet.\n\nVui lòng kích hoạt Crawler hoặc nạp file HAR cho Profile này trước.');
                 setFetchingProducts(false);
                 return;
             }
+
 
             // 2. Build rows
             const headerRow = columns.map(c => c.label || 'Cột');

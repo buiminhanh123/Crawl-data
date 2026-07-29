@@ -4,7 +4,202 @@ const { spawn } = require('child_process');
 const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 const { productQueries, profileQueries, profileSheetQueries } = require('../db');
+
+// Multer: store HAR in memory (max 80MB)
+const harUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 80 * 1024 * 1024 }
+});
+
+// ============================================================
+//  HAR ANALYSIS — Pure JS logic
+// ============================================================
+
+// Field patterns to detect in JSON responses
+const FIELD_PATTERNS = {
+    detail_url:   { keys: ['url', 'link', 'href', 'product_url', 'detail_url', 'page_url', 'product_link', 'canonical'], label: '🌐 Link Sản Phẩm', icon: '🌐' },
+    name:         { keys: ['name', 'title', 'product_name', 'item_name', 'productName', 'displayName', 'product_title'], label: '📝 Tên Sản Phẩm', icon: '📝' },
+    model:        { keys: ['model', 'sku', 'part_number', 'partNumber', 'model_number', 'code', 'item_code', 'product_code', 'part_no', 'modelNumber'], label: '🔢 Model / Mã SP', icon: '🔢' },
+    category:     { keys: ['category', 'categories', 'type', 'productType', 'product_type', 'group', 'department', 'classification', 'taxonomy'], label: '📂 Danh Mục', icon: '📂' },
+    brand:        { keys: ['brand', 'manufacturer', 'vendor', 'make', 'brand_name', 'brandName', 'supplier'], label: '🏷️ Hãng / Thương Hiệu', icon: '🏷️' },
+    series:       { keys: ['series', 'family', 'line', 'product_family', 'product_line', 'productFamily'], label: '📌 Series / Dòng SP', icon: '📌' },
+    image_url:    { keys: ['image', 'img', 'image_url', 'imageUrl', 'thumbnail', 'photo', 'picture', 'main_image', 'cover_image', 'primary_image'], label: '🖼️ Link Hình Ảnh', icon: '🖼️' },
+    description:  { keys: ['description', 'desc', 'short_description', 'summary', 'overview', 'intro', 'excerpt', 'content'], label: '📖 Mô Tả SP', icon: '📖' },
+    specs_json:   { keys: ['specs', 'specifications', 'technical_specs', 'attributes', 'features', 'parameters', 'properties', 'technicalSpecs', 'techspecs'], label: '📊 Thông Số Kỹ Thuật', icon: '📊' },
+    document_url: { keys: ['pdf', 'document', 'datasheet', 'download', 'file_url', 'manual', 'brochure', 'doc_url', 'catalog', 'resource'], label: '📄 Link Tài Liệu / PDF', icon: '📄' },
+    price:        { keys: ['price', 'cost', 'msrp', 'list_price', 'retail_price', 'unit_price'], label: '💰 Giá (nếu có)', icon: '💰' },
+};
+
+/**
+ * Deep scan an object recursively and record which FIELD_PATTERNS keys appear
+ * Returns: { fieldKey: [{ path, sampleValue }] }
+ */
+function scanObjectForFields(obj, depth = 0, pathPrefix = '', results = {}) {
+    if (depth > 6 || !obj || typeof obj !== 'object') return results;
+
+    for (const [rawKey, val] of Object.entries(obj)) {
+        const lowerKey = rawKey.toLowerCase().replace(/[-_\s]/g, '');
+        const currentPath = pathPrefix ? `${pathPrefix}.${rawKey}` : rawKey;
+
+        for (const [fieldKey, pattern] of Object.entries(FIELD_PATTERNS)) {
+            const matched = pattern.keys.some(k => {
+                const lk = k.toLowerCase().replace(/[-_\s]/g, '');
+                return lowerKey === lk || lowerKey.includes(lk) || lk.includes(lowerKey);
+            });
+
+            if (matched && val !== null && val !== undefined) {
+                if (!results[fieldKey]) results[fieldKey] = [];
+                let sample = '';
+                if (typeof val === 'string') sample = val.slice(0, 120);
+                else if (typeof val === 'number' || typeof val === 'boolean') sample = String(val);
+                else if (Array.isArray(val)) sample = `[Array, ${val.length} items]`;
+                else if (typeof val === 'object') sample = JSON.stringify(val).slice(0, 120);
+
+                if (sample) {
+                    results[fieldKey].push({ path: currentPath, sampleValue: sample });
+                }
+            }
+        }
+
+        // Recurse into objects and arrays
+        if (typeof val === 'object' && val !== null) {
+            if (Array.isArray(val)) {
+                if (val.length > 0 && typeof val[0] === 'object') {
+                    scanObjectForFields(val[0], depth + 1, `${currentPath}[0]`, results);
+                }
+            } else {
+                scanObjectForFields(val, depth + 1, currentPath, results);
+            }
+        }
+    }
+    return results;
+}
+
+/**
+ * Main HAR analysis function
+ */
+function analyzeHar(harData, profileTargetUrl) {
+    const entries = harData?.log?.entries || [];
+    
+    // Determine the domain filter
+    let baseHost = '';
+    try {
+        if (profileTargetUrl) {
+            baseHost = new URL(profileTargetUrl).hostname.replace(/^www\./, '');
+        }
+    } catch (e) {}
+
+    // Filter entries: relevant to the brand domain + JSON responses
+    const apiEntries = [];
+    const allDomains = new Set();
+    
+    for (const entry of entries) {
+        try {
+            const reqUrl = entry.request?.url || '';
+            const urlObj = new URL(reqUrl);
+            const host = urlObj.hostname.replace(/^www\./, '');
+            allDomains.add(host);
+
+            const contentType = (entry.response?.content?.mimeType || '').toLowerCase();
+            const isJson = contentType.includes('json') || contentType.includes('javascript');
+            
+            // Include if: matches domain (or no domain set) AND is JSON
+            const domainMatch = !baseHost || host.includes(baseHost) || baseHost.includes(host);
+            if (domainMatch && isJson) {
+                const text = entry.response?.content?.text || '';
+                if (text && text.length > 20) {
+                    try {
+                        const parsed = JSON.parse(text);
+                        apiEntries.push({
+                            url: reqUrl,
+                            method: entry.request?.method || 'GET',
+                            status: entry.response?.status || 0,
+                            size: text.length,
+                            parsed
+                        });
+                    } catch (e) {
+                        // Not valid JSON, skip
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+
+    // Aggregate field detections across all API entries
+    const fieldHits = {}; // fieldKey -> { count, samples, endpoints }
+    
+    for (const apiEntry of apiEntries) {
+        const found = scanObjectForFields(apiEntry.parsed);
+        for (const [fieldKey, hits] of Object.entries(found)) {
+            if (!fieldHits[fieldKey]) {
+                fieldHits[fieldKey] = { count: 0, samples: [], endpoints: new Set() };
+            }
+            fieldHits[fieldKey].count++;
+            fieldHits[fieldKey].endpoints.add(apiEntry.url);
+            // Collect up to 3 unique non-empty samples
+            for (const hit of hits) {
+                const sv = hit.sampleValue?.trim();
+                if (sv && !fieldHits[fieldKey].samples.some(s => s.value === sv) && fieldHits[fieldKey].samples.length < 3) {
+                    fieldHits[fieldKey].samples.push({ path: hit.path, value: sv });
+                }
+            }
+        }
+    }
+
+    const totalApiEntries = apiEntries.length;
+
+    // Build report fields with confidence
+    const fields = Object.entries(FIELD_PATTERNS).map(([fieldKey, pattern]) => {
+        const hits = fieldHits[fieldKey];
+        if (!hits) return { fieldKey, label: pattern.label, icon: pattern.icon, confidence: 0, occurrences: 0, samples: [], endpoints: [] };
+        
+        const confidence = totalApiEntries > 0
+            ? Math.min(100, Math.round((hits.count / Math.max(totalApiEntries, 1)) * 100))
+            : 0;
+        
+        return {
+            fieldKey,
+            label: pattern.label,
+            icon: pattern.icon,
+            confidence,
+            occurrences: hits.count,
+            samples: hits.samples,
+            endpoints: [...hits.endpoints].slice(0, 5)
+        };
+    }).sort((a, b) => b.confidence - a.confidence);
+
+    // Collect notable API endpoints (JSON APIs with significant size)
+    const notableEndpoints = apiEntries
+        .filter(e => e.status >= 200 && e.status < 300 && e.size > 100)
+        .sort((a, b) => b.size - a.size)
+        .slice(0, 20)
+        .map(e => ({
+            url: e.url,
+            method: e.method,
+            status: e.status,
+            sizekb: Math.round(e.size / 1024 * 10) / 10
+        }));
+
+    const detectableFields = fields.filter(f => f.confidence >= 10);
+    const highConfidenceFields = fields.filter(f => f.confidence >= 50);
+
+    return {
+        summary: {
+            totalEntries: entries.length,
+            totalJsonApis: totalApiEntries,
+            detectableFieldsCount: detectableFields.length,
+            highConfidenceFieldsCount: highConfidenceFields.length,
+            domains: [...allDomains].slice(0, 10),
+            analyzedAt: new Date().toISOString()
+        },
+        fields,
+        notableEndpoints
+    };
+}
+
+
 
 // GET /api/products/profile-sheet — get profile sheet data
 router.get('/profile-sheet', (req, res) => {
@@ -59,16 +254,30 @@ router.post('/profiles', (req, res) => {
     }
 });
 
-// DELETE /api/products/profiles/:id — delete a product profile
-router.delete('/profiles/:id', (req, res) => {
+// DELETE /api/products/profiles/:slug — delete a product profile and its data
+router.delete('/profiles/:slug', async (req, res) => {
     try {
-        profileQueries.delete(req.params.id);
-        res.json({ message: 'Xóa Profile thành công.' });
+        const { slug } = req.params;
+        if (slug === 'newland') {
+            return res.status(400).json({ error: 'Không thể xóa Profile Newland mặc định.' });
+        }
+        const profile = profileQueries.getBySlug(slug);
+        if (!profile) {
+            return res.status(404).json({ error: 'Không tìm thấy Profile.' });
+        }
+        // Delete crawled products belonging to this profile
+        await productQueries.deleteByProfile(slug);
+        // Delete sheet data for this profile
+        profileSheetQueries.deleteBySlug(slug);
+        // Delete profile record
+        profileQueries.delete(profile.id);
+        res.json({ message: `Đã xóa Profile "${profile.name}" và toàn bộ dữ liệu liên quan thành công.` });
     } catch (err) {
         console.error('Failed to delete profile:', err);
-        res.status(500).json({ error: 'Failed to delete profile.' });
+        res.status(500).json({ error: err.message || 'Lỗi khi xóa Profile.' });
     }
 });
+
 
 // PATCH /api/products/profiles/:slug — update profile name and target_url
 router.patch('/profiles/:slug', (req, res) => {
@@ -89,13 +298,66 @@ router.patch('/profiles/:slug', (req, res) => {
     }
 });
 
+// POST /api/products/profiles/:slug/har — upload & analyze HAR file for a profile
+router.post('/profiles/:slug/har', harUpload.single('har'), (req, res) => {
+    try {
+        const { slug } = req.params;
+        const profile = profileQueries.getBySlug(slug);
+        if (!profile) {
+            return res.status(404).json({ error: 'Không tìm thấy Profile.' });
+        }
+        if (!req.file) {
+            return res.status(400).json({ error: 'Chưa chọn file HAR.' });
+        }
+
+        let harData;
+        try {
+            harData = JSON.parse(req.file.buffer.toString('utf8'));
+        } catch (e) {
+            return res.status(400).json({ error: 'File HAR không hợp lệ (không phải JSON hợp lệ).' });
+        }
+
+        if (!harData?.log?.entries) {
+            return res.status(400).json({ error: 'File HAR không có cấu trúc hợp lệ (thiếu log.entries).' });
+        }
+
+        const report = analyzeHar(harData, profile.target_url || '');
+        report.profileSlug = slug;
+        report.profileName = profile.name;
+        report.harFileName = req.file.originalname;
+        report.harFileSizeKb = Math.round(req.file.size / 1024);
+
+        // Save report to DB
+        profileQueries.saveHarReport(slug, report);
+
+        res.json({ message: 'Phân tích HAR thành công!', report });
+    } catch (err) {
+        console.error('Failed to analyze HAR:', err);
+        res.status(500).json({ error: err.message || 'Lỗi khi phân tích file HAR.' });
+    }
+});
+
+// GET /api/products/profiles/:slug/har-report — get saved HAR analysis report
+router.get('/profiles/:slug/har-report', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const report = profileQueries.getHarReport(slug);
+        if (!report) {
+            return res.status(404).json({ error: 'Chưa có báo cáo phân tích HAR cho Profile này.' });
+        }
+        res.json({ report });
+    } catch (err) {
+        console.error('Failed to get HAR report:', err);
+        res.status(500).json({ error: 'Lỗi khi lấy báo cáo HAR.' });
+    }
+});
+
 // GET /api/products — get list of products (paginated, searched, filtered)
 router.get('/', async (req, res) => {
     try {
-        const { search = '', category = '', limit = 10, page = 1 } = req.query;
+        const { search = '', category = '', limit = 10, page = 1, profile = '' } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
-        
-        const { total, items } = await productQueries.getAll(search, category, limit, offset);
+        const { total, items } = await productQueries.getAll(search, category, limit, offset, profile);
         res.json({ total, items, page: parseInt(page), limit: parseInt(limit) });
     } catch (err) {
         console.error('Failed to get products:', err);
@@ -106,7 +368,8 @@ router.get('/', async (req, res) => {
 // GET /api/products/categories — get list of distinct categories
 router.get('/categories', async (req, res) => {
     try {
-        const categories = await productQueries.getCategories();
+        const { profile = '' } = req.query;
+        const categories = await productQueries.getCategories(profile);
         res.json(categories);
     } catch (err) {
         console.error('Failed to get categories:', err);
@@ -117,7 +380,8 @@ router.get('/categories', async (req, res) => {
 // GET /api/products/stats — get dashboard stats
 router.get('/stats', async (req, res) => {
     try {
-        const stats = await productQueries.getStats();
+        const { profile = '' } = req.query;
+        const stats = await productQueries.getStats(profile);
         res.json(stats);
     } catch (err) {
         console.error('Failed to get stats:', err);
@@ -141,7 +405,7 @@ let activeCrawlerProcess = null;
 // POST /api/products/crawler/trigger — trigger the crawler
 router.post('/crawler/trigger', async (req, res) => {
     try {
-        const { concurrency = 3 } = req.body;
+        const { concurrency = 3, profile = 'newland' } = req.body;
         
         const currentStatus = await productQueries.getCrawlerStatus();
         if (activeCrawlerProcess || (currentStatus && currentStatus.status === 'Running')) {
@@ -151,12 +415,13 @@ router.post('/crawler/trigger', async (req, res) => {
         // Reset status to starting
         await productQueries.updateCrawlerStatus('Starting', 0, 0, 0, 'Launching crawler process...');
         
-        console.log(`Spawning Python crawler.py with concurrency: ${concurrency}...`);
+        console.log(`Spawning Python crawler.py for profile: ${profile} with concurrency: ${concurrency}...`);
         
         // Spawn crawler process asynchronously (not detached so we can easily kill it)
-        const pythonProcess = spawn('python', ['-u', 'E:\\sp\\Newland\\crawler.py', '--concurrency', concurrency.toString()], {
+        const pythonProcess = spawn('python', ['-u', 'E:\\sp\\Newland\\crawler.py', '--profile', profile, '--concurrency', concurrency.toString()], {
             stdio: 'ignore'
         });
+
         
         activeCrawlerProcess = pythonProcess;
         
@@ -327,7 +592,7 @@ router.post('/crawler/fill-downloads', async (req, res) => {
 // POST /api/products/crawler/trigger-from-file — trigger the crawler on a list of product URLs
 router.post('/crawler/trigger-from-file', async (req, res) => {
     try {
-        const { concurrency = 3, useLocalFile = false, urls } = req.body;
+        const { concurrency = 3, useLocalFile = false, urls, profile = 'newland' } = req.body;
 
         const currentStatus = await productQueries.getCrawlerStatus();
         if (activeCrawlerProcess || (currentStatus && currentStatus.status === 'Running')) {
@@ -355,10 +620,11 @@ router.post('/crawler/trigger-from-file', async (req, res) => {
         // Reset status to starting
         await productQueries.updateCrawlerStatus('Starting', 0, 0, 0, 'Scanning custom list...');
 
-        console.log(`Spawning Python crawler.py with --from-file: ${targetFilePath} and concurrency: ${concurrency}...`);
+        console.log(`Spawning Python crawler.py for profile: ${profile} with --from-file: ${targetFilePath} and concurrency: ${concurrency}...`);
 
         const pythonProcess = spawn('python', [
             '-u', 'E:\\sp\\Newland\\crawler.py',
+            '--profile', profile,
             '--from-file', targetFilePath,
             '--concurrency', concurrency.toString()
         ], { stdio: 'ignore' });
@@ -388,10 +654,11 @@ router.post('/crawler/trigger-from-file', async (req, res) => {
 // POST /api/products/export — export matching products to Excel
 router.post('/export', async (req, res) => {
     try {
-        const { search = '', category = '' } = req.body;
+        const { search = '', category = '', profile = '' } = req.body;
         
         // Retrieve all products matching the criteria (no pagination)
-        const { items } = await productQueries.getAll(search, category, 99999, 0);
+        const { items } = await productQueries.getAll(search, category, 99999, 0, profile);
+
         
         // Format rows for excel
         const rows = items.map((item, index) => {

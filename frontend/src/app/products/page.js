@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import { useState, useEffect, Suspense, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
@@ -20,7 +20,9 @@ import {
     Play,
     Bot,
     FileSpreadsheet,
+    Layers,
     Pin,
+
     Edit3,
     Merge,
     Copy,
@@ -113,7 +115,7 @@ function ProductsContent() {
 
     const fetchCategories = async () => {
         try {
-            const data = await fetchApi('/api/products/categories');
+            const data = await fetchApi(`/api/products/categories?profile=${profileSlug}`);
             if (data) setCategories(data);
         } catch (err) {
             console.error('Error fetching categories:', err);
@@ -123,7 +125,7 @@ function ProductsContent() {
     const fetchProducts = async () => {
         setLoading(true);
         try {
-            const data = await fetchApi(`/api/products?search=${searchTerm}&category=${selectedCategory}&limit=${limit}&page=${currentPage}`);
+            const data = await fetchApi(`/api/products?search=${searchTerm}&category=${selectedCategory}&limit=${limit}&page=${currentPage}&profile=${profileSlug}`);
             if (data) {
                 setProducts(data.items);
                 setTotalProducts(data.total);
@@ -140,16 +142,56 @@ function ProductsContent() {
     // Profile Sheet Data State
     const [profileSheets, setProfileSheets] = useState([]);
     const [activeSheetTabName, setActiveSheetTabName] = useState('');
-    const [viewMode, setViewMode] = useState('sheet'); // 'sheet' | 'products'
+    const [viewMode, setViewMode] = useState('sheet'); // 'sheet' | 'products' | 'har'
     const [pageRowLimit, setPageRowLimit] = useState(100);
+
+    // HAR Analysis Report state
+    const [harReport, setHarReport] = useState(null);
+    const [harReportLoading, setHarReportLoading] = useState(false);
+
+    const fetchHarReport = async (slug) => {
+        setHarReportLoading(true);
+        try {
+            const data = await fetchApi(`/api/products/profiles/${slug}/har-report`);
+            if (data?.report) setHarReport(data.report);
+        } catch (err) {
+            setHarReport(null);
+        } finally {
+            setHarReportLoading(false);
+        }
+    };
+
+    const activePageSheetData = useMemo(() => {
+        return profileSheets.find(s => s.name === activeSheetTabName)?.data || [];
+    }, [profileSheets, activeSheetTabName]);
 
     useEffect(() => {
         setPageRowLimit(100);
     }, [activeSheetTabName]);
 
-    const activePageSheetData = useMemo(() => {
-        return profileSheets.find(s => s.name === activeSheetTabName)?.data || [];
-    }, [profileSheets, activeSheetTabName]);
+    useEffect(() => {
+        const handleHarReady = (e) => {
+            if (e.detail?.profile === profileSlug) {
+                if (e.detail?.report) setHarReport(e.detail.report);
+                else fetchHarReport(profileSlug);
+                setViewMode('har');
+            }
+        };
+        window.addEventListener('har_analysis_ready', handleHarReady);
+
+        // Check if navigated here fresh from HAR upload via Sidebar
+        try {
+            const flagSlug = localStorage.getItem('open_har_tab_for');
+            if (flagSlug === profileSlug) {
+                localStorage.removeItem('open_har_tab_for');
+                fetchHarReport(profileSlug);
+                setViewMode('har');
+            }
+        } catch (e) {}
+
+        return () => window.removeEventListener('har_analysis_ready', handleHarReady);
+    }, [profileSlug]);
+
 
     const maxPageCols = useMemo(() => {
         if (!activePageSheetData.length) return 0;
@@ -157,8 +199,9 @@ function ProductsContent() {
         return sample.reduce((max, r) => Math.max(max, Array.isArray(r) ? r.length : 0), 0);
     }, [activePageSheetData]);
 
-    // Feature 1: Freeze rows (Ghim hàng)
-    const [pageFreezeRows, setPageFreezeRows] = useState(1);
+    // Feature 1: Freeze rows (Ghim hàng) - Default 0 because header is already pinned
+    const [pageFreezeRows, setPageFreezeRows] = useState(0);
+
 
     // Google Sheets Style Data Filter State
     const [sheetSearchQuery, setSheetSearchQuery] = useState('');
@@ -176,12 +219,101 @@ function ProductsContent() {
     const [dragStartRowIndex, setDragStartRowIndex] = useState(null);
     const [dragStartColIndex, setDragStartColIndex] = useState(null);
 
+    // Column Sorting state
+    const [columnSortState, setColumnSortState] = useState({ colIndex: null, direction: null }); // direction: 'asc' | 'desc' | null
+
+    // Tab Context Menu & Tab Management State
+    const [pageTabContextMenu, setPageTabContextMenu] = useState(null); // { x, y, tabName }
+    const [renameTabTarget, setRenameTabTarget] = useState(null); // oldTabName
+    const [renameTabInput, setRenameTabInput] = useState('');
+
+    // Handlers for Tab Management
+    const handleRenameSheetTab = async (oldName, newName) => {
+        if (!newName || !newName.trim() || oldName === newName.trim()) return;
+        const trimmed = newName.trim();
+        if (profileSheets.some(s => s.name === trimmed)) {
+            toast('⚠️ Tên tab này đã tồn tại!', 'warning');
+            return;
+        }
+
+        const updated = profileSheets.map(s => s.name === oldName ? { ...s, name: trimmed } : s);
+        setProfileSheets(updated);
+        if (activeSheetTabName === oldName) {
+            setActiveSheetTabName(trimmed);
+        }
+        setRenameTabTarget(null);
+        toast(`✅ Đã đổi tên tab thành "${trimmed}"`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updated })
+            });
+        } catch (e) {
+            console.error('Failed to save renamed tab:', e);
+        }
+    };
+
+    const handleDeleteSheetTab = async (tabName) => {
+        if (profileSheets.length <= 1) {
+            toast('⚠️ Không thể xóa tab cuối cùng!', 'warning');
+            return;
+        }
+        const confirmDelete = window.confirm(`⚠️ Bạn có chắc chắn muốn XÓA tab "${tabName}"?\n\nDữ liệu trong tab này sẽ bị mất.`);
+        if (!confirmDelete) return;
+
+        const updated = profileSheets.filter(s => s.name !== tabName);
+        setProfileSheets(updated);
+        if (activeSheetTabName === tabName) {
+            setActiveSheetTabName(updated[0]?.name || '');
+        }
+        toast(`🗑️ Đã xóa tab "${tabName}"`, 'info');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updated })
+            });
+        } catch (e) {
+            console.error('Failed to save sheets after tab deletion:', e);
+        }
+    };
+
+    const handleAddEmptySheetTab = async () => {
+        let baseName = 'Sheet';
+        let idx = profileSheets.length + 1;
+        while (profileSheets.some(s => s.name === `${baseName}${idx}`)) {
+            idx++;
+        }
+        const newTabName = `${baseName}${idx}`;
+
+        // Create empty grid (100 rows, 12 cols)
+        const emptyRows = Array.from({ length: 50 }, () => Array(12).fill(''));
+        // Default header line
+        emptyRows[0] = ['Cột A', 'Cột B', 'Cột C', 'Cột D', 'Cột E', 'Cột F', 'Cột G', 'Cột H', 'Cột I', 'Cột J', 'Cột K', 'Cột L'];
+
+        const updated = [...profileSheets, { name: newTabName, data: emptyRows }];
+        setProfileSheets(updated);
+        setActiveSheetTabName(newTabName);
+        toast(`✨ Đã thêm tab mới "${newTabName}"`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updated })
+            });
+        } catch (e) {
+            console.error('Failed to save sheets after adding tab:', e);
+        }
+    };
+
     // Google Sheets 2D Cell Range Selection (4-direction mouse drag & Ctrl+Shift+Arrows)
     const [selectedPageCell, setSelectedPageCell] = useState(null); // { rIdx: number, cIdx: number }
     const [cellSelectionBox, setCellSelectionBox] = useState(null); // { startRow, startCol, endRow, endCol }
     const [isDraggingCellSelection, setIsDraggingCellSelection] = useState(false);
     const cellClipboardRef = useRef(null); // { type: 'copy'|'cut', data: string[][] }
     const [contextMenu, setContextMenu] = useState(null); // { x, y, minRow, maxRow, minCol, maxCol }
+
 
     // Undo / Redo History Stack (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z)
     const historyStackRef = useRef([]); // Array of profileSheets snapshots
@@ -306,7 +438,9 @@ function ProductsContent() {
         };
         const handleGlobalClick = () => {
             setContextMenu(null);
+            setPageTabContextMenu(null);
         };
+
         window.addEventListener('mouseup', handleGlobalMouseUp);
         window.addEventListener('click', handleGlobalClick);
         return () => {
@@ -326,15 +460,37 @@ function ProductsContent() {
         setContextMenu(null);
     }, [activeSheetTabName]);
 
+    const autoHeaderRowIdx = useMemo(() => {
+        if (!activePageSheetData || activePageSheetData.length === 0) return 0;
+        for (let r = 0; r < Math.min(activePageSheetData.length, 5); r++) {
+            const row = activePageSheetData[r];
+            if (!Array.isArray(row)) continue;
+            const vals = row.map(v => v !== null && v !== undefined ? String(v).trim() : '').filter(Boolean);
+            if (vals.length === 0) continue;
+            const isSelector = vals.some(v => v.includes('nth-child') || v.startsWith('a.') || v.startsWith('.') || v === '246');
+            if (!isSelector) return r;
+        }
+        return 0;
+    }, [activePageSheetData]);
+
     const filteredPageSheetData = useMemo(() => {
         if (!activePageSheetData || activePageSheetData.length === 0) return [];
 
-        const headerCount = pageFreezeRows > 0 ? pageFreezeRows : 0;
-        const headerRows = activePageSheetData.slice(0, headerCount);
-        const dataRows = activePageSheetData.slice(headerCount);
+        let startDataIdx = autoHeaderRowIdx + 1;
+        if (pageFreezeRows > 0) {
+            startDataIdx = Math.max(pageFreezeRows, autoHeaderRowIdx + 1);
+        }
+
+        const dataRows = activePageSheetData.slice(startDataIdx);
 
         const filteredData = dataRows.filter((row) => {
             if (!Array.isArray(row)) return false;
+
+            // Filter out garbage CSS selector rows if any
+            const rowStr = row.map(c => String(c || '')).join(' ');
+            if (rowStr.includes('nth-child') || rowStr.includes('a.link-secondary') || rowStr.includes('a.h6')) {
+                return false;
+            }
 
             // 1. Global Search Filter
             if (sheetSearchQuery.trim()) {
@@ -367,8 +523,21 @@ function ProductsContent() {
             return true;
         });
 
-        return [...headerRows, ...filteredData];
-    }, [activePageSheetData, pageFreezeRows, sheetSearchQuery, columnFilters, columnSelectedValues]);
+        // 4. Column Sorting (ASC / DESC)
+        if (columnSortState.colIndex !== null && columnSortState.direction) {
+            const colIdx = columnSortState.colIndex;
+            const dir = columnSortState.direction === 'asc' ? 1 : -1;
+            filteredData.sort((a, b) => {
+                const valA = Array.isArray(a) && a[colIdx] !== undefined && a[colIdx] !== null ? String(a[colIdx]).trim() : '';
+                const valB = Array.isArray(b) && b[colIdx] !== undefined && b[colIdx] !== null ? String(b[colIdx]).trim() : '';
+                return valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' }) * dir;
+            });
+        }
+
+        return filteredData;
+    }, [activePageSheetData, autoHeaderRowIdx, pageFreezeRows, sheetSearchQuery, columnFilters, columnSelectedValues, columnSortState]);
+
+
 
     const renderedPageRows = useMemo(() => {
         return filteredPageSheetData.slice(0, pageRowLimit);
@@ -1060,14 +1229,17 @@ function ProductsContent() {
     };
 
     useEffect(() => {
+        // Reset state & refetch profile data when profileSlug changes
+        setSearchTerm('');
+        setSearchInput('');
+        setSelectedCategory('');
+        setCurrentPage(1);
+        setProducts([]);
+        setTotalProducts(0);
+
         fetchProfileSheetData();
-    }, [profileSlug]);
-
-    useEffect(() => {
         fetchCategories();
-    }, []);
 
-    useEffect(() => {
         const fetchProfileInfo = async () => {
             try {
                 const data = await fetchApi('/api/products/profiles');
@@ -1077,9 +1249,12 @@ function ProductsContent() {
                     else setCurrentProfile({ name: profileSlug.charAt(0).toUpperCase() + profileSlug.slice(1), slug: profileSlug });
                 }
             } catch (err) {}
+            fetchHarReport(profileSlug);
         };
         fetchProfileInfo();
     }, [profileSlug]);
+
+
 
     useEffect(() => {
         fetchProducts();
@@ -1118,8 +1293,9 @@ function ProductsContent() {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ search: searchTerm, category: selectedCategory })
+                body: JSON.stringify({ search: searchTerm, category: selectedCategory, profile: profileSlug })
             });
+
             
             if (!res.ok) throw new Error('Failed to download Excel export');
             
@@ -1235,8 +1411,66 @@ function ProductsContent() {
                 </div>
             </div>
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* KPI Summary Cards Grid (SaaS Dashboard Style - Like Image) */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
+
+                {/* Card 1: Total Sheet Rows */}
+                <div className="card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 12, background: '#0284c7', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, flexShrink: 0 }}>
+                        <FileSpreadsheet size={24} />
+                    </div>
+                    <div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Tổng hàng Sheet</div>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.2, marginTop: 2 }}>
+                            {activePageSheetData.length > 0 ? (activePageSheetData.length - 1).toLocaleString() : 0}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Card 2: Total Tabs */}
+                <div className="card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 12, background: '#16a34a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, flexShrink: 0 }}>
+                        <Layers size={24} />
+                    </div>
+                    <div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Tabs Sheet</div>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: '#16a34a', lineHeight: 1.2, marginTop: 2 }}>
+                            {profileSheets.length} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-muted)' }}>Tab</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Card 3: Crawler Products */}
+                <div className="card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 12, background: '#8b5cf6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, flexShrink: 0 }}>
+                        <Package size={24} />
+                    </div>
+                    <div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>SP Crawler</div>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: '#7c3aed', lineHeight: 1.2, marginTop: 2 }}>
+                            {totalProducts} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-muted)' }}>sản phẩm</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Card 4: HAR Status */}
+                <div className="card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 12, background: '#ea580c', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, flexShrink: 0 }}>
+                        🔍
+                    </div>
+                    <div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Báo Cáo HAR</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: harReport ? '#16a34a' : 'var(--text-muted)', lineHeight: 1.2, marginTop: 2 }}>
+                            {harReport ? `${harReport.summary?.highConfidenceFieldsCount || 0} trường tin cậy` : 'Chưa phân tích'}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             {/* View Mode Switcher Bar */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                     type="button"
                     className={`btn ${viewMode === 'sheet' ? 'btn-secondary' : 'btn-ghost'}`}
@@ -1256,174 +1490,104 @@ function ProductsContent() {
                     <Package size={16} style={{ color: viewMode === 'products' ? 'var(--accent)' : 'var(--text-muted)' }} />
                     <span>Danh Sách Sản Phẩm Crawler ({totalProducts})</span>
                 </button>
+
+                {/* HAR Analysis Tab — always visible, dimmed if no report yet */}
+                <button
+                    type="button"
+                    className={`btn ${viewMode === 'har' ? 'btn-secondary' : 'btn-ghost'}`}
+                    onClick={() => setViewMode('har')}
+                    style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        fontSize: 13.5, padding: '8px 16px',
+                        fontWeight: viewMode === 'har' ? 600 : 500,
+                        opacity: (!harReport && !harReportLoading) ? 0.55 : 1,
+                        position: 'relative'
+                    }}
+                    title={!harReport ? 'Chưa có báo cáo HAR. Hãy upload file HAR trong mục chỉnh sửa Profile.' : 'Xem báo cáo phân tích HAR cho profile này'}
+                >
+                    <span style={{ fontSize: 16 }}>🔍</span>
+                    <span>Phân Tích HAR</span>
+                    {harReport && (
+                        <span style={{
+                            fontSize: 10, fontWeight: 700, background: '#7c3aed', color: 'white',
+                            padding: '1px 6px', borderRadius: 10, marginLeft: 2
+                        }}>
+                            {harReport.summary?.highConfidenceFieldsCount || 0} trường
+                        </span>
+                    )}
+                    {harReportLoading && (
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>...</span>
+                    )}
+                </button>
             </div>
 
-            {/* View Mode 1: Bảng Dữ Liệu Sheet (Google Sheets Style) */}
+
+            {/* View Mode 1: Bảng Dữ Liệu Sheet (SaaS Dashboard Style - Like Image) */}
             {viewMode === 'sheet' && (
                 <div className="card" style={{ padding: 0, background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)', marginBottom: 24 }}>
                     {profileSheets.length > 0 ? (
                         <>
-                            {/* Active Tab Header Bar */}
-                            <div style={{ padding: '12px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <FileSpreadsheet size={16} style={{ color: 'var(--accent)' }} /> 
-                                    Đang xem: {activeSheetTabName} ({profileSheets.find(s => s.name === activeSheetTabName)?.data?.length || 0} hàng)
-                                </span>
-                                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                                    <button
-                                        type="button"
-                                        className="btn btn-outline"
-                                        onClick={() => setShowCrawlerToSheetModal(true)}
-                                        style={{ fontSize: 12.5, padding: '6px 12px', background: 'var(--bg-card)', color: '#2563eb', borderColor: '#bfdbfe', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
-                                    >
-                                        <FileSpreadsheet size={14} /> 📥 Nạp từ danh sách Crawler
-                                    </button>
+                            {/* Unified Single-Row Toolbar (Combine view & action controls into 1 line) */}
+                            <div style={{ padding: '10px 16px', background: '#f8fafc', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                                {/* Left Tools Group */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6, marginRight: 6 }}>
+                                        <FileSpreadsheet size={16} style={{ color: 'var(--accent)' }} /> 
+                                        {activeSheetTabName} ({profileSheets.find(s => s.name === activeSheetTabName)?.data?.length || 0} hàng)
+                                    </span>
 
-                                    <button
-                                        className="btn btn-outline"
-                                        onClick={() => setShowImportModal(true)}
-                                        style={{ fontSize: 12.5, padding: '6px 12px', background: 'var(--bg-card)' }}
-                                    >
-                                        + Cập nhật / Nạp lại Sheet
-                                    </button>
-
-                                    <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        onClick={() => setShowAiModal(true)}
-                                        style={{
-                                            background: 'var(--gradient-primary)',
-                                            color: 'white',
-                                            border: 'none',
-                                            fontSize: 12.5,
-                                            padding: '6px 14px',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 6,
-                                            fontWeight: 600
-                                        }}
-                                    >
-                                        <Bot size={15} /> 🤖 AI Trợ Lý (Tự động hóa)
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Sheet View Tool Bar: Ghim hàng, Lọc dữ liệu, Ghép cột, Mẹo click đúp */}
-                            <div style={{ padding: '10px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-                                    {/* Quick Search Input */}
+                                    {/* Search input */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
-                                        <Search size={14} style={{ position: 'absolute', left: 8, color: 'var(--text-muted)' }} />
+                                        <Search size={13} style={{ position: 'absolute', left: 8, color: 'var(--text-muted)' }} />
                                         <input
                                             type="text"
                                             value={sheetSearchQuery}
                                             onChange={e => setSheetSearchQuery(e.target.value)}
-                                            placeholder="🔍 Tìm nhanh trong Tab..."
-                                            style={{ padding: '5px 8px 5px 28px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', width: 190 }}
+                                            placeholder="🔍 Tìm nhanh..."
+                                            style={{ padding: '4px 6px 4px 26px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: '#ffffff', color: 'var(--text-primary)', width: 150 }}
                                         />
                                         {sheetSearchQuery && (
-                                            <button onClick={() => setSheetSearchQuery('')} style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-muted)' }}>
-                                                <X size={12} />
+                                            <button onClick={() => setSheetSearchQuery('')} style={{ position: 'absolute', right: 4, background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-muted)' }}>
+                                                <X size={11} />
                                             </button>
                                         )}
                                     </div>
 
-                                    {/* Toggle Filter Bar Button */}
+                                    {/* Undo / Redo */}
                                     <button
                                         type="button"
-                                        onClick={() => setShowFilterRow(prev => !prev)}
-                                        style={{
-                                            padding: '5px 10px',
-                                            background: showFilterRow ? 'rgba(99,102,241,0.12)' : 'var(--bg-card)',
-                                            border: `1px solid ${showFilterRow ? 'var(--accent)' : 'var(--border-color)'}`,
-                                            borderRadius: 4,
-                                            fontSize: 12,
-                                            fontWeight: 600,
-                                            color: showFilterRow ? 'var(--accent)' : 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 6
-                                        }}
+                                        onClick={handleUndo}
+                                        style={{ padding: '4px 9px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                        title="Hoàn tác (Ctrl+Z)"
                                     >
-                                        <Filter size={13} /> {showFilterRow ? 'Ẩn Ô Lọc Cột' : 'Bật Bộ Lọc Cột'}
+                                        <Undo2 size={12} /> Hoàn tác
                                     </button>
 
-                                    {/* Active Filter Indicator Badge */}
-                                    {hasActiveFilters && (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#eff6ff', border: '1px solid #bfdbfe', padding: '3px 10px', borderRadius: 4, fontSize: 12, color: '#1d4ed8', fontWeight: 600 }}>
-                                            <span>Đã lọc ({Math.max(0, filteredPageSheetData.length - (pageFreezeRows > 0 ? pageFreezeRows : 0))}/{Math.max(0, activePageSheetData.length - (pageFreezeRows > 0 ? pageFreezeRows : 0))} hàng)</span>
-                                            <button
-                                                onClick={handleClearAllFilters}
-                                                style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 700, padding: '0 2px', display: 'flex', alignItems: 'center', gap: 2 }}
-                                                title="Xóa tất cả bộ lọc"
-                                            >
-                                                <X size={13} /> Xóa Lọc
-                                            </button>
-                                        </div>
-                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={handleRedo}
+                                        style={{ padding: '4px 9px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                        title="Khôi phục (Ctrl+Y)"
+                                    >
+                                        <Redo2 size={12} /> Khôi phục
+                                    </button>
 
-                                    {/* Freeze Rows selector */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-                                        <Pin size={14} style={{ color: 'var(--accent)' }} />
-                                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Ghim:</span>
-                                        <select
-                                            value={pageFreezeRows}
-                                            onChange={e => setPageFreezeRows(parseInt(e.target.value) || 0)}
-                                            style={{ padding: '3px 8px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
-                                        >
-                                            <option value={0}>Không ghim</option>
-                                            <option value={1}>Ghim Hàng 1</option>
-                                            <option value={2}>Ghim 2 hàng</option>
-                                            <option value={3}>Ghim 3 hàng</option>
-                                        </select>
-                                    </div>
-
-                                     {/* Undo Button */}
                                      <button
                                          type="button"
-                                         onClick={handleUndo}
-                                         style={{
-                                             padding: '4px 10px',
-                                             background: 'var(--bg-card)',
-                                             border: '1px solid var(--border-color)',
-                                             borderRadius: 'var(--radius-sm)',
-                                             fontSize: 12,
-                                             fontWeight: 600,
-                                             color: 'var(--text-primary)',
-                                             cursor: 'pointer',
-                                             display: 'flex',
-                                             alignItems: 'center',
-                                             gap: 4
-                                         }}
-                                         title="Hoàn tác (Ctrl+Z)"
+                                         onClick={() => handleAddPageRows(1)}
+                                         style={{ padding: '4px 9px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: '#16a34a', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}
                                      >
-                                         <Undo2 size={13} /> Hoàn tác
+                                         <Plus size={12} /> Thêm Hàng
                                      </button>
-
-                                     {/* Redo Button */}
                                      <button
                                          type="button"
-                                         onClick={handleRedo}
-                                         style={{
-                                             padding: '4px 10px',
-                                             background: 'var(--bg-card)',
-                                             border: '1px solid var(--border-color)',
-                                             borderRadius: 'var(--radius-sm)',
-                                             fontSize: 12,
-                                             fontWeight: 600,
-                                             color: 'var(--text-primary)',
-                                             cursor: 'pointer',
-                                             display: 'flex',
-                                             alignItems: 'center',
-                                             gap: 4
-                                         }}
-                                         title="Khôi phục (Ctrl+Y / Ctrl+Shift+Z)"
+                                         onClick={() => handleAddPageColumn(1)}
+                                         style={{ padding: '4px 9px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: '#2563eb', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}
                                      >
-                                         <Redo2 size={13} /> Khôi phục
+                                         <Plus size={12} /> Thêm Cột
                                      </button>
 
-                                    {/* Batch Merge Columns Button */}
+                                    {/* Batch Merge Columns */}
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -1433,71 +1597,53 @@ function ProductsContent() {
                                             setPageMergeEndRow('');
                                             setShowPageMergeColsModal(true);
                                         }}
-                                        style={{
-                                            padding: '4px 12px',
-                                            background: 'var(--bg-card)',
-                                            border: '1px solid var(--border-color)',
-                                            borderRadius: 'var(--radius-sm)',
-                                            fontSize: 12.5,
-                                            fontWeight: 600,
-                                            color: 'var(--accent)',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 6
-                                        }}
+                                        style={{ padding: '4px 10px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: '#ea580c', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
                                     >
-                                        <Merge size={14} /> 🔗 Ghép Cột
-                                    </button>
-
-                                    {/* Add Row Button */}
-                                    <button
-                                        type="button"
-                                        onClick={() => handleAddPageRows(1)}
-                                        style={{
-                                            padding: '4px 10px',
-                                            background: 'var(--bg-card)',
-                                            border: '1px solid var(--border-color)',
-                                            borderRadius: 'var(--radius-sm)',
-                                            fontSize: 12,
-                                            fontWeight: 600,
-                                            color: '#16a34a',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 4
-                                        }}
-                                        title="Thêm hàng trống mới vào Tab"
-                                    >
-                                        <Plus size={13} /> Thêm Hàng
-                                    </button>
-                                    {/* Add Column Button */}
-                                    <button
-                                        type="button"
-                                        onClick={() => handleAddPageColumn(1)}
-                                        style={{
-                                            padding: '4px 10px',
-                                            background: 'var(--bg-card)',
-                                            border: '1px solid var(--border-color)',
-                                            borderRadius: 'var(--radius-sm)',
-                                            fontSize: 12,
-                                            fontWeight: 600,
-                                            color: '#2563eb',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 4
-                                        }}
-                                        title="Thêm cột mới vào Tab"
-                                    >
-                                        <Plus size={13} /> Thêm Cột
+                                        <Merge size={13} /> Ghép Cột
                                     </button>
                                 </div>
 
-                                <span style={{ fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    💡 Mẹo: Nhấp kéo giữ chuột ở Cột số hàng (#) hoặc Tiêu đề cột (A, B, C...) để bôi đen chọn & xóa nhiều Hàng/Cột cùng lúc như Google Sheets!
-                                </span>
+                                {/* Right Actions Group */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <button
+                                        type="button"
+                                        className="btn btn-outline"
+                                        onClick={() => setShowCrawlerToSheetModal(true)}
+                                        style={{ fontSize: 12, padding: '5px 10px', background: '#ffffff', color: '#2563eb', borderColor: '#bfdbfe', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
+                                    >
+                                        <FileSpreadsheet size={13} /> Nạp từ danh sách Crawler
+                                    </button>
+
+                                    <button
+                                        className="btn btn-outline"
+                                        onClick={() => setShowImportModal(true)}
+                                        style={{ fontSize: 12, padding: '5px 10px', background: '#ffffff', color: 'var(--text-primary)' }}
+                                    >
+                                        + Cập nhật / Nạp lại Sheet
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => setShowAiModal(true)}
+                                        style={{
+                                            background: 'linear-gradient(135deg, #ea580c 0%, #d97706 100%)',
+                                            color: 'white',
+                                            border: 'none',
+                                            fontSize: 12,
+                                            padding: '6px 14px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            fontWeight: 700,
+                                            boxShadow: '0 2px 6px rgba(234,88,12,0.3)'
+                                        }}
+                                    >
+                                        <Bot size={14} /> AI Trợ Lý (Tự động hóa)
+                                    </button>
+                                </div>
                             </div>
+
 
                             {/* Multi-Row / Multi-Column Selection Action Banner */}
                             {(selectedRowIndices.length > 0 || selectedColIndices.length > 0) && (
@@ -1540,85 +1686,97 @@ function ProductsContent() {
                                     return (
                                         <table className="sheet-grid-table">
                                             <thead>
-                                                {/* Header Row 1: Column Letters & Header Names */}
-                                                <tr style={pageFreezeRows > 0 ? { position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-secondary)' } : {}}>
-                                                    <th className="row-index-header">#</th>
+                                                {/* Header Row: Real Header Column Titles + Sticky + Sort & Filter buttons */}
+                                                <tr style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f8fafc' }}>
+                                                    <th className="row-index-header" style={{ position: 'sticky', left: 0, zIndex: 12 }}>#</th>
                                                     {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => {
-                                                        const headerLabel = activePageSheetData[0]?.[cIdx] ? String(activePageSheetData[0][cIdx]).trim() : '';
-                                                        const isColFiltered = Boolean(columnFilters[cIdx]?.trim()) || (Array.isArray(columnSelectedValues[cIdx]) && columnSelectedValues[cIdx].length > 0);
-                                                        const isColSelected = selectedColSet.has(cIdx);
-                                                        return (
-                                                            <th 
-                                                                key={cIdx} 
-                                                                onMouseDown={(e) => handleColMouseDown(cIdx, e)}
-                                                                onMouseEnter={() => handleColMouseEnter(cIdx)}
-                                                                style={{ 
-                                                                    userSelect: 'none',
-                                                                    cursor: 'pointer',
-                                                                    background: isColSelected ? '#dbeafe' : undefined,
-                                                                    color: isColSelected ? '#1e40af' : undefined,
-                                                                    borderBottom: isColSelected ? '2px solid #2563eb' : undefined
-                                                                }}
-                                                            >
-                                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                                                    <span style={{ fontWeight: 700 }}>
-                                                                        {getColLetter(cIdx)} {headerLabel && pageFreezeRows > 0 ? `(${headerLabel.slice(0, 15)})` : ''}
-                                                                    </span>
-                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                setDropdownSearch('');
-                                                                                setActiveFilterDropdownCol(activeFilterDropdownCol === cIdx ? null : cIdx);
-                                                                            }}
-                                                                            style={{
-                                                                                background: isColFiltered ? '#2563eb' : 'transparent',
-                                                                                color: isColFiltered ? '#ffffff' : 'var(--text-muted)',
-                                                                                border: 'none',
-                                                                                borderRadius: 3,
-                                                                                padding: '2px 4px',
-                                                                                cursor: 'pointer',
-                                                                                display: 'flex',
-                                                                                alignItems: 'center'
-                                                                            }}
-                                                                            title={`Bộ lọc Cột ${getColLetter(cIdx)}`}
-                                                                        >
-                                                                            <Filter size={11} />
-                                                                        </button>
-                                                                    </div>
-                                                                </div>
-                                                            </th>
-                                                        );
+                                                         const rawHeader = activePageSheetData[autoHeaderRowIdx]?.[cIdx] !== undefined && activePageSheetData[autoHeaderRowIdx]?.[cIdx] !== null ? String(activePageSheetData[autoHeaderRowIdx][cIdx]).trim() : '';
+                                                         const fallbackHeader = activePageSheetData[0]?.[cIdx] !== undefined && activePageSheetData[0]?.[cIdx] !== null ? String(activePageSheetData[0][cIdx]).trim() : '';
+                                                         
+                                                         let cleanLabel = rawHeader;
+                                                         if (!cleanLabel || cleanLabel.includes('nth-child') || cleanLabel.startsWith('a.') || cleanLabel === '246') {
+                                                             cleanLabel = fallbackHeader && !fallbackHeader.includes('nth-child') && !fallbackHeader.startsWith('a.') && fallbackHeader !== '246' ? fallbackHeader : `Cột ${getColLetter(cIdx)}`;
+                                                         }
+                                                         
+                                                         const displayTitle = cleanLabel;
+                                                         const isColFiltered = Boolean(columnFilters[cIdx]?.trim()) || (Array.isArray(columnSelectedValues[cIdx]) && columnSelectedValues[cIdx].length > 0);
+                                                         const isColSorted = columnSortState.colIndex === cIdx;
+                                                         const sortDir = isColSorted ? columnSortState.direction : null;
+                                                         const isColSelected = selectedColSet.has(cIdx);
+                                                         return (
+                                                             <th 
+                                                                 key={cIdx} 
+                                                                 onMouseDown={(e) => handleColMouseDown(cIdx, e)}
+                                                                 onMouseEnter={() => handleColMouseEnter(cIdx)}
+                                                                 style={{ 
+                                                                     userSelect: 'none',
+                                                                     cursor: 'pointer',
+                                                                     background: isColSelected ? '#dbeafe' : '#f8fafc',
+                                                                     color: isColSelected ? '#1e40af' : '#1e293b',
+                                                                     borderBottom: isColSelected ? '2px solid #2563eb' : '2px solid #e2e8f0',
+                                                                     padding: '12px 14px',
+                                                                     whiteSpace: 'nowrap'
+                                                                 }}
+                                                             >
+                                                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                                                     <span style={{ fontWeight: 700, fontSize: 12.5, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.02em' }} title={`Cột: ${displayTitle}`}>
+                                                                         {displayTitle}
+                                                                     </span>
+                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                         {/* Sort Button ↑↓ */}
+                                                                         <button
+                                                                             type="button"
+                                                                             onClick={(e) => {
+                                                                                 e.stopPropagation();
+                                                                                 if (!isColSorted) setColumnSortState({ colIndex: cIdx, direction: 'asc' });
+                                                                                 else if (sortDir === 'asc') setColumnSortState({ colIndex: cIdx, direction: 'desc' });
+                                                                                 else setColumnSortState({ colIndex: null, direction: null });
+                                                                             }}
+                                                                             style={{
+                                                                                 background: isColSorted ? 'rgba(37,99,235,0.12)' : 'transparent',
+                                                                                 color: isColSorted ? '#2563eb' : '#94a3b8',
+                                                                                 border: 'none',
+                                                                                 borderRadius: 4,
+                                                                                 padding: '2px 5px',
+                                                                                 cursor: 'pointer',
+                                                                                 fontSize: 11,
+                                                                                 fontWeight: 700,
+                                                                                 display: 'flex',
+                                                                                 alignItems: 'center'
+                                                                             }}
+                                                                             title="Sắp xếp cột này (A-Z / Z-A)"
+                                                                         >
+                                                                             {sortDir === 'asc' ? '↑' : sortDir === 'desc' ? '↓' : '↑↓'}
+                                                                         </button>
+
+                                                                         {/* Filter Button ∇ */}
+                                                                         <button
+                                                                             type="button"
+                                                                             onClick={(e) => {
+                                                                                 e.stopPropagation();
+                                                                                 setDropdownSearch('');
+                                                                                 setActiveFilterDropdownCol(activeFilterDropdownCol === cIdx ? null : cIdx);
+                                                                             }}
+                                                                             style={{
+                                                                                 background: isColFiltered ? '#2563eb' : 'transparent',
+                                                                                 color: isColFiltered ? '#ffffff' : '#94a3b8',
+                                                                                 border: 'none',
+                                                                                 borderRadius: 4,
+                                                                                 padding: '2px 5px',
+                                                                                 cursor: 'pointer',
+                                                                                 display: 'flex',
+                                                                                 alignItems: 'center'
+                                                                             }}
+                                                                             title={`Bộ lọc Cột ${displayTitle}`}
+                                                                         >
+                                                                             <Filter size={11} />
+                                                                         </button>
+                                                                     </div>
+                                                                 </div>
+                                                             </th>
+                                                         );
                                                     })}
                                                 </tr>
-
-                                                {/* Header Row 2: Sticky Column Filter Input Controls */}
-                                                {showFilterRow && (
-                                                    <tr style={{ position: 'sticky', top: pageFreezeRows > 0 ? 32 : 0, zIndex: 10, background: 'var(--bg-card)' }}>
-                                                        <th style={{ background: 'var(--bg-secondary)', padding: '2px 4px', textAlign: 'center', fontSize: 10, color: 'var(--text-muted)' }}>
-                                                            <Filter size={10} />
-                                                        </th>
-                                                        {Array.from({ length: Math.max(maxPageCols, 1) }).map((_, cIdx) => {
-                                                            const colVal = columnFilters[cIdx] || '';
-                                                            return (
-                                                                <th key={cIdx} style={{ padding: '2px 4px', background: 'var(--bg-card)' }}>
-                                                                    <input
-                                                                        type="text"
-                                                                        value={colVal}
-                                                                        onChange={e => setColumnFilters(prev => ({ ...prev, [cIdx]: e.target.value }))}
-                                                                        placeholder={`Lọc Cột ${getColLetter(cIdx)}...`}
-                                                                        style={{
-                                                                            width: '100%',
-                                                                            padding: '3px 6px',
-                                                                            fontWeight: colVal ? 600 : 400
-                                                                        }}
-                                                                    />
-                                                                </th>
-                                                            );
-                                                        })}
-                                                    </tr>
-                                                )}
                                             </thead>
                                             <tbody>
                                                 {renderedPageRows.map((row, rIdx) => {
@@ -1749,19 +1907,52 @@ function ProductsContent() {
                                 </div>
                             )}
 
-                            {/* Google Sheets Bottom Tab Bar */}
-                            <div className="sheet-bottom-bar">
-                                {profileSheets.map(s => (
-                                    <div
-                                        key={s.name}
-                                        className={`sheet-bottom-tab ${activeSheetTabName === s.name ? 'active' : ''}`}
-                                        onClick={() => setActiveSheetTabName(s.name)}
+                            {/* Google Sheets Bottom Tab Bar with Right Click & Add Tab */}
+                            <div className="sheet-bottom-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflowX: 'auto' }}>
+                                    {profileSheets.map(s => (
+                                        <div
+                                            key={s.name}
+                                            className={`sheet-bottom-tab ${activeSheetTabName === s.name ? 'active' : ''}`}
+                                            onClick={() => setActiveSheetTabName(s.name)}
+                                            onContextMenu={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setPageTabContextMenu({ x: e.clientX, y: e.clientY, tabName: s.name });
+                                            }}
+                                            title="Chuột phải để Đổi tên hoặc Xóa Tab"
+                                        >
+                                            <FileSpreadsheet size={14} />
+                                            <span>{s.name}</span>
+                                        </div>
+                                    ))}
+                                    {/* Add Empty Tab Button */}
+                                    <button
+                                        type="button"
+                                        onClick={handleAddEmptySheetTab}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justify: 'center',
+                                            gap: 4,
+                                            padding: '4px 10px',
+                                            marginLeft: 4,
+                                            background: 'var(--bg-secondary)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 4,
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            color: 'var(--text-primary)',
+                                            cursor: 'pointer',
+                                            whiteSpace: 'nowrap'
+                                        }}
+                                        title="Thêm Tab mới trống"
                                     >
-                                        <FileSpreadsheet size={14} />
-                                        <span>{s.name}</span>
-                                    </div>
-                                ))}
+                                        <Plus size={13} /> Thêm Tab
+                                    </button>
+                                </div>
                             </div>
+
                         </>
                     ) : (
                         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
@@ -1907,10 +2098,19 @@ function ProductsContent() {
                                 </tr>
                             ) : products.length === 0 ? (
                                 <tr>
-                                    <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                                        No products found. Start the crawler engine on the Dashboard to populate the database.
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                                            <Package size={48} style={{ color: 'var(--accent)', opacity: 0.4 }} />
+                                            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                                Chưa có dữ liệu Crawler cho {currentProfile?.name || 'Profile này'}
+                                            </div>
+                                            <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 450 }}>
+                                                Profile này chưa có sản phẩm nào được crawl trong cơ sở dữ liệu. Bạn có thể nạp file HAR hoặc kích hoạt Crawler để quét sản phẩm cho hãng này.
+                                            </div>
+                                        </div>
                                     </td>
                                 </tr>
+
                             ) : (
                                 products.map((prod, i) => (
                                     <tr key={prod.id} style={{ borderBottom: '1px solid var(--border-color)', height: 72, background: selectedCrawlerProductIds.includes(prod.id) ? 'rgba(99,102,241,0.04)' : 'transparent' }}>
@@ -2551,7 +2751,204 @@ function ProductsContent() {
                 </div>
             )}
 
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* View Mode 3: HAR Analysis Report Tab */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {viewMode === 'har' && (
+                <div style={{ marginBottom: 24 }}>
+                    {harReportLoading ? (
+                        <div className="card" style={{ padding: '60px 20px', textAlign: 'center' }}>
+                            <Loader2 className="spin" size={36} style={{ color: 'var(--accent)', marginBottom: 16 }} />
+                            <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Đang tải báo cáo phân tích HAR...</p>
+                        </div>
+                    ) : !harReport ? (
+                        <div className="card" style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            <span style={{ fontSize: 48, display: 'block', marginBottom: 16 }}>🔍</span>
+                            <h4 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: 'var(--text-primary)' }}>Chưa có báo cáo phân tích HAR</h4>
+                            <p style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 480, margin: '0 auto 20px' }}>
+                                Upload file HAR từ DevTools (F12 → Network → Chuột phải → Save all as HAR) trong phần chỉnh sửa Profile (chuột phải vào Profile trong Sidebar).
+                            </p>
+                            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ background: 'var(--bg-secondary)', border: '1px dashed var(--border-color)', borderRadius: 8, padding: '12px 20px', fontSize: 12.5, color: 'var(--text-muted)', maxWidth: 340, textAlign: 'left' }}>
+                                    <strong style={{ color: 'var(--text-primary)' }}>Cách lấy file HAR:</strong><br/>
+                                    1. Mở trình duyệt → F12 → Tab Network<br/>
+                                    2. Duyệt qua 1 số trang sản phẩm của hãng<br/>
+                                    3. Chuột phải vào danh sách request → Save all as HAR<br/>
+                                    4. Upload file .har trong phần Edit Profile
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            {/* Report Header */}
+                            <div className="card" style={{ padding: '20px 24px', marginBottom: 16, background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)', border: 'none', color: 'white' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+                                    <div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                                            <span style={{ fontSize: 24 }}>🔍</span>
+                                            <h3 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Báo Cáo Phân Tích HAR</h3>
+                                        </div>
+                                        <p style={{ fontSize: 13, opacity: 0.8, margin: 0 }}>
+                                            Profile: <strong>{harReport.profileName || currentProfile?.name}</strong>
+                                            {harReport.harFileName && <> &nbsp;·&nbsp; File: <strong>{harReport.harFileName}</strong> ({harReport.harFileSizeKb} KB)</>}
+                                        </p>
+                                        {harReport.summary?.analyzedAt && (
+                                            <p style={{ fontSize: 11.5, opacity: 0.6, margin: '4px 0 0' }}>
+                                                Phân tích lúc: {new Date(harReport.summary.analyzedAt).toLocaleString('vi-VN')}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            try {
+                                                await fetchApi('/api/products/crawler/trigger', { method: 'POST', body: JSON.stringify({ concurrency: 3 }) });
+                                                toast('🚀 Đã kích hoạt Crawler! Đang tiến hành crawl sản phẩm...', 'success');
+                                            } catch (err) {
+                                                toast('❌ ' + (err.message || 'Lỗi khi kích hoạt crawler'), 'danger');
+                                            }
+                                        }}
+                                        style={{
+                                            padding: '10px 22px', background: '#16a34a', color: 'white',
+                                            border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 14,
+                                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                                            whiteSpace: 'nowrap', boxShadow: '0 4px 12px rgba(22,163,74,0.4)'
+                                        }}
+                                    >
+                                        <Play size={16} /> 🚀 Bắt Đầu Crawl
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Summary Cards Row */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+                                {[
+                                    { label: 'Tổng Requests', value: harReport.summary?.totalEntries?.toLocaleString() || 0, icon: '📡', color: '#3b82f6' },
+                                    { label: 'JSON API Calls', value: harReport.summary?.totalJsonApis || 0, icon: '⚡', color: '#8b5cf6' },
+                                    { label: 'Trường Phát Hiện', value: harReport.summary?.detectableFieldsCount || 0, icon: '🔎', color: '#f59e0b' },
+                                    { label: 'Trường Độ Tin Cao', value: harReport.summary?.highConfidenceFieldsCount || 0, icon: '✅', color: '#16a34a' },
+                                ].map(card => (
+                                    <div key={card.label} className="card" style={{ padding: '16px 18px', textAlign: 'center' }}>
+                                        <div style={{ fontSize: 28, marginBottom: 6 }}>{card.icon}</div>
+                                        <div style={{ fontSize: 26, fontWeight: 800, color: card.color, lineHeight: 1 }}>{card.value}</div>
+                                        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4, fontWeight: 500 }}>{card.label}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Crawlable Fields Table */}
+                            <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
+                                <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span>📋</span> Các Trường Có Thể Crawl Được
+                                    </h4>
+                                    <div style={{ display: 'flex', gap: 10, fontSize: 11.5, alignItems: 'center' }}>
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: '50%', background: '#16a34a', display: 'inline-block' }} /> Cao ≥50%</span>
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} /> Trung bình 20-49%</span>
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: '50%', background: '#94a3b8', display: 'inline-block' }} /> Thấp &lt;20%</span>
+                                    </div>
+                                </div>
+
+                                <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                        <thead>
+                                            <tr style={{ background: 'var(--bg-secondary)', borderBottom: '2px solid var(--border-color)' }}>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 200 }}>Trường Dữ Liệu</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 160 }}>Độ Tin Cậy</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Giá Trị Mẫu</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 100 }}>Lần Xuất Hiện</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {(harReport.fields || []).map((field, idx) => {
+                                                const confColor = field.confidence >= 50 ? '#16a34a' : field.confidence >= 20 ? '#f59e0b' : '#94a3b8';
+                                                const rowBg = field.confidence >= 50 ? 'rgba(22,163,74,0.04)' : field.confidence >= 20 ? 'rgba(245,158,11,0.04)' : 'var(--bg-card)';
+                                                return (
+                                                    <tr key={field.fieldKey} style={{ borderBottom: '1px solid var(--border-color)', background: rowBg }}>
+                                                        <td style={{ padding: '12px 16px' }}>
+                                                            <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)' }}>{field.label}</div>
+                                                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, fontFamily: 'monospace' }}>{field.fieldKey}</div>
+                                                        </td>
+                                                        <td style={{ padding: '12px 16px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                                <div style={{ flex: 1, height: 8, background: 'var(--bg-secondary)', borderRadius: 4, overflow: 'hidden', minWidth: 80 }}>
+                                                                    <div style={{ height: '100%', width: `${field.confidence}%`, background: confColor, borderRadius: 4, transition: 'width 0.4s ease' }} />
+                                                                </div>
+                                                                <span style={{ fontSize: 13, fontWeight: 700, color: confColor, minWidth: 36, textAlign: 'right' }}>{field.confidence}%</span>
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ padding: '12px 16px' }}>
+                                                            {field.samples && field.samples.length > 0 ? (
+                                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                                    {field.samples.slice(0, 2).map((s, si) => (
+                                                                        <div key={si} style={{ fontSize: 11.5, color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '3px 8px', borderRadius: 4, fontFamily: 'monospace', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                            <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>{s.path}:</span>
+                                                                            {s.value}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>Chưa có mẫu</span>
+                                                            )}
+                                                        </td>
+                                                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                            <span style={{ fontWeight: 700, fontSize: 15, color: field.occurrences > 0 ? confColor : 'var(--text-muted)' }}>
+                                                                {field.occurrences || 0}
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            {/* API Endpoints Section */}
+                            {harReport.notableEndpoints && harReport.notableEndpoints.length > 0 && (
+                                <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
+                                    <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                                        <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <span>⚡</span> JSON API Endpoints Phát Hiện ({harReport.notableEndpoints.length})
+                                        </h4>
+                                    </div>
+                                    <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                                        {harReport.notableEndpoints.map((ep, idx) => (
+                                            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid var(--border-color)', background: idx % 2 === 0 ? 'var(--bg-card)' : 'var(--bg-secondary)' }}>
+                                                <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: ep.method === 'GET' ? '#dbeafe' : '#dcfce7', color: ep.method === 'GET' ? '#1d4ed8' : '#15803d', minWidth: 40, textAlign: 'center' }}>
+                                                    {ep.method}
+                                                </span>
+                                                <span style={{ fontSize: 12, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: ep.status >= 200 && ep.status < 300 ? '#f0fdf4' : '#fef2f2', color: ep.status >= 200 && ep.status < 300 ? '#166534' : '#b91c1c', minWidth: 34 }}>
+                                                    {ep.status}
+                                                </span>
+                                                <div style={{ flex: 1, fontSize: 12, fontFamily: 'monospace', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ep.url}>
+                                                    {ep.url}
+                                                </div>
+                                                <span style={{ fontSize: 11.5, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{ep.sizekb} KB</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Domains detected */}
+                            {harReport.summary?.domains?.length > 0 && (
+                                <div className="card" style={{ padding: '14px 20px' }}>
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginRight: 12 }}>Domains phát hiện:</span>
+                                    {harReport.summary.domains.map(d => (
+                                        <span key={d} style={{ display: 'inline-block', fontSize: 12, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', marginRight: 6, marginBottom: 4, fontFamily: 'monospace' }}>
+                                            {d}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            )}
+
             {/* Crawler to Sheet Conversion Modal */}
+
             <CrawlerToSheetModal
                 isOpen={showCrawlerToSheetModal}
                 onClose={() => setShowCrawlerToSheetModal(false)}
@@ -2696,6 +3093,88 @@ function ProductsContent() {
                     </div>
                 </div>
             )}
+
+            {/* Floating Tab Context Menu (Right Click on Sheet Tab) */}
+            {pageTabContextMenu && (
+                <div
+                    onClick={e => e.stopPropagation()}
+                    style={{
+                        position: 'fixed',
+                        top: pageTabContextMenu.y - 80,
+                        left: pageTabContextMenu.x,
+                        zIndex: 999999,
+                        background: 'var(--bg-card, #ffffff)',
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: 8,
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+                        minWidth: 160,
+                        padding: '4px 0',
+                        fontSize: 13
+                    }}
+                >
+                    <div style={{ padding: '6px 14px', fontWeight: 700, color: 'var(--text-muted)', fontSize: 11, borderBottom: '1px solid var(--border-color)' }}>
+                        Tab: {pageTabContextMenu.tabName}
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setRenameTabTarget(pageTabContextMenu.tabName);
+                            setRenameTabInput(pageTabContextMenu.tabName);
+                            setPageTabContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Edit3 size={14} style={{ color: 'var(--accent)' }} /> Đổi tên tab
+                    </button>
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '2px 0' }} />
+                    <button
+                        type="button"
+                        onClick={() => {
+                            handleDeleteSheetTab(pageTabContextMenu.tabName);
+                            setPageTabContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Trash2 size={14} /> Xóa tab này
+                    </button>
+                </div>
+            )}
+
+            {/* Rename Tab Modal */}
+            {renameTabTarget && (
+                <div className="modal-backdrop" onClick={() => setRenameTabTarget(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999998, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: 380, padding: 20, boxShadow: '0 20px 40px rgba(0,0,0,0.3)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                            <span style={{ fontWeight: 700, fontSize: 15, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Edit3 size={16} style={{ color: 'var(--accent)' }} /> Đổi Tên Tab
+                            </span>
+                            <button onClick={() => setRenameTabTarget(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}><X size={18} /></button>
+                        </div>
+                        <input
+                            type="text"
+                            value={renameTabInput}
+                            onChange={e => setRenameTabInput(e.target.value)}
+                            placeholder="Nhập tên Tab mới..."
+                            autoFocus
+                            onKeyDown={e => {
+                                if (e.key === 'Enter') handleRenameSheetTab(renameTabTarget, renameTabInput);
+                            }}
+                            style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 14 }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                            <button type="button" className="btn btn-ghost" onClick={() => setRenameTabTarget(null)}>Hủy</button>
+                            <button type="button" className="btn btn-primary" onClick={() => handleRenameSheetTab(renameTabTarget, renameTabInput)} style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none' }}>
+                                Lưu tên mới
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 }

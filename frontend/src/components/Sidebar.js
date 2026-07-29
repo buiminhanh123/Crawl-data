@@ -214,8 +214,34 @@ export default function Sidebar() {
         }
     };
 
+    // ── Delete Profile ──
+    const handleDeleteProfile = async (profile) => {
+        setCtxMenu(null);
+        const confirmed = window.confirm(
+            `⚠️ Bạn có chắc chắn muốn XÓA Profile "${profile.name}"?\n\nHành động này sẽ xóa toàn bộ sản phẩm đã crawl của profile này.\nDữ liệu Sheet sẽ KHÔNG bị xóa.\n\nNhấn OK để xác nhận xóa.`
+        );
+        if (!confirmed) return;
+        try {
+            await fetchApi(`/api/products/profiles/${profile.slug}`, { method: 'DELETE' });
+            await fetchProfiles();
+            // Navigate away if currently on this profile
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('profile') === profile.slug) {
+                const remaining = profiles.filter(p => p.slug !== profile.slug);
+                if (remaining.length > 0) {
+                    router.push(`/products?profile=${remaining[0].slug}`);
+                } else {
+                    router.push('/products');
+                }
+            }
+        } catch (err) {
+            alert('❌ ' + (err.message || 'Lỗi khi xóa Profile'));
+        }
+    };
+
     // ── Upload HAR ──
     const handleHarUpload = async () => {
+
         if (!editHarFile || !editModal) return;
         setEditSaving(true);
         setEditMsg('');
@@ -223,13 +249,31 @@ export default function Sidebar() {
             const form = new FormData();
             form.append('har', editHarFile);
             form.append('profile', editModal.slug);
-            await fetchApi(`/api/products/profiles/${editModal.slug}/har`, {
+            const result = await fetchApi(`/api/products/profiles/${editModal.slug}/har`, {
                 method: 'POST',
                 body: form,
                 headers: {} // let browser set multipart boundary
             });
-            setEditMsg('✅ Upload HAR thành công! Đang phân tích...');
+            const summary = result?.report?.summary;
+            const fieldCount = summary?.highConfidenceFieldsCount || 0;
+            const totalFields = summary?.detectableFieldsCount || 0;
+            setEditMsg(`✅ Phân tích HAR hoàn tất! Phát hiện ${totalFields} trường (${fieldCount} độ tin cao).`);
             setEditHarFile(null);
+
+            // Dispatch event so Products page auto-refreshes the HAR report
+            window.dispatchEvent(new CustomEvent('har_analysis_ready', {
+                detail: { profile: editModal.slug, report: result?.report }
+            }));
+
+            // Navigate to Products page of this profile, opening HAR tab
+            setTimeout(() => {
+                router.push(`/products?profile=${editModal.slug}`);
+                setEditModal(null);
+                // Store flag so Products page can auto-switch to HAR tab
+                try {
+                    localStorage.setItem('open_har_tab_for', editModal.slug);
+                } catch (e) {}
+            }, 1200);
         } catch (err) {
             setEditMsg('❌ ' + (err.message || 'Lỗi upload HAR'));
         } finally {
@@ -616,8 +660,20 @@ export default function Sidebar() {
                     >
                         <Upload size={14} /> Nạp HAR để phân tích
                     </button>
+                    {/* Separator */}
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '4px 0' }} />
+                    <button
+                        type="button"
+                        onClick={() => handleDeleteProfile(ctxMenu.profile)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Trash2 size={14} /> Xóa Profile này
+                    </button>
                 </div>
             )}
+
 
             {/* ──────── Modal: Edit Profile ──────── */}
             {editModal && (

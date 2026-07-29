@@ -402,7 +402,8 @@ def extract_download_links(soup):
 #  CORE CRAWL LOGIC
 # ══════════════════════════════════════════════════════════════════
 
-async def scrape_product(session, browser, browser_sem, url_info, index, total, mode='full'):
+async def scrape_product(session, browser, browser_sem, url_info, index, total, mode='full', profile_slug='newland'):
+
     url, category, slug = url_info
 
     # ── Skip check ────────────────────────────────────────────────
@@ -480,20 +481,22 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
             cursor = conn.cursor()
             cursor.execute("""
             INSERT INTO products
-                (category, slug, name, description, image_url, url, specifications, part_number, download_links)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (category, slug, name, description, image_url, url, specifications, part_number, download_links, profile_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(url) DO UPDATE SET
                 category=excluded.category, slug=excluded.slug,
                 name=excluded.name, description=excluded.description,
                 image_url=excluded.image_url, specifications=excluded.specifications,
-                part_number=excluded.part_number, download_links=excluded.download_links
+                part_number=excluded.part_number, download_links=excluded.download_links,
+                profile_slug=excluded.profile_slug
             """, (
                 category, slug, name, description, image_url, url,
                 json.dumps(specs, ensure_ascii=False), part_number,
-                json.dumps(downloads, ensure_ascii=False)
+                json.dumps(downloads, ensure_ascii=False), profile_slug
             ))
             conn.commit()
             conn.close()
+
             remove_from_failed(url)
             log_message(f"[{index}/{total}] OK [{method}]: {name}")
             return
@@ -525,7 +528,7 @@ async def worker(queue, session, browser, browser_sem, total, mode):
             # Small staggered delay to spread out initial burst.
             # HTTP requests are lightweight so we can afford a shorter wait.
             await asyncio.sleep(random.uniform(0.3, 1.2))
-            await scrape_product(session, browser, browser_sem, url_info, index, total, mode)
+            await scrape_product(session, browser, browser_sem, url_info, index, total, mode, profile_slug)
         except Exception as e:
             log_message(f"Worker error on item {index}: {e}")
         finally:
@@ -540,6 +543,7 @@ async def main():
     retry_failed_mode = False
     fill_downloads_mode = False
     from_file_path = None
+    profile_slug = 'newland'
 
     for i, arg in enumerate(sys.argv):
         if arg == "--concurrency" and i + 1 < len(sys.argv):
@@ -547,12 +551,15 @@ async def main():
                 concurrency = int(sys.argv[i + 1])
             except ValueError:
                 pass
+        if arg == "--profile" and i + 1 < len(sys.argv):
+            profile_slug = sys.argv[i + 1]
         if arg == "--retry-failed":
             retry_failed_mode = True
         if arg == "--fill-downloads":
             fill_downloads_mode = True
         if arg == "--from-file" and i + 1 < len(sys.argv):
             from_file_path = sys.argv[i + 1]
+
 
     init_db()
 
@@ -657,7 +664,8 @@ async def main():
             for i in range(concurrency):
                 await asyncio.sleep(0.1)
                 task = asyncio.create_task(
-                    worker(queue, session, browser, browser_sem, total, mode)
+                    worker(queue, session, browser, browser_sem, total, mode, profile_slug)
+
                 )
                 workers.append(task)
 

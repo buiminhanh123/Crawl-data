@@ -152,6 +152,11 @@ async function initDatabase() {
         )
     `);
 
+    // Migrate: add har_report_json column if not exists
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN har_report_json TEXT DEFAULT NULL');
+    } catch (e) {} // Column may already exist
+
     try {
         const profRes = db.exec("SELECT COUNT(*) FROM product_profiles");
         const pCount = profRes[0]?.values[0]?.[0] || 0;
@@ -287,6 +292,11 @@ async function openProductsDb() {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
+        // Migrate: add profile_slug column if not exists
+        try {
+            db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
+        } catch (e) {}
+
         db.run(`
             CREATE TABLE IF NOT EXISTS crawler_status (
                 id INTEGER PRIMARY KEY,
@@ -304,6 +314,15 @@ async function openProductsDb() {
         fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(data));
         return db;
     }
+
+    // If DB already exists, also migrate
+    try {
+        db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
+        const dbData = db.export();
+        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(dbData));
+    } catch (e) {} // Column already exists
+
+    return db;
 }
 
 function saveProductsDb(productsDb) {
@@ -315,10 +334,14 @@ function saveProductsDb(productsDb) {
 //  QUERY HELPERS — Products & Crawler
 // ============================================================
 const productQueries = {
-    getAll: async (search = '', category = '', limit = 10, offset = 0) => {
+    getAll: async (search = '', category = '', limit = 10, offset = 0, profileSlug = '') => {
         const pdb = await openProductsDb();
         let query = 'SELECT * FROM products WHERE 1=1';
         const params = [];
+        if (profileSlug) {
+            query += ' AND profile_slug = ?';
+            params.push(profileSlug);
+        }
         if (search) {
             query += ' AND (name LIKE ? OR description LIKE ? OR part_number LIKE ?)';
             params.push(`%${search}%`, `%${search}%`, `%${search}%`);
@@ -358,20 +381,40 @@ const productQueries = {
         return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
     },
     
-    getCategories: async () => {
+    getCategories: async (profileSlug = '') => {
         const pdb = await openProductsDb();
-        const res = pdb.exec('SELECT DISTINCT category FROM products ORDER BY category ASC');
+        let query = 'SELECT DISTINCT category FROM products WHERE 1=1';
+        const params = [];
+        if (profileSlug) {
+            query += ' AND profile_slug = ?';
+            params.push(profileSlug);
+        }
+        query += ' ORDER BY category ASC';
+        const res = pdb.exec(query, params);
         pdb.close();
         if (!res[0]) return [];
         return res[0].values.map(v => v[0]);
     },
     
-    getStats: async () => {
+    getStats: async (profileSlug = '') => {
         const pdb = await openProductsDb();
-        const countRes = pdb.exec('SELECT COUNT(*) FROM products');
+        let countQuery = 'SELECT COUNT(*) FROM products WHERE 1=1';
+        const params = [];
+        if (profileSlug) {
+            countQuery += ' AND profile_slug = ?';
+            params.push(profileSlug);
+        }
+        const countRes = pdb.exec(countQuery, params);
         const totalProducts = countRes[0]?.values[0]?.[0] || 0;
         
-        const catRes = pdb.exec('SELECT category, COUNT(*) as count FROM products GROUP BY category ORDER BY count DESC');
+        let catQuery = 'SELECT category, COUNT(*) as count FROM products WHERE 1=1';
+        const catParams = [...params];
+        if (profileSlug) {
+            catQuery += ' AND profile_slug = ?';
+            catParams.push(profileSlug);
+        }
+        catQuery += ' GROUP BY category ORDER BY count DESC';
+        const catRes = pdb.exec(catQuery, catParams);
         pdb.close();
         
         const categoryCounts = [];
@@ -383,6 +426,13 @@ const productQueries = {
         }
         
         return { totalProducts, categoryCounts };
+    },
+
+    deleteByProfile: async (profileSlug) => {
+        const pdb = await openProductsDb();
+        pdb.run('DELETE FROM products WHERE profile_slug = ?', [profileSlug]);
+        saveProductsDb(pdb);
+        pdb.close();
     },
     
     getCrawlerStatus: async () => {
@@ -671,6 +721,24 @@ const profileQueries = {
         if (!res[0]?.values[0]) return null;
         const cols = res[0].columns;
         return Object.fromEntries(cols.map((c, i) => [c, res[0].values[0][i]]));
+    },
+
+    saveHarReport: (slug, reportJson) => {
+        db.run(
+            'UPDATE product_profiles SET har_report_json = ?, updated_at = datetime("now") WHERE slug = ?',
+            [JSON.stringify(reportJson), slug]
+        );
+        saveDatabase();
+    },
+
+    getHarReport: (slug) => {
+        const res = db.exec('SELECT har_report_json FROM product_profiles WHERE slug = ?', [slug]);
+        if (!res[0]?.values[0]?.[0]) return null;
+        try {
+            return JSON.parse(res[0].values[0][0]);
+        } catch (e) {
+            return null;
+        }
     }
 };
 
@@ -700,8 +768,14 @@ const profileSheetQueries = {
             );
         }
         saveDatabase();
+    },
+
+    deleteBySlug: (slug) => {
+        db.run('DELETE FROM profile_sheet_data WHERE profile_slug = ?', [slug]);
+        saveDatabase();
     }
 };
+
 
 module.exports = {
     initDatabase,
