@@ -267,28 +267,30 @@ function ProductsContent() {
         setPageRowLimit(100);
     }, [activeSheetTabName]);
 
-    useEffect(() => {
-        const loadProfileMeta = async () => {
-            try {
-                const res = await fetchApi('/api/products/profiles');
-                if (res?.profiles) {
-                    const found = res.profiles.find(p => p.slug === profileSlug);
-                    if (found) setCurrentProfile(found);
-                }
-            } catch (e) {}
-            try {
-                const sm = await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`);
-                if (sm) setSitemapInfo(sm);
-            } catch (e) {}
-        };
-        loadProfileMeta();
+    const fetchProfileMeta = useCallback(async (slug = profileSlug) => {
+        try {
+            const res = await fetchApi('/api/products/profiles');
+            if (res?.profiles) {
+                const found = res.profiles.find(p => p.slug === slug);
+                if (found) setCurrentProfile(found);
+            }
+        } catch (e) {}
+        try {
+            const sm = await fetchApi(`/api/products/profiles/${slug}/sitemap`);
+            if (sm) setSitemapInfo(sm);
+        } catch (e) {}
     }, [profileSlug]);
+
+    useEffect(() => {
+        fetchProfileMeta(profileSlug);
+    }, [profileSlug, fetchProfileMeta]);
 
     useEffect(() => {
         const handleHarReady = (e) => {
             if (e.detail?.profile === profileSlug) {
                 if (e.detail?.report) setHarReport(e.detail.report);
                 else fetchHarReport(profileSlug);
+                fetchProfileMeta(profileSlug);
                 setViewMode('har');
             }
         };
@@ -300,12 +302,13 @@ function ProductsContent() {
             if (flagSlug === profileSlug) {
                 localStorage.removeItem('open_har_tab_for');
                 fetchHarReport(profileSlug);
+                fetchProfileMeta(profileSlug);
                 setViewMode('har');
             }
         } catch (e) {}
 
         return () => window.removeEventListener('har_analysis_ready', handleHarReady);
-    }, [profileSlug]);
+    }, [profileSlug, fetchProfileMeta]);
 
 
     const maxPageCols = useMemo(() => {
@@ -1388,6 +1391,50 @@ function ProductsContent() {
         fetchProducts();
     }, [searchTerm, selectedCategory, currentPage, profileSlug]);
 
+    const prevCrawlerStatusRef = useRef(null);
+
+    useEffect(() => {
+        let isMounted = true;
+        const checkCrawlerStatus = async () => {
+            try {
+                const s = await fetchApi('/api/products/crawler/status');
+                if (!isMounted) return;
+                
+                const currentStatus = s?.status;
+                const prevStatus = prevCrawlerStatusRef.current;
+                
+                // If crawler is Running or Starting, periodically refresh products & categories
+                if (currentStatus === 'Running' || currentStatus === 'Starting') {
+                    fetchProducts();
+                    fetchCategories();
+                } 
+                // If crawler just finished, do a final refresh
+                else if ((prevStatus === 'Running' || prevStatus === 'Starting') && (currentStatus === 'Completed' || currentStatus === 'Idle')) {
+                    fetchProducts();
+                    fetchCategories();
+                    toast('🎉 Tiến trình Crawl đã hoàn tất! Danh sách sản phẩm đã được cập nhật.', 'success');
+                }
+                
+                prevCrawlerStatusRef.current = currentStatus;
+            } catch (e) {}
+        };
+
+        const timer = setInterval(checkCrawlerStatus, 3000);
+
+        const handleManualRefresh = () => {
+            fetchProducts();
+            fetchCategories();
+        };
+
+        window.addEventListener('refresh_crawler_products', handleManualRefresh);
+
+        return () => {
+            isMounted = false;
+            clearInterval(timer);
+            window.removeEventListener('refresh_crawler_products', handleManualRefresh);
+        };
+    }, [profileSlug, searchTerm, selectedCategory, currentPage]);
+
     const handleSearchSubmit = (e) => {
         e.preventDefault();
         setSearchTerm(searchInput);
@@ -1634,7 +1681,11 @@ function ProductsContent() {
                 <button
                     type="button"
                     className={`btn ${viewMode === 'products' ? 'btn-secondary' : 'btn-ghost'}`}
-                    onClick={() => setViewMode('products')}
+                    onClick={() => {
+                        setViewMode('products');
+                        fetchProducts();
+                        fetchCategories();
+                    }}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, padding: '8px 16px', fontWeight: viewMode === 'products' ? 600 : 500 }}
                 >
                     <Package size={16} style={{ color: viewMode === 'products' ? 'var(--accent)' : 'var(--text-muted)' }} />
@@ -3411,6 +3462,9 @@ function ProductsContent() {
                                                 try {
                                                     await fetchApi('/api/products/crawler/trigger', { method: 'POST', body: JSON.stringify({ concurrency: 3, profile: profileSlug }) });
                                                     toast('🚀 Đã kích hoạt Crawler! Đang tiến hành crawl sản phẩm...', 'success');
+                                                    fetchProducts();
+                                                    fetchCategories();
+                                                    window.dispatchEvent(new Event('refresh_crawler_products'));
                                                 } catch (err) {
                                                     toast('❌ ' + (err.message || 'Lỗi khi kích hoạt crawler'), 'danger');
                                                 }

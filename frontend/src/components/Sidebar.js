@@ -219,7 +219,7 @@ export default function Sidebar() {
         } catch (e) {}
     };
 
-    // ── Save profile edits (name + url) ──
+    // ── Save profile edits (name + url + sitemap + HAR) ──
     const handleSaveEdit = async () => {
         if (!editModal) return;
         setEditSaving(true);
@@ -236,8 +236,21 @@ export default function Sidebar() {
                     body: JSON.stringify({ sitemapXml: text, sitemapUrl: editSitemapUrl.trim() })
                 });
             }
+            if (editHarFile) {
+                const form = new FormData();
+                form.append('har', editHarFile);
+                form.append('profile', editModal.slug);
+                const result = await fetchApi(`/api/products/profiles/${editModal.slug}/har`, {
+                    method: 'POST',
+                    body: form,
+                    headers: {}
+                });
+                window.dispatchEvent(new CustomEvent('har_analysis_ready', {
+                    detail: { profile: editModal.slug, report: result?.report }
+                }));
+            }
             await fetchProfiles();
-            setEditMsg('✅ Đã lưu thay đổi Profile & Sitemap!');
+            setEditMsg('✅ Đã lưu thay đổi Profile, Sitemap & HAR!');
         } catch (err) {
             setEditMsg('❌ ' + (err.message || 'Lỗi khi lưu'));
         } finally {
@@ -245,45 +258,35 @@ export default function Sidebar() {
         }
     };
 
-    // ── Delete Profile ──
-    const handleDeleteProfile = async (profile) => {
-        setCtxMenu(null);
-        const confirmed = window.confirm(
-            `⚠️ Bạn có chắc chắn muốn XÓA Profile "${profile.name}"?\n\nHành động này sẽ xóa toàn bộ sản phẩm đã crawl của profile này.\nDữ liệu Sheet sẽ KHÔNG bị xóa.\n\nNhấn OK để xác nhận xóa.`
-        );
-        if (!confirmed) return;
-        try {
-            await fetchApi(`/api/products/profiles/${profile.slug}`, { method: 'DELETE' });
-            await fetchProfiles();
-            // Navigate away if currently on this profile
-            const params = new URLSearchParams(window.location.search);
-            if (params.get('profile') === profile.slug) {
-                const remaining = profiles.filter(p => p.slug !== profile.slug);
-                if (remaining.length > 0) {
-                    router.push(`/products?profile=${remaining[0].slug}`);
-                } else {
-                    router.push('/products');
-                }
-            }
-        } catch (err) {
-            alert('❌ ' + (err.message || 'Lỗi khi xóa Profile'));
-        }
-    };
-
-    // ── Upload HAR ──
+    // ── Upload HAR (also saves any pending profile/sitemap changes) ──
     const handleHarUpload = async () => {
-
         if (!editHarFile || !editModal) return;
         setEditSaving(true);
         setEditMsg('');
         try {
+            // Save profile metadata (name, target_url, sitemap_url)
+            await fetchApi(`/api/products/profiles/${editModal.slug}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name: editName.trim(), target_url: editUrl.trim(), sitemap_url: editSitemapUrl.trim() })
+            });
+
+            // Save sitemap XML file if selected
+            if (editSitemapFile) {
+                const text = await editSitemapFile.text();
+                await fetchApi(`/api/products/profiles/${editModal.slug}/sitemap`, {
+                    method: 'POST',
+                    body: JSON.stringify({ sitemapXml: text, sitemapUrl: editSitemapUrl.trim() })
+                });
+            }
+
+            // Upload HAR file
             const form = new FormData();
             form.append('har', editHarFile);
             form.append('profile', editModal.slug);
             const result = await fetchApi(`/api/products/profiles/${editModal.slug}/har`, {
                 method: 'POST',
                 body: form,
-                headers: {} // let browser set multipart boundary
+                headers: {}
             });
             const summary = result?.report?.summary;
             const fieldCount = summary?.highConfidenceFieldsCount || 0;
@@ -291,7 +294,9 @@ export default function Sidebar() {
             setEditMsg(`✅ Phân tích HAR hoàn tất! Phát hiện ${totalFields} trường (${fieldCount} độ tin cao).`);
             setEditHarFile(null);
 
-            // Dispatch event so Products page auto-refreshes the HAR report
+            await fetchProfiles();
+
+            // Dispatch event so Products page auto-refreshes the HAR report & profile metadata
             window.dispatchEvent(new CustomEvent('har_analysis_ready', {
                 detail: { profile: editModal.slug, report: result?.report }
             }));
@@ -300,7 +305,6 @@ export default function Sidebar() {
             setTimeout(() => {
                 router.push(`/products?profile=${editModal.slug}`);
                 setEditModal(null);
-                // Store flag so Products page can auto-switch to HAR tab
                 try {
                     localStorage.setItem('open_har_tab_for', editModal.slug);
                 } catch (e) {}
