@@ -208,8 +208,7 @@ async function initDatabase() {
     try {
         const pdb = await openProductsDb();
         pdb.run("UPDATE crawler_status SET status = 'Idle', last_message = 'Interrupted / Ready' WHERE status = 'Running' OR status = 'Starting'");
-        const pdbData = pdb.export();
-        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(pdbData));
+        saveProductsDb(pdb);
         pdb.close();
         console.log('Products crawler status reset to Idle successfully');
     } catch (e) {
@@ -221,9 +220,17 @@ async function initDatabase() {
  * Save database to disk (call after any write operation)
  */
 function saveDatabase() {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
+    try {
+        const dir = path.dirname(DB_PATH);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const data = db.export();
+        const buffer = Buffer.from(data);
+        fs.writeFileSync(DB_PATH, buffer);
+    } catch (e) {
+        console.error('Failed to save app database:', e);
+    }
 }
 
 // ============================================================
@@ -341,17 +348,31 @@ async function openProductsDb() {
 
     if (needsSave || !fs.existsSync(PRODUCTS_DB_PATH)) {
         try {
+            const dir = path.dirname(PRODUCTS_DB_PATH);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
             const dbData = db.export();
             fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(dbData));
-        } catch (e) {}
+        } catch (e) {
+            console.error('Failed to write products DB in openProductsDb:', e);
+        }
     }
 
     return db;
 }
 
 function saveProductsDb(productsDb) {
-    const data = productsDb.export();
-    fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(data));
+    try {
+        const dir = path.dirname(PRODUCTS_DB_PATH);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const data = productsDb.export();
+        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(data));
+    } catch (e) {
+        console.error('Failed to save products database:', e);
+    }
 }
 
 // ============================================================
