@@ -217,8 +217,8 @@ export default function CrawlerToSheetModal({
             let val = product[col.field];
 
             // Fallback for brand / vendor
-            if (col.field === 'brand' && !val) {
-                val = product.vendor || 'Newland';
+            if (col.field === 'brand') {
+                val = val || product.brand_name || product.brand || product.vendor || (product.profile_slug ? product.profile_slug.replace(/^profile-?/i, '').toUpperCase() : (profileSlug ? profileSlug.replace(/^profile-?/i, '').toUpperCase() : ''));
             }
             // Fallback for model / sku
             if (col.field === 'model' && !val) {

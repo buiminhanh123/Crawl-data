@@ -253,10 +253,10 @@ router.post('/:id/sync-crawler', async (req, res) => {
 
         if (mode === 'hierarchical') {
             // Group products by brand and major category
-            const brand = 'Newland'; // Default brand
             const categoryGroups = {};
 
             items.forEach(product => {
+                const prodBrand = product.brand_name || product.brand || 'Newland';
                 let cat = product.category || 'General';
                 // Prettify main category segment for sheet title
                 let tabName = cat.split('/')[0] || 'General';
@@ -265,7 +265,7 @@ router.post('/:id/sync-crawler', async (req, res) => {
                     return w.charAt(0).toUpperCase() + w.slice(1);
                 }).join(' ');
 
-                const targetSheetName = `${brand} - Product Data - ${tabName}`;
+                const targetSheetName = `${prodBrand} - Product Data - ${tabName}`;
                 if (!categoryGroups[targetSheetName]) {
                     categoryGroups[targetSheetName] = [];
                 }
@@ -312,10 +312,11 @@ router.post('/:id/sync-crawler', async (req, res) => {
                         }
                     }
 
+                    const prodBrand = product.brand_name || product.brand || 'Newland';
                     const cells = {
                         A: product.url || '',
                         B: subCat,
-                        C: brand,
+                        C: prodBrand,
                         D: model,
                         E: product.name || '',
                         F: product.image_url || '',

@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import random
+import re
+import urllib.parse
 from bs4 import BeautifulSoup
 
 # Fix Windows console encoding
@@ -33,7 +35,7 @@ HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
     "Sec-Fetch-Dest": "document",
@@ -76,6 +78,15 @@ def init_db():
     # Migration: add download_links if missing
     try:
         cursor.execute("ALTER TABLE products ADD COLUMN download_links TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE products ADD COLUMN series TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE products ADD COLUMN profile_slug TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass
@@ -121,16 +132,24 @@ def log_message(message):
     except Exception as e:
         print(f"Failed to save log: {e}", file=sys.stderr)
 
-def update_status(status, progress, total_items, current_item, last_message):
+def update_status(status, progress, total_items, current_item, last_message, profile_slug=None):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("""
-        UPDATE crawler_status
-        SET status=?, progress=?, total_items=?, current_item=?,
-            last_message=?, updated_at=CURRENT_TIMESTAMP
-        WHERE id=1
-        """, (status, progress, total_items, current_item, last_message))
+        if profile_slug:
+            cursor.execute("""
+            UPDATE crawler_status
+            SET status=?, progress=?, total_items=?, current_item=?,
+                last_message=?, profile_slug=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=1
+            """, (status, progress, total_items, current_item, last_message, profile_slug))
+        else:
+            cursor.execute("""
+            UPDATE crawler_status
+            SET status=?, progress=?, total_items=?, current_item=?,
+                last_message=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=1
+            """, (status, progress, total_items, current_item, last_message))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -292,8 +311,201 @@ async def get_page_content(session, browser, browser_sem, url):
 #  DATA EXTRACTION
 # ══════════════════════════════════════════════════════════════════
 
-async def get_product_urls():
-    """Fetch all product URLs from the sitemap."""
+APP_DB_PATH = r"E:\sp\Newland\server\data\app.db"
+
+async def get_product_urls(profile_slug='newland'):
+    """Fetch product URLs for the given profile (strictly from HAR report in DB for custom profiles)."""
+    if profile_slug != 'newland':
+        try:
+            import sqlite3, json, urllib.parse
+            conn = sqlite3.connect(APP_DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT har_report_json, target_url, name, sitemap_xml, sitemap_url, slug FROM product_profiles WHERE slug = ?", (profile_slug,))
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("SELECT har_report_json, target_url, name, sitemap_xml, sitemap_url, slug FROM product_profiles WHERE LOWER(slug) = LOWER(?) OR LOWER(name) LIKE ? OR LOWER(brand_name) LIKE ?", 
+                               (profile_slug, f"%{profile_slug.lower()}%", f"%{profile_slug.lower()}%"))
+                row = cursor.fetchone()
+            if not row and profile_slug.startswith('profile-'):
+                clean = profile_slug.replace('profile-', '')
+                cursor.execute("SELECT har_report_json, target_url, name, sitemap_xml, sitemap_url, slug FROM product_profiles WHERE LOWER(slug) = LOWER(?) OR LOWER(name) LIKE ? OR LOWER(brand_name) LIKE ?", 
+                               (clean, f"%{clean.lower()}%", f"%{clean.lower()}%"))
+                row = cursor.fetchone()
+            if not row:
+                cursor.execute("SELECT har_report_json, target_url, name, sitemap_xml, sitemap_url, slug FROM product_profiles ORDER BY id DESC LIMIT 1")
+                row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                log_message(f"Lỗi: Không tìm thấy Profile '{profile_slug}' trong cơ sở dữ liệu.")
+                return []
+
+            har_json_str, target_url, profile_name, sitemap_xml, sitemap_url_db, db_slug = row
+            report = json.loads(har_json_str) if har_json_str else {"fields": []}
+            seen = set()
+            raw_candidates = []
+
+            # 1. Parse from uploaded sitemap_xml string if present
+            if sitemap_xml:
+                log_message("Đang nạp dữ liệu từ file Sitemap.xml đã upload...")
+                locs = re.findall(r'<loc>(https?://[^<]+)</loc>', sitemap_xml, re.I)
+                for loc in locs:
+                    clean = loc.split('?')[0].split('#')[0]
+                    if clean not in seen and not any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
+                        if not any(x in clean.lower() for x in ('news-detail', 'solutions-detail', 'products-compare')):
+                            seen.add(clean)
+                            raw_candidates.append(clean)
+                log_message(f"Đã nạp {len(raw_candidates)} liên kết từ file Sitemap.xml upload!")
+
+            # 2. Parse from sitemap_url_db if specified
+            if sitemap_url_db:
+                try:
+                    log_message(f"Đang tải Sitemap từ URL: '{sitemap_url_db}'...")
+                    headers = {
+                        "User-Agent": HTTP_HEADERS["User-Agent"],
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Encoding": "gzip, deflate"
+                    }
+                    import urllib.request, gzip
+                    req = urllib.request.Request(sitemap_url_db, headers=headers)
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = resp.read()
+                        if resp.headers.get('Content-Encoding') == 'gzip':
+                            data = gzip.decompress(data)
+                        text = data.decode('utf-8', errors='replace')
+                        locs = re.findall(r'<loc>(https?://[^<]+)</loc>', text, re.I)
+                        c = 0
+                        for loc in locs:
+                            clean = loc.split('?')[0].split('#')[0]
+                            if clean not in seen and not any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
+                                if not any(x in clean.lower() for x in ('news-detail', 'solutions-detail', 'products-compare')):
+                                    seen.add(clean)
+                                    raw_candidates.append(clean)
+                                    c += 1
+                        log_message(f"Đã tải và bổ sung {c} liên kết từ Sitemap URL!")
+                except Exception as ex:
+                    log_message(f"Lỗi khi nạp Sitemap URL '{sitemap_url_db}': {ex}")
+            p_name = profile_name or profile_slug
+
+            if not target_url or not target_url.startswith('http'):
+                for f in report.get("fields", []):
+                    for s in f.get("samples", []):
+                        if isinstance(s, dict) and s.get("value") and s.get("value").startswith("http"):
+                            parsed_u = urllib.parse.urlparse(s.get("value"))
+                            d = parsed_u.netloc.lower()
+                            if not any(x in d for x in ('youtube.com', 'google', 'facebook', 'cloudflare', 'doubleclick', 'analytics')):
+                                target_url = f"{parsed_u.scheme}://{parsed_u.netloc}"
+                                break
+                    if target_url:
+                        break
+
+            target_domain = urllib.parse.urlparse(target_url).netloc.lower() if target_url else ''
+            if not target_domain:
+                for f in report.get("fields", []):
+                    for s in f.get("samples", []):
+                        if isinstance(s, dict) and s.get("value") and s.get("value").startswith("http"):
+                            d = urllib.parse.urlparse(s.get("value")).netloc.lower()
+                            if not any(x in d for x in ('youtube.com', 'google', 'facebook', 'cloudflare', 'doubleclick', 'analytics')):
+                                target_domain = d
+                                break
+                    if target_domain:
+                        break
+
+            # Append HAR candidates to existing raw_candidates
+            for field in report.get("fields", []):
+                candidates = []
+                for sample in field.get("samples", []):
+                    if isinstance(sample, dict) and sample.get("value"):
+                        candidates.append(sample.get("value"))
+                for ep in field.get("endpoints", []):
+                    if isinstance(ep, str):
+                        candidates.append(ep)
+
+                for val in candidates:
+                    if not val or not val.startswith("http"):
+                        continue
+                    parsed = urllib.parse.urlparse(val)
+                    domain = parsed.netloc.lower()
+                    if target_domain and domain != target_domain and not domain.endswith('.' + target_domain):
+                        continue
+                    if any(val.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2', '.ico')):
+                        continue
+                    if any(x in val.lower() for x in ('products-compare', 'products-search', 'discontinued=', 'index_tag_id=')):
+                        continue
+
+                    clean_val = val.split('#')[0].split('?')[0]
+                    if clean_val not in seen:
+                        seen.add(clean_val)
+                        raw_candidates.append(clean_val)
+
+            detail_urls = []
+            category_urls = []
+            for val in raw_candidates:
+                lower = val.lower()
+                parsed = urllib.parse.urlparse(val)
+                parts = [p for p in parsed.path.split('/') if p]
+                slug = parts[-1] if parts else 'product'
+                category = parts[-2] if len(parts) >= 2 else p_name
+
+                is_detail = any(x in lower for x in ('products-detail', 'product-detail', '/detail/', '/item/', '/p/'))
+                if is_detail and not lower.replace('/', '').endswith('products-detail') and not lower.replace('/', '').endswith('product-detail'):
+                    detail_urls.append((val, category, slug))
+                else:
+                    category_urls.append((val, category, slug))
+
+            product_urls = detail_urls if len(detail_urls) > 0 else category_urls
+
+            # Auto-discovery fallback if HAR has few/no links but target_url exists
+            if (len(product_urls) < 10 or not detail_urls) and target_url and target_url.startswith('http'):
+                try:
+                    log_message(f"Đang tự động quét toàn bộ website '{target_url}' để thu thập thêm link sản phẩm...")
+                    auto_found = []
+                    sitemap_url = urllib.parse.urljoin(target_url, "/sitemap.xml")
+                    headers = {
+                        "User-Agent": HTTP_HEADERS["User-Agent"],
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Encoding": "gzip, deflate"
+                    }
+                    import urllib.request, gzip
+                    req = urllib.request.Request(sitemap_url, headers=headers)
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = resp.read()
+                        if resp.headers.get('Content-Encoding') == 'gzip':
+                            data = gzip.decompress(data)
+                        text = data.decode('utf-8', errors='replace')
+                        locs = re.findall(r'<loc>(https?://[^<]+)</loc>', text, re.I)
+                        for loc in locs:
+                            clean = loc.split('?')[0].split('#')[0]
+                            if any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
+                                continue
+                            if 'news-detail' in clean or 'solutions-detail' in clean or 'products-compare' in clean:
+                                continue
+                            lower = clean.lower()
+                            is_detail = any(x in lower for x in ('products-detail', 'product-detail', '/detail/', '/item/', '/p/'))
+                            if is_detail and not lower.rstrip('/').endswith('products-detail') and not lower.rstrip('/').endswith('product-detail'):
+                                if clean not in seen:
+                                    seen.add(clean)
+                                    parts = [p for p in urllib.parse.urlparse(clean).path.split('/') if p]
+                                    slug = parts[-1] if parts else 'product'
+                                    cat = parts[-2] if len(parts) >= 2 else p_name
+                                    auto_found.append((clean, cat, slug))
+                    if auto_found:
+                        log_message(f"Tự động quét sitemap website đã bổ sung thêm {len(auto_found)} đường dẫn sản phẩm!")
+                        product_urls = auto_found
+                except Exception as ex:
+                    log_message(f"Không tự quét được sitemap website: {ex}")
+
+            if product_urls:
+                log_message(f"Đã trích xuất {len(product_urls)} đường dẫn từ báo cáo HAR của Profile '{profile_slug}'")
+                return product_urls
+            else:
+                log_message(f"Lỗi: File HAR của Profile '{profile_slug}' chưa phát hiện được đường dẫn sản phẩm nào. Vui lòng kiểm tra lại file HAR.")
+                return []
+        except Exception as e:
+            log_message(f"Lỗi khi đọc báo cáo HAR của Profile '{profile_slug}': {e}")
+            return []
+
+    # Newland default profile
     sitemap_url = "https://www.newland-id.com/sitemap.xml"
     import urllib.request
     try:
@@ -316,32 +528,67 @@ async def get_product_urls():
         print(f"Error fetching sitemap: {e}")
         return []
 
-def extract_product_data(soup, slug):
-    """Extract all product fields from parsed HTML."""
+def extract_product_data(soup, slug, url=""):
+    """Extract all product fields from parsed HTML including Category and Series."""
     # 1. Name
-    name_el = soup.find("h1")
-    name = name_el.text.strip() if name_el else slug.replace("-", " ").title()
+    name_el = soup.find("h1") or soup.find("h2", class_=re.compile(r'title|product', re.I))
+    name = name_el.text.strip() if name_el else slug.replace("-", " ").replace("_", " ").title()
 
-    # 2. Description
+    # 2. Category & Series from Breadcrumbs or URL context
+    category = ""
+    series = ""
+    bc_el = soup.find(class_=re.compile(r'breadcrumb|crumbs|nav-path|location', re.I)) or             soup.find("nav", attrs={"aria-label": re.compile(r'breadcrumb', re.I)})
+    
+    if bc_el:
+        items = bc_el.find_all(["a", "li", "span"])
+        crumbs = []
+        for item in items:
+            t = item.text.strip()
+            if t and t not in crumbs and not any(x in t.lower() for x in ('home', 'trang chủ', 'main', '>', '/')):
+                crumbs.append(t)
+        if len(crumbs) >= 2:
+            category = crumbs[-2]
+            series = crumbs[-1]
+        elif len(crumbs) == 1:
+            category = crumbs[0]
+
+    if not category or not series:
+        parts = [p for p in urllib.parse.urlparse(url).path.split('/') if p] if url else []
+        if len(parts) >= 3:
+            if not category: category = parts[-3].replace('-', ' ').replace('_', ' ').title()
+            if not series: series = parts[-2].replace('-', ' ').replace('_', ' ').title()
+        elif len(parts) >= 2:
+            if not category: category = parts[-2].replace('-', ' ').replace('_', ' ').title()
+
+    # 3. Description
     description = ""
-    prose = soup.find("div", class_="prose")
+    prose = soup.find("div", class_=re.compile(r'prose|description|intro|summary', re.I))
     if prose:
         description = prose.text.strip()
     else:
-        meta = soup.find("meta", attrs={"name": "description"}) or \
-               soup.find("meta", property="og:description")
+        meta = soup.find("meta", attrs={"name": "description"}) or                soup.find("meta", property="og:description")
         if meta:
             description = meta.get("content", "").strip()
 
-    # 3. Image URL (from Katana PIM CDN — src attribute, no download needed)
+    # 4. Image URL
     image_url = ""
-    for img in soup.find_all("img"):
-        src = img.get("src", "")
-        if "katanapim.com" in src:
-            image_url = src
-            break
+    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"})
+    if og_img and og_img.get("content"):
+        image_url = og_img.get("content").strip()
 
-    # 4. Specifications table
+    if not image_url:
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            if not src or any(ext in src for ext in ('.svg', 'icon', 'logo', 'banner')):
+                continue
+            if any(k in src for k in ("katanapim", "upload", "catalog", "product", "item", "media", "images")):
+                image_url = src
+                break
+
+    if image_url and not image_url.startswith("http") and url:
+        image_url = urllib.parse.urljoin(url, image_url)
+
+    # 5. Specifications table
     specs = {}
     part_number = ""
     tables = soup.find_all("table")
@@ -353,18 +600,19 @@ def extract_product_data(soup, slug):
                 val = cols[1].text.strip()
                 if key and val:
                     specs[key] = val
-                    if "part number" in key.lower() or key.lower() == "pn":
-                        part_number = val
+                    if "part number" in key.lower() or key.lower() == "pn" or "model" in key.lower():
+                        if not part_number: part_number = val
+
     if not part_number and tables:
         for row in tables[-1].find_all("tr"):
             cols = [c.text.strip() for c in row.find_all(["td", "th"])]
             if len(cols) >= 2 and ("nls-" in cols[0].lower() or "part number" in cols[0].lower()):
                 part_number = cols[0]
 
-    # 5. Download links
+    # 6. Download links
     download_links = extract_download_links(soup)
 
-    return name, description, image_url, specs, part_number, download_links
+    return name, category, series, description, image_url, specs, part_number, download_links
 
 def extract_download_links(soup):
     """Extract downloadable file links from parsed HTML."""
@@ -432,7 +680,7 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
             skip = cursor.fetchone()[0] > 0
         conn.close()
         if skip:
-            update_status("Running", int(index / total * 100), total, index, f"Skipping {slug}...")
+            update_status("Running", int(index / total * 100), total, index, f"Skipping {slug}...", profile_slug)
             return
     except Exception as e:
         log_message(f"DB check error: {e}")
@@ -444,7 +692,10 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
     else:
         action = "Crawling"
     log_message(f"[{index}/{total}] {action}: {slug}")
-    update_status("Running", int(index / total * 100), total, index, f"{action} {slug}...")
+    if index >= total:
+        update_status("Completed", 100, total, total, f"Completed {action.lower()} {slug}.", profile_slug)
+    else:
+        update_status("Running", int(index / total * 100), total, index, f"{action} {slug}...", profile_slug)
 
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -475,22 +726,24 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
                 return
 
             # Full crawl
-            name, description, image_url, specs, part_number, downloads = extract_product_data(soup, slug)
+            name, cat_extracted, series_extracted, description, image_url, specs, part_number, downloads = extract_product_data(soup, slug, url)
+            if cat_extracted:
+                category = cat_extracted
 
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("""
             INSERT INTO products
-                (category, slug, name, description, image_url, url, specifications, part_number, download_links, profile_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (category, series, slug, name, description, image_url, url, specifications, part_number, download_links, profile_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(url) DO UPDATE SET
-                category=excluded.category, slug=excluded.slug,
+                category=excluded.category, series=excluded.series, slug=excluded.slug,
                 name=excluded.name, description=excluded.description,
                 image_url=excluded.image_url, specifications=excluded.specifications,
                 part_number=excluded.part_number, download_links=excluded.download_links,
                 profile_slug=excluded.profile_slug
             """, (
-                category, slug, name, description, image_url, url,
+                category, series_extracted, slug, name, description, image_url, url,
                 json.dumps(specs, ensure_ascii=False), part_number,
                 json.dumps(downloads, ensure_ascii=False), profile_slug
             ))
@@ -516,7 +769,7 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
 
     save_failed(url, category, slug, last_error)
 
-async def worker(queue, session, browser, browser_sem, total, mode):
+async def worker(queue, session, browser, browser_sem, total, mode, profile_slug="newland"):
     """
     Each worker picks items from the queue and processes them.
     Uses HTTP-first approach, so many workers can run concurrently without overloading the browser.
@@ -615,7 +868,7 @@ async def main():
     else:
         log_message("Fetching product URLs from sitemap...")
         update_status("Starting", 0, 0, 0, "Fetching sitemap...")
-        product_urls = await get_product_urls()
+        product_urls = await get_product_urls(profile_slug)
         log_message(f"Found {len(product_urls)} products in sitemap.")
         mode = 'full'
 
@@ -651,28 +904,32 @@ async def main():
         f"Browser slots={MAX_BROWSER_CONCURRENT} | Mode={mode}"
     )
 
-    async with aiohttp.ClientSession(connector=connector) as session:
-        async with AsyncCamoufox(headless=True, block_images=True) as browser:
-            log_message("Browser ready. Starting workers...")
+    try:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            try:
+                async with AsyncCamoufox(headless=True, block_images=True) as browser:
+                    log_message("Browser ready. Starting workers...")
 
-            queue = asyncio.Queue()
-            for i, url_info in enumerate(product_urls, start=1):
-                await queue.put((i, url_info))
+                    queue = asyncio.Queue()
+                    for i, url_info in enumerate(product_urls, start=1):
+                        await queue.put((i, url_info))
 
-            # Stagger worker starts by 0.1s each to spread initial load
-            workers = []
-            for i in range(concurrency):
-                await asyncio.sleep(0.1)
-                task = asyncio.create_task(
-                    worker(queue, session, browser, browser_sem, total, mode, profile_slug)
+                    workers = []
+                    for i in range(concurrency):
+                        await asyncio.sleep(0.1)
+                        task = asyncio.create_task(
+                            worker(queue, session, browser, browser_sem, total, mode, profile_slug)
+                        )
+                        workers.append(task)
 
-                )
-                workers.append(task)
-
-            await asyncio.gather(*workers)
-
-    log_message("Crawling completed.")
-    update_status("Completed", 100, total, total, "All done.")
+                    await asyncio.gather(*workers)
+            except Exception as b_err:
+                log_message(f"Browser execution closed with note: {b_err}")
+    except Exception as s_err:
+        log_message(f"Session closed with note: {s_err}")
+    finally:
+        log_message("Crawling completed.")
+        update_status("Completed", 100, total, total, "All done.", profile_slug)
 
 if __name__ == "__main__":
     asyncio.run(main())

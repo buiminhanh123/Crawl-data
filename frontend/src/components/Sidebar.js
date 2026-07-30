@@ -21,7 +21,10 @@ import {
     Link as LinkIcon,
     Upload,
     Trash2,
-    CheckCircle2
+    CheckCircle2,
+    Pause,
+    Play,
+    Square
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -43,6 +46,18 @@ export default function Sidebar() {
     const [creating, setCreating] = useState(false);
     const [activeProfileSlug, setActiveProfileSlug] = useState('');
 
+    useEffect(() => {
+        const fetchStatus = async () => {
+            try {
+                const s = await fetchApi('/api/products/crawler/status');
+                if (s) setCrawlerStatus(s);
+            } catch (e) {}
+        };
+        fetchStatus();
+        const timer = setInterval(fetchStatus, 2500);
+        return () => clearInterval(timer);
+    }, []);
+
     // ── Right-click context menu state ──
     const [ctxMenu, setCtxMenu] = useState(null); // { x, y, profile }
     const ctxRef = useRef(null);
@@ -51,8 +66,11 @@ export default function Sidebar() {
     const [editModal, setEditModal] = useState(null); // profile object being edited
     const [editName, setEditName] = useState('');
     const [editUrl, setEditUrl] = useState('');
+    const [editSitemapUrl, setEditSitemapUrl] = useState('');
+    const [editSitemapFile, setEditSitemapFile] = useState(null);
     const [editHarFile, setEditHarFile] = useState(null);
     const [editSaving, setEditSaving] = useState(false);
+    const [crawlerStatus, setCrawlerStatus] = useState(null);
     const [editMsg, setEditMsg] = useState('');
 
     // Realtime AI Runner State for Sidebar Card (Hand-Sketch Widget)
@@ -186,13 +204,19 @@ export default function Sidebar() {
     };
 
     // ── Open edit modal ──
-    const openEditModal = (profile) => {
+    const openEditModal = async (profile) => {
         setEditModal(profile);
         setEditName(profile.name || '');
         setEditUrl(profile.target_url || '');
+        setEditSitemapUrl(profile.sitemap_url || '');
+        setEditSitemapFile(null);
         setEditHarFile(null);
         setEditMsg('');
         setCtxMenu(null);
+        try {
+            const sm = await fetchApi(`/api/products/profiles/${profile.slug}/sitemap`);
+            if (sm?.sitemapUrl) setEditSitemapUrl(sm.sitemapUrl);
+        } catch (e) {}
     };
 
     // ── Save profile edits (name + url) ──
@@ -203,10 +227,17 @@ export default function Sidebar() {
         try {
             await fetchApi(`/api/products/profiles/${editModal.slug}`, {
                 method: 'PATCH',
-                body: JSON.stringify({ name: editName.trim(), target_url: editUrl.trim() })
+                body: JSON.stringify({ name: editName.trim(), target_url: editUrl.trim(), sitemap_url: editSitemapUrl.trim() })
             });
+            if (editSitemapFile) {
+                const text = await editSitemapFile.text();
+                await fetchApi(`/api/products/profiles/${editModal.slug}/sitemap`, {
+                    method: 'POST',
+                    body: JSON.stringify({ sitemapXml: text, sitemapUrl: editSitemapUrl.trim() })
+                });
+            }
             await fetchProfiles();
-            setEditMsg('✅ Đã lưu thay đổi!');
+            setEditMsg('✅ Đã lưu thay đổi Profile & Sitemap!');
         } catch (err) {
             setEditMsg('❌ ' + (err.message || 'Lỗi khi lưu'));
         } finally {
@@ -305,14 +336,171 @@ export default function Sidebar() {
                 <nav className="sidebar-nav">
                     {/* Dashboard */}
                     {hasPermission('dashboard') && (
-                        <Link
-                            href="/"
-                            className={`sidebar-nav-item ${pathname === '/' ? 'active' : ''}`}
-                            title={isCollapsed ? 'Dashboard' : ''}
-                        >
-                            <span className="icon"><LayoutDashboard size={20} /></span>
-                            <span className="nav-label">Dashboard</span>
-                        </Link>
+                        <div>
+                            <Link
+                                href="/"
+                                className={`sidebar-nav-item ${pathname === '/' ? 'active' : ''}`}
+                                title={isCollapsed ? 'Dashboard' : ''}
+                            >
+                                <span className="icon"><LayoutDashboard size={20} /></span>
+                                <span className="nav-label">Dashboard</span>
+                            </Link>
+
+                            {/* ════════════════════════════════════════════════════════════ */}
+                            {/* CRAWLER PROCESS CARD ON LEFT SIDEBAR (TIẾN TRÌNH CRAWL)      */}
+                            {/* ════════════════════════════════════════════════════════════ */}
+                            {!isCollapsed && (
+                                <div style={{
+                                    margin: '10px 10px 14px 10px',
+                                    padding: '12px',
+                                    background: 'var(--bg-card, #ffffff)',
+                                    borderRadius: '12px',
+                                    border: '2px solid #f97316',
+                                    boxShadow: '0 4px 16px rgba(249, 115, 22, 0.08)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '10px',
+                                    fontSize: '12px'
+                                }}>
+                                    {/* Title */}
+                                    <div style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--text-primary, #0f172a)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        🚀 Tiến trình Crawl
+                                    </div>
+
+                                    {/* Profile & Waiting Info */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '11.5px', color: 'var(--text-secondary, #475569)' }}>
+                                        <div>
+                                            <strong>Profile:</strong> <span style={{ color: '#f97316', fontWeight: 700 }}>{profiles.find(p => p.slug === crawlerStatus?.profile_slug)?.name || crawlerStatus?.profile_slug || 'Chưa chọn'}</span>
+                                        </div>
+                                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            <strong>Waiting:</strong> <span style={{ color: 'var(--text-muted, #94a3b8)' }}>{profiles.filter(p => p.slug !== crawlerStatus?.profile_slug).map(p => p.name).join(', ') || 'Không có'}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Status Box */}
+                                    <div style={{
+                                        padding: '6px 10px',
+                                        borderRadius: '8px',
+                                        textAlign: 'center',
+                                        fontWeight: 800,
+                                        fontSize: '13px',
+                                        border: '1px solid',
+                                        background: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'rgba(34, 197, 94, 0.1)' :
+                                                    crawlerStatus?.status === 'Paused' ? 'rgba(245, 158, 11, 0.1)' :
+                                                    crawlerStatus?.status === 'Error' ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-primary, #f8fafc)',
+                                        borderColor: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'rgba(34, 197, 94, 0.3)' :
+                                                     crawlerStatus?.status === 'Paused' ? 'rgba(245, 158, 11, 0.3)' :
+                                                     crawlerStatus?.status === 'Error' ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-color, #e2e8f0)',
+                                        color: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? '#16a34a' :
+                                               crawlerStatus?.status === 'Paused' ? '#d97706' :
+                                               crawlerStatus?.status === 'Error' ? '#dc2626' :
+                                               crawlerStatus?.status === 'Completed' ? '#059669' : 'var(--text-secondary, #64748b)'
+                                    }}>
+                                        {crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'Crawling' :
+                                         crawlerStatus?.status === 'Paused' ? 'Stop' :
+                                         crawlerStatus?.status === 'Error' ? 'Error' :
+                                         crawlerStatus?.status === 'Completed' ? 'Completed' : 'Idle'}
+                                    </div>
+
+                                    {/* Progress Bar & Text */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary, #475569)' }}>
+                                            <span>{crawlerStatus?.current_item || 0}/{crawlerStatus?.total_items || 0} hoàn thành</span>
+                                            <span style={{ color: '#f97316' }}>{crawlerStatus?.progress || 0}%</span>
+                                        </div>
+                                        <div style={{ width: '100%', height: '8px', background: 'var(--bg-primary, #f1f5f9)', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--border-color, #e2e8f0)' }}>
+                                            <div style={{
+                                                width: `${Math.min(100, Math.max(0, crawlerStatus?.progress || 0))}%`,
+                                                height: '100%',
+                                                background: crawlerStatus?.status === 'Paused' ? '#f59e0b' : crawlerStatus?.status === 'Completed' ? '#10b981' : '#f97316',
+                                                transition: 'width 0.4s ease'
+                                            }} />
+                                        </div>
+                                    </div>
+
+                                    {/* 4 Badges */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(34, 197, 94, 0.1)', color: '#15803d', border: '1px solid rgba(34, 197, 94, 0.2)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                            ✓ {crawlerStatus?.current_item || 0} Xong
+                                        </div>
+                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(148, 163, 184, 0.1)', color: 'var(--text-secondary, #475569)', border: '1px solid var(--border-color, #e2e8f0)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                            ⏳ {Math.max(0, (crawlerStatus?.total_items || 0) - (crawlerStatus?.current_item || 0))} Chờ
+                                        </div>
+                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.1)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.2)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                            ⚠ {crawlerStatus?.failed_items || 0} Lỗi
+                                        </div>
+                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(249, 115, 22, 0.1)', color: '#c2410c', border: '1px solid rgba(249, 115, 22, 0.2)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                            ⏭️ {crawlerStatus?.skipped_items || 0} Skip
+                                        </div>
+                                    </div>
+
+                                    {/* Controls Row */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, borderTop: '1px solid var(--border-color, #e2e8f0)', paddingTop: '8px' }}>
+                                        <button
+                                            type="button"
+                                            title="Tạm dừng"
+                                            disabled={crawlerStatus?.status !== 'Running' && crawlerStatus?.status !== 'Starting'}
+                                            onClick={async () => {
+                                                try {
+                                                    await fetchApi('/api/products/crawler/pause', { method: 'POST' });
+                                                    const s = await fetchApi('/api/products/crawler/status');
+                                                    if (s) setCrawlerStatus(s);
+                                                } catch (e) {}
+                                            }}
+                                            style={{
+                                                flex: 1, height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                background: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? '#f59e0b' : 'var(--bg-primary, #f1f5f9)',
+                                                color: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'white' : 'var(--text-muted, #94a3b8)',
+                                                border: '1px solid var(--border-color, #cbd5e1)', borderRadius: '6px', cursor: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'pointer' : 'not-allowed'
+                                            }}
+                                        >
+                                            <Pause size={15} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            title="Tiếp tục"
+                                            disabled={crawlerStatus?.status !== 'Paused'}
+                                            onClick={async () => {
+                                                try {
+                                                    await fetchApi('/api/products/crawler/resume', { method: 'POST' });
+                                                    const s = await fetchApi('/api/products/crawler/status');
+                                                    if (s) setCrawlerStatus(s);
+                                                } catch (e) {}
+                                            }}
+                                            style={{
+                                                flex: 1, height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                background: crawlerStatus?.status === 'Paused' ? '#16a34a' : 'var(--bg-primary, #f1f5f9)',
+                                                color: crawlerStatus?.status === 'Paused' ? 'white' : 'var(--text-muted, #94a3b8)',
+                                                border: '1px solid var(--border-color, #cbd5e1)', borderRadius: '6px', cursor: crawlerStatus?.status === 'Paused' ? 'pointer' : 'not-allowed'
+                                            }}
+                                        >
+                                            <Play size={15} fill={crawlerStatus?.status === 'Paused' ? 'white' : 'var(--text-muted, #94a3b8)'} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            title="Dừng hẳn"
+                                            disabled={crawlerStatus?.status !== 'Running' && crawlerStatus?.status !== 'Starting' && crawlerStatus?.status !== 'Paused'}
+                                            onClick={async () => {
+                                                if (!window.confirm('Dừng crawler?')) return;
+                                                try {
+                                                    await fetchApi('/api/products/crawler/stop', { method: 'POST' });
+                                                    const s = await fetchApi('/api/products/crawler/status');
+                                                    if (s) setCrawlerStatus(s);
+                                                } catch (e) {}
+                                            }}
+                                            style={{
+                                                flex: 1, height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                background: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? '#ef4444' : 'var(--bg-primary, #f1f5f9)',
+                                                color: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'white' : 'var(--text-muted, #94a3b8)',
+                                                border: '1px solid var(--border-color, #cbd5e1)', borderRadius: '6px', cursor: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'pointer' : 'not-allowed'
+                                            }}
+                                        >
+                                            <Square size={15} fill={(crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'white' : 'var(--text-muted, #94a3b8)'} />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     )}
 
                     {/* Products (with Sub-menu) */}
@@ -339,28 +527,37 @@ export default function Sidebar() {
                             {!isCollapsed && productsExpanded && (
                                 <div className="sidebar-submenu">
                                     {profiles.map(p => {
-                                        const isProfileActive = pathname === '/products' && (activeProfileSlug === p.slug || (!activeProfileSlug && p.slug === 'newland'));
-                                        return (
-                                            <div
-                                                key={p.id}
-                                                style={{ position: 'relative' }}
-                                                onContextMenu={e => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                    setCtxMenu({ x: e.clientX, y: e.clientY, profile: p });
-                                                }}
-                                            >
-                                                <Link
-                                                    href={`/products?profile=${p.slug}`}
-                                                    onClick={() => setActiveProfileSlug(p.slug)}
-                                                    className={`sidebar-submenu-item ${isProfileActive ? 'active' : ''}`}
-                                                >
-                                                    <Package size={16} style={{ color: isProfileActive ? 'var(--accent)' : 'var(--text-muted)' }} />
-                                                    <span>{p.name.startsWith('Profile') ? p.name : `Profile ${p.name}`}</span>
-                                                </Link>
-                                            </div>
-                                        );
-                                    })}
+                                         const isProfileActive = pathname === '/products' && (activeProfileSlug === p.slug || (!activeProfileSlug && p.slug === 'newland'));
+                                         const isProfileCrawling = crawlerStatus && (crawlerStatus.status === 'Running' || crawlerStatus.status === 'Starting') && crawlerStatus.profile_slug === p.slug;
+                                         return (
+                                             <div
+                                                 key={p.id}
+                                                 style={{ position: 'relative' }}
+                                                 onContextMenu={e => {
+                                                     e.preventDefault();
+                                                     e.stopPropagation();
+                                                     setCtxMenu({ x: e.clientX, y: e.clientY, profile: p });
+                                                 }}
+                                             >
+                                                 <Link
+                                                     href={`/products?profile=${p.slug}`}
+                                                     onClick={() => setActiveProfileSlug(p.slug)}
+                                                     className={`sidebar-submenu-item ${isProfileActive ? 'active' : ''}`}
+                                                     style={isProfileCrawling ? { borderLeft: '3px solid #16a34a', background: 'rgba(22,163,74,0.1)' } : {}}
+                                                 >
+                                                     <Package size={16} style={{ color: isProfileCrawling ? '#16a34a' : isProfileActive ? 'var(--accent)' : 'var(--text-muted)' }} />
+                                                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                         {p.name.startsWith('Profile') ? p.name : `Profile ${p.name}`}
+                                                     </span>
+                                                     {isProfileCrawling && (
+                                                         <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 8, background: '#16a34a', color: 'white' }}>
+                                                             CRAWL
+                                                         </span>
+                                                     )}
+                                                 </Link>
+                                             </div>
+                                         );
+                                     })}
 
                                     {/* + Thêm Profile Button */}
                                     <button
@@ -721,6 +918,38 @@ export default function Sidebar() {
                             />
                         </div>
 
+                        {/* Edit Sitemap URL */}
+                        <div>
+                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 5 }}>
+                                🗺️ Link Sitemap.xml của hãng (Tùy chọn)
+                            </label>
+                            <input
+                                type="url"
+                                value={editSitemapUrl}
+                                onChange={e => setEditSitemapUrl(e.target.value)}
+                                placeholder="https://www.example.com/sitemap.xml"
+                                style={{ width: '100%', padding: '9px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                            />
+                        </div>
+
+                        {/* Upload Sitemap XML File */}
+                        <div>
+                            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 5 }}>
+                                📄 Upload File sitemap.xml từ máy tính (Tùy chọn)
+                            </label>
+                            <input
+                                type="file"
+                                accept=".xml"
+                                onChange={e => setEditSitemapFile(e.target.files?.[0] || null)}
+                                style={{ width: '100%', fontSize: 12, padding: '7px 10px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary)', cursor: 'pointer', color: 'var(--text-primary)' }}
+                            />
+                            {editSitemapFile && (
+                                <div style={{ marginTop: 4, fontSize: 11, color: '#16a34a', fontWeight: 600 }}>
+                                    ✅ Đã chọn: {editSitemapFile.name} ({(editSitemapFile.size / 1024).toFixed(1)} KB)
+                                </div>
+                            )}
+                        </div>
+
                         {/* Save name+url */}
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                             <button type="button" className="btn btn-ghost" onClick={() => setEditModal(null)}>Hủy</button>
@@ -774,3 +1003,4 @@ export default function Sidebar() {
         </>
     );
 }
+

@@ -155,6 +155,12 @@ async function initDatabase() {
     // Migrate: add har_report_json column if not exists
     try {
         db.run('ALTER TABLE product_profiles ADD COLUMN har_report_json TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN sitemap_xml TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN sitemap_url TEXT DEFAULT NULL');
     } catch (e) {} // Column may already exist
 
     try {
@@ -297,6 +303,10 @@ async function openProductsDb() {
             db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
         } catch (e) {}
 
+        try {
+            db.run("ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'");
+        } catch (e) {}
+
         db.run(`
             CREATE TABLE IF NOT EXISTS crawler_status (
                 id INTEGER PRIMARY KEY,
@@ -318,9 +328,14 @@ async function openProductsDb() {
     // If DB already exists, also migrate
     try {
         db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run("ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'");
+    } catch (e) {}
+    try {
         const dbData = db.export();
         fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(dbData));
-    } catch (e) {} // Column already exists
+    } catch (e) {}
 
     return db;
 }
@@ -365,9 +380,21 @@ const productQueries = {
         if (!res[0]) return { total, items: [] };
         
         const cols = res[0].columns;
-        const items = res[0].values.map(vals => 
-            Object.fromEntries(cols.map((c, i) => [c, vals[i]]))
-        );
+        let profilesList = [];
+        try { profilesList = profileQueries.getAll(); } catch (e) {}
+        const profilesMap = {};
+        profilesList.forEach(p => {
+            profilesMap[p.slug] = p.brand_name || p.name;
+        });
+
+        const items = res[0].values.map(vals => {
+            const item = Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+            const pSlug = item.profile_slug || profileSlug || '';
+            const resolvedBrand = profilesMap[pSlug] || (pSlug ? pSlug.replace(/^profile-?/i, '').toUpperCase() : 'Newland');
+            item.brand = resolvedBrand;
+            item.brand_name = resolvedBrand;
+            return item;
+        });
         return { total, items };
     },
     
@@ -378,7 +405,14 @@ const productQueries = {
         if (!res[0]?.values[0]) return null;
         const cols = res[0].columns;
         const vals = res[0].values[0];
-        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+        const item = Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+        const pSlug = item.profile_slug || '';
+        let profileObj = null;
+        try { profileObj = profileQueries.getBySlug(pSlug); } catch (e) {}
+        const resolvedBrand = profileObj?.brand_name || profileObj?.name || (pSlug ? pSlug.replace(/^profile-?/i, '').toUpperCase() : 'Newland');
+        item.brand = resolvedBrand;
+        item.brand_name = resolvedBrand;
+        return item;
     },
     
     getCategories: async (profileSlug = '') => {
@@ -428,6 +462,22 @@ const productQueries = {
         return { totalProducts, categoryCounts };
     },
 
+    deleteById: async (id) => {
+        const pdb = await openProductsDb();
+        pdb.run('DELETE FROM products WHERE id = ?', [id]);
+        saveProductsDb(pdb);
+        pdb.close();
+    },
+
+    deleteBatch: async (ids = []) => {
+        if (!ids || ids.length === 0) return;
+        const pdb = await openProductsDb();
+        const placeholders = ids.map(() => '?').join(',');
+        pdb.run(`DELETE FROM products WHERE id IN (${placeholders})`, ids);
+        saveProductsDb(pdb);
+        pdb.close();
+    },
+
     deleteByProfile: async (profileSlug) => {
         const pdb = await openProductsDb();
         pdb.run('DELETE FROM products WHERE profile_slug = ?', [profileSlug]);
@@ -445,13 +495,21 @@ const productQueries = {
         return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
     },
     
-    updateCrawlerStatus: async (status, progress, total_items, current_item, last_message) => {
+    updateCrawlerStatus: async (status, progress, total_items, current_item, last_message, profile_slug = '') => {
         const pdb = await openProductsDb();
-        pdb.run(`
-            UPDATE crawler_status 
-            SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, updated_at = datetime('now')
-            WHERE id = 1
-        `, [status, progress, total_items, current_item, last_message]);
+        if (profile_slug) {
+            pdb.run(`
+                UPDATE crawler_status 
+                SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, profile_slug = ?, updated_at = datetime('now')
+                WHERE id = 1
+            `, [status, progress, total_items, current_item, last_message, profile_slug]);
+        } else {
+            pdb.run(`
+                UPDATE crawler_status 
+                SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, updated_at = datetime('now')
+                WHERE id = 1
+            `, [status, progress, total_items, current_item, last_message]);
+        }
         saveProductsDb(pdb);
         pdb.close();
     },
@@ -711,10 +769,10 @@ const profileQueries = {
         saveDatabase();
     },
 
-    update: (slug, name, targetUrl) => {
+    update: (slug, name, targetUrl, sitemapUrl = '') => {
         db.run(
-            'UPDATE product_profiles SET name = ?, target_url = ?, updated_at = datetime("now") WHERE slug = ?',
-            [name.trim(), (targetUrl || '').trim(), slug]
+            'UPDATE product_profiles SET name = ?, target_url = ?, sitemap_url = ?, updated_at = datetime("now") WHERE slug = ?',
+            [name.trim(), (targetUrl || '').trim(), (sitemapUrl || '').trim(), slug]
         );
         saveDatabase();
         const res = db.exec('SELECT * FROM product_profiles WHERE slug = ?', [slug]);
@@ -729,6 +787,23 @@ const profileQueries = {
             [JSON.stringify(reportJson), slug]
         );
         saveDatabase();
+    },
+
+    saveSitemap: (slug, { sitemapXml, sitemapUrl }) => {
+        db.run(
+            'UPDATE product_profiles SET sitemap_xml = ?, sitemap_url = ?, updated_at = datetime("now") WHERE slug = ?',
+            [sitemapXml || null, sitemapUrl || null, slug]
+        );
+        saveDatabase();
+    },
+
+    getSitemap: (slug) => {
+        const res = db.exec('SELECT sitemap_xml, sitemap_url FROM product_profiles WHERE slug = ?', [slug]);
+        if (!res[0]?.values[0]) return { sitemapXml: null, sitemapUrl: null };
+        return {
+            sitemapXml: res[0].values[0][0] || null,
+            sitemapUrl: res[0].values[0][1] || null
+        };
     },
 
     getHarReport: (slug) => {

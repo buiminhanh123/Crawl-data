@@ -31,6 +31,8 @@ import {
     CheckCircle2,
     Plus,
     Trash2,
+    Upload,
+    Square,
     Scissors,
     Clipboard,
     Eraser,
@@ -92,6 +94,13 @@ function ProductsContent() {
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [toasts, setToasts] = useState([]);
 
+    // Custom Double-Check Config Modals State
+    const [showSitemapModal, setShowSitemapModal] = useState(false);
+    const [showTargetUrlModal, setShowTargetUrlModal] = useState(false);
+    const [inputTargetUrl, setInputTargetUrl] = useState('');
+    const [inputSitemapUrl, setInputSitemapUrl] = useState('');
+    const [activeSitemapTab, setActiveSitemapTab] = useState('file');
+
     const toast = (msg, type = 'success') => {
         const id = Date.now();
         setToasts(p => [...p, { id, message: msg, type }]);
@@ -148,6 +157,7 @@ function ProductsContent() {
 
     // HAR Analysis Report state
     const [harReport, setHarReport] = useState(null);
+    const [sitemapInfo, setSitemapInfo] = useState(null);
     const [harReportLoading, setHarReportLoading] = useState(false);
 
     const fetchHarReport = async (slug) => {
@@ -169,6 +179,23 @@ function ProductsContent() {
     useEffect(() => {
         setPageRowLimit(100);
     }, [activeSheetTabName]);
+
+    useEffect(() => {
+        const loadProfileMeta = async () => {
+            try {
+                const res = await fetchApi('/api/products/profiles');
+                if (res?.profiles) {
+                    const found = res.profiles.find(p => p.slug === profileSlug);
+                    if (found) setCurrentProfile(found);
+                }
+            } catch (e) {}
+            try {
+                const sm = await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`);
+                if (sm) setSitemapInfo(sm);
+            } catch (e) {}
+        };
+        loadProfileMeta();
+    }, [profileSlug]);
 
     useEffect(() => {
         const handleHarReady = (e) => {
@@ -2182,243 +2209,6 @@ function ProductsContent() {
                 </div>
             )}
 
-            {/* View Mode 2: Filter Bar & Data Table Card (Products List) */}
-            {viewMode === 'products' && (
-                <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)' }}>
-                
-                {/* Search & Filters */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 16 }}>
-                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <div style={{ position: 'relative' }}>
-                            <Filter size={16} style={{ position: 'absolute', left: 12, top: 12, color: 'var(--text-muted)' }} />
-                            <select 
-                                className="form-select" 
-                                value={selectedCategory} 
-                                onChange={handleCategoryChange}
-                                style={{ 
-                                    paddingLeft: 34, 
-                                    height: 40, 
-                                    width: 220, 
-                                    borderRadius: 'var(--radius-md)', 
-                                    border: '1px solid var(--border-color)',
-                                    color: 'var(--text-primary)',
-                                    background: 'var(--bg-secondary)',
-                                    fontSize: 13
-                                }}
-                            >
-                                <option value="">All Categories</option>
-                                {categories.map(cat => (
-                                    <option key={cat} value={cat}>{formatCategory(cat)}</option>
-                                ))}
-                            </select>
-                        </div>
-
-                        {/* Convert Crawler Products to Sheet Button */}
-                        <button
-                            type="button"
-                            onClick={() => setShowCrawlerToSheetModal(true)}
-                            style={{
-                                padding: '8px 16px',
-                                height: 40,
-                                background: 'var(--gradient-primary)',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: 'var(--radius-md)',
-                                fontWeight: 600,
-                                fontSize: 13,
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 8
-                            }}
-                        >
-                            <FileSpreadsheet size={16} /> 📥 Chuyển {selectedCrawlerProductIds.length > 0 ? `(${selectedCrawlerProductIds.length} chọn)` : 'tất cả'} sang Sheet
-                        </button>
-                    </div>
-
-                    <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <div style={{ position: 'relative' }}>
-                            <Search size={16} style={{ position: 'absolute', left: 12, top: 12, color: 'var(--text-muted)' }} />
-                            <input 
-                                className="form-input" 
-                                style={{ 
-                                    paddingLeft: 36, 
-                                    width: 280, 
-                                    height: 40,
-                                    borderRadius: 'var(--radius-md)', 
-                                    border: '1px solid var(--border-color)',
-                                    background: 'var(--bg-secondary)',
-                                    color: 'var(--text-primary)',
-                                    fontSize: 13
-                                }} 
-                                placeholder="Search by name, spec, part number..." 
-                                value={searchInput}
-                                onChange={(e) => setSearchInput(e.target.value)}
-                            />
-                        </div>
-                        <button 
-                            type="submit" 
-                            className="btn btn-secondary"
-                            style={{ 
-                                height: 40,
-                                padding: '0 16px',
-                                borderRadius: 'var(--radius-md)',
-                                border: '1px solid var(--border-color)',
-                                cursor: 'pointer',
-                                fontWeight: 500,
-                                background: 'var(--bg-primary)',
-                                color: 'var(--text-secondary)'
-                            }}
-                        >
-                            Search
-                        </button>
-                    </form>
-                </div>
-
-                {/* Table Wrapper */}
-                <div className="table-wrapper" style={{ overflowX: 'auto', marginBottom: 20 }}>
-                    <table className="table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                        <thead>
-                            <tr style={{ borderBottom: '2px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                                <th style={{ padding: '12px 16px', width: 40, textAlign: 'center' }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedCrawlerProductIds.length === products.length && products.length > 0}
-                                        onChange={toggleSelectAllCrawlerProducts}
-                                        style={{ cursor: 'pointer' }}
-                                    />
-                                </th>
-                                <th style={{ padding: '12px 16px', width: 50 }}>#</th>
-                                <th style={{ padding: '12px 16px', width: 90 }}>Thumbnail</th>
-                                <th style={{ padding: '12px 16px' }}>Product Name</th>
-                                <th style={{ padding: '12px 16px', width: 220 }}>Category</th>
-                                <th style={{ padding: '12px 16px', width: 180 }}>Part Number</th>
-                                <th style={{ padding: '12px 16px', width: 140, textAlign: 'center' }}>Details</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {loading ? (
-                                <tr>
-                                    <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                                        <div style={{ width: 32, height: 32, border: '3px solid var(--border-color)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
-                                        Fetching products list...
-                                    </td>
-                                </tr>
-                            ) : products.length === 0 ? (
-                                <tr>
-                                    <td colSpan={7} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-                                            <Package size={48} style={{ color: 'var(--accent)', opacity: 0.4 }} />
-                                            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
-                                                Chưa có dữ liệu Crawler cho {currentProfile?.name || 'Profile này'}
-                                            </div>
-                                            <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 450 }}>
-                                                Profile này chưa có sản phẩm nào được crawl trong cơ sở dữ liệu. Bạn có thể nạp file HAR hoặc kích hoạt Crawler để quét sản phẩm cho hãng này.
-                                            </div>
-                                        </div>
-                                    </td>
-                                </tr>
-
-                            ) : (
-                                products.map((prod, i) => (
-                                    <tr key={prod.id} style={{ borderBottom: '1px solid var(--border-color)', height: 72, background: selectedCrawlerProductIds.includes(prod.id) ? 'rgba(99,102,241,0.04)' : 'transparent' }}>
-                                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedCrawlerProductIds.includes(prod.id)}
-                                                onChange={() => toggleSelectCrawlerProduct(prod.id)}
-                                                style={{ cursor: 'pointer' }}
-                                            />
-                                        </td>
-                                        <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>
-                                            {(currentPage - 1) * limit + i + 1}
-                                        </td>
-                                        <td style={{ padding: '12px 16px' }}>
-                                            {prod.image_url ? (
-                                                <img 
-                                                    src={prod.image_url} 
-                                                    alt={prod.name} 
-                                                    style={{ width: 56, height: 56, objectFit: 'contain', background: '#fff', padding: 4, border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}
-                                                />
-                                            ) : (
-                                                <div style={{ width: 56, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-                                                    <Package size={24} style={{ color: 'var(--text-muted)' }} />
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                {prod.name}
-                                                <a href={prod.url} target="_blank" rel="noopener noreferrer" title="View original site" style={{ color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}>
-                                                    <ExternalLink size={12} />
-                                                </a>
-                                            </div>
-                                        </td>
-                                        <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', fontSize: 13 }}>
-                                            {formatCategory(prod.category)}
-                                        </td>
-                                        <td style={{ padding: '12px 16px', fontWeight: 500, color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: 12 }}>
-                                            {prod.part_number || '-'}
-                                        </td>
-                                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                                            <button 
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={() => openProductDetails(prod)}
-                                                style={{ 
-                                                    display: 'inline-flex', 
-                                                    alignItems: 'center', 
-                                                    gap: 6,
-                                                    padding: '6px 12px',
-                                                    borderRadius: 'var(--radius-sm)',
-                                                    cursor: 'pointer',
-                                                    fontSize: 12
-                                                }}
-                                            >
-                                                <Eye size={14} /> View Specs
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-
-                {/* Pagination Controls */}
-                {products.length > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-                        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                            Showing <strong>{(currentPage - 1) * limit + 1}</strong> to <strong>{Math.min(currentPage * limit, totalProducts)}</strong> of <strong>{totalProducts}</strong> products
-                        </span>
-                        
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <button 
-                                className="btn btn-secondary btn-sm" 
-                                disabled={currentPage === 1}
-                                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-                                style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
-                            >
-                                <ChevronLeft size={16} /> Prev
-                            </button>
-                            
-                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
-                                Page {currentPage} of {totalPages}
-                            </span>
-                            
-                            <button 
-                                className="btn btn-secondary btn-sm" 
-                                disabled={currentPage === totalPages}
-                                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-                                style={{ display: 'flex', alignItems: 'center', padding: '6px 10px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
-                            >
-                                Next <ChevronRight size={16} />
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
-            )}
-
             {/* Specifications Modal Overlay */}
             {showModal && selectedProduct && (
                 <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }} onClick={() => setShowModal(false)}>
@@ -2486,85 +2276,109 @@ function ProductsContent() {
 
                             {/* Specifications Grid */}
                             <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12 }}>Technical Specifications</h5>
-                            {Object.keys(selectedProduct.parsedSpecs).length > 0 ? (
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
-                                    {Object.entries(selectedProduct.parsedSpecs).map(([key, val]) => (
-                                        <div key={key} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: '10px 12px', borderBottom: '1px solid var(--border-color)', fontSize: 13, alignItems: 'start' }}>
-                                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{key}</span>
-                                            <span style={{ color: 'var(--text-secondary)' }}>{val}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 20 }}>
-                                    No technical specifications parsed for this item.
-                                </p>
-                            )}
+                            {(() => {
+                                let specsObj = {};
+                                if (selectedProduct.parsedSpecs && typeof selectedProduct.parsedSpecs === 'object') {
+                                    specsObj = selectedProduct.parsedSpecs;
+                                } else if (typeof selectedProduct.specifications === 'string') {
+                                    try { specsObj = JSON.parse(selectedProduct.specifications) || {}; } catch (e) {}
+                                } else if (selectedProduct.specifications && typeof selectedProduct.specifications === 'object') {
+                                    specsObj = selectedProduct.specifications;
+                                }
+                                const entries = Object.entries(specsObj);
+                                if (entries.length === 0) {
+                                    return (
+                                        <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 20 }}>
+                                            No technical specifications parsed for this item.
+                                        </p>
+                                    );
+                                }
+                                return (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+                                        {entries.map(([key, val]) => (
+                                            <div key={key} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: '10px 12px', borderBottom: '1px solid var(--border-color)', fontSize: 13, alignItems: 'start' }}>
+                                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{key}</span>
+                                                <span style={{ color: 'var(--text-secondary)' }}>{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
 
                             {/* Download Links */}
-                            {selectedProduct.parsedDownloads && selectedProduct.parsedDownloads.length > 0 && (
-                                <div style={{ marginTop: 28 }}>
-                                    <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <Download size={15} style={{ color: 'var(--accent)' }} /> Downloads ({selectedProduct.parsedDownloads.length} files)
-                                    </h5>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                        {selectedProduct.parsedDownloads.map((dl, idx) => {
-                                            const ext = dl.url.split('?')[0].split('.').pop().toLowerCase();
-                                            const extColors = { pdf: '#ef4444', zip: '#f59e0b', exe: '#8b5cf6', apk: '#10b981', fw: '#0ea5e9', bin: '#64748b' };
-                                            const color = extColors[ext] || '#64748b';
-                                            return (
-                                                <a
-                                                    key={idx}
-                                                    href={dl.url}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    style={{
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: 12,
-                                                        padding: '10px 14px',
-                                                        background: 'var(--bg-primary)',
-                                                        border: '1px solid var(--border-color)',
-                                                        borderRadius: 'var(--radius-md)',
-                                                        textDecoration: 'none',
-                                                        transition: 'border-color 0.15s'
-                                                    }}
-                                                    onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
-                                                    onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-color)'}
-                                                >
-                                                    <span style={{
-                                                        background: color + '22',
-                                                        color,
-                                                        fontSize: 10,
-                                                        fontWeight: 700,
-                                                        padding: '3px 7px',
-                                                        borderRadius: 4,
-                                                        textTransform: 'uppercase',
-                                                        minWidth: 36,
-                                                        textAlign: 'center',
-                                                        flexShrink: 0
-                                                    }}>
-                                                        {ext}
-                                                    </span>
-                                                    <span style={{ flex: 1, fontSize: 13, color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                        {dl.name}
-                                                    </span>
-                                                    <ExternalLink size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                                                </a>
-                                            );
-                                        })}
+                            {(() => {
+                                let downloadsArr = [];
+                                if (Array.isArray(selectedProduct.parsedDownloads)) {
+                                    downloadsArr = selectedProduct.parsedDownloads;
+                                } else if (typeof selectedProduct.download_links === 'string') {
+                                    try { downloadsArr = JSON.parse(selectedProduct.download_links) || []; } catch (e) {}
+                                } else if (Array.isArray(selectedProduct.download_links)) {
+                                    downloadsArr = selectedProduct.download_links;
+                                }
+                                if (downloadsArr.length === 0) {
+                                    return (
+                                        <div style={{ marginTop: 28 }}>
+                                            <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Download size={15} style={{ color: 'var(--text-muted)' }} /> Downloads
+                                            </h5>
+                                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No download files found for this product.</p>
+                                        </div>
+                                    );
+                                }
+                                return (
+                                    <div style={{ marginTop: 28 }}>
+                                        <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <Download size={15} style={{ color: 'var(--accent)' }} /> Downloads ({downloadsArr.length} files)
+                                        </h5>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            {downloadsArr.map((dl, idx) => {
+                                                const url = dl.url || '';
+                                                const ext = url.split('?')[0].split('.').pop().toLowerCase();
+                                                const extColors = { pdf: '#ef4444', zip: '#f59e0b', exe: '#8b5cf6', apk: '#10b981', fw: '#0ea5e9', bin: '#64748b' };
+                                                const color = extColors[ext] || '#64748b';
+                                                return (
+                                                    <a
+                                                        key={idx}
+                                                        href={url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: 12,
+                                                            padding: '10px 14px',
+                                                            background: 'var(--bg-primary)',
+                                                            border: '1px solid var(--border-color)',
+                                                            borderRadius: 'var(--radius-md)',
+                                                            textDecoration: 'none',
+                                                            transition: 'border-color 0.15s'
+                                                        }}
+                                                    >
+                                                        <span style={{
+                                                            background: color + '22',
+                                                            color,
+                                                            fontSize: 10,
+                                                            fontWeight: 700,
+                                                            padding: '3px 7px',
+                                                            borderRadius: 4,
+                                                            textTransform: 'uppercase',
+                                                            minWidth: 36,
+                                                            textAlign: 'center',
+                                                            flexShrink: 0
+                                                        }}>
+                                                            {ext || 'FILE'}
+                                                        </span>
+                                                        <span style={{ flex: 1, fontSize: 13, color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {dl.name || url}
+                                                        </span>
+                                                        <ExternalLink size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                                                    </a>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
-                                </div>
-                            )}
-
-                            {selectedProduct.parsedDownloads !== undefined && selectedProduct.parsedDownloads.length === 0 && (
-                                <div style={{ marginTop: 28 }}>
-                                    <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <Download size={15} style={{ color: 'var(--text-muted)' }} /> Downloads
-                                    </h5>
-                                    <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No download files found for this product.</p>
-                                </div>
-                            )}
+                                );
+                            })()}
 
                         </div>
 
@@ -2575,6 +2389,228 @@ function ProductsContent() {
                     </div>
                 </div>
             )}
+            {/* Modal 1: Cấu hình Sitemap XML (Gộp 2 phần Nạp File & Nhập Link) */}
+            {showSitemapModal && (
+                <div className="modal-backdrop" onClick={() => setShowSitemapModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '95vw', padding: 0, borderRadius: 'var(--radius-xl)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)', background: 'var(--bg-card)', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+                        {/* Header */}
+                        <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    🗺️ Cấu Hình Sitemap XML
+                                </h3>
+                                <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.8 }}>
+                                    Profile: <strong>{currentProfile?.name || profileSlug}</strong>
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setShowSitemapModal(false)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {/* Modal Body */}
+                        <div style={{ padding: 24 }}>
+                            {/* Tab Switcher: 1. Nạp File XML | 2. Nhập Link Sitemap Online */}
+                            <div style={{ display: 'flex', gap: 8, background: 'var(--bg-primary)', padding: 4, borderRadius: 8, border: '1px solid var(--border-color)', marginBottom: 20 }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveSitemapTab('file')}
+                                    style={{ flex: 1, padding: '8px 12px', fontSize: 13, fontWeight: 600, border: 'none', borderRadius: 6, cursor: 'pointer', background: activeSitemapTab === 'file' ? 'var(--bg-card)' : 'transparent', color: activeSitemapTab === 'file' ? 'var(--accent)' : 'var(--text-muted)', boxShadow: activeSitemapTab === 'file' ? 'var(--shadow-sm)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                                >
+                                    📄 1. Nạp File sitemap.xml
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveSitemapTab('link')}
+                                    style={{ flex: 1, padding: '8px 12px', fontSize: 13, fontWeight: 600, border: 'none', borderRadius: 6, cursor: 'pointer', background: activeSitemapTab === 'link' ? 'var(--bg-card)' : 'transparent', color: activeSitemapTab === 'link' ? 'var(--accent)' : 'var(--text-muted)', boxShadow: activeSitemapTab === 'link' ? 'var(--shadow-sm)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                                >
+                                    🔗 2. Nhập Link Sitemap Online
+                                </button>
+                            </div>
+
+                            {/* Section 1: Upload File XML */}
+                            {activeSitemapTab === 'file' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                                    <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, border: '2px dashed var(--border-color)', borderRadius: 12, padding: '36px 20px', cursor: 'pointer', background: 'var(--bg-primary)', transition: 'border-color 0.2s' }}>
+                                        <Upload size={32} style={{ color: 'var(--accent)' }} />
+                                        <div style={{ textAlign: 'center' }}>
+                                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                                Bấm để chọn file <code>.xml</code> hoặc Kéo thả vào đây
+                                            </div>
+                                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                Chấp nhận file <code>sitemap.xml</code> từ máy tính
+                                            </div>
+                                        </div>
+                                        <input
+                                            type="file"
+                                            accept=".xml"
+                                            style={{ display: 'none' }}
+                                            onChange={async (e) => {
+                                                const file = e.target.files?.[0];
+                                                if (!file) return;
+                                                try {
+                                                    const text = await file.text();
+                                                    await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`, {
+                                                        method: 'POST',
+                                                        body: JSON.stringify({ sitemapXml: text })
+                                                    });
+                                                    setSitemapInfo(prev => ({ ...prev, sitemapXml: text }));
+                                                    toast(`✅ Đã nạp thành công file sitemap.xml (${(file.size / 1024).toFixed(1)} KB)!`, 'success');
+                                                    setShowSitemapModal(false);
+                                                } catch (err) {
+                                                    toast('❌ Lỗi khi nạp file sitemap: ' + err.message, 'danger');
+                                                }
+                                            }}
+                                        />
+                                    </label>
+                                    {sitemapInfo?.sitemapXml && (
+                                        <div style={{ fontSize: 12, color: '#16a34a', background: 'rgba(22,163,74,0.1)', padding: '8px 12px', borderRadius: 6, border: '1px solid rgba(22,163,74,0.3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <CheckCircle2 size={15} /> File Sitemap XML hiện tại đã sẵn sàng trong cơ sở dữ liệu.
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Section 2: Nhập Link Online */}
+                            {activeSitemapTab === 'link' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                                    <div>
+                                        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: 6 }}>
+                                            Đường Dẫn URL Sitemap Online:
+                                        </label>
+                                        <input
+                                            type="url"
+                                            placeholder="https://www.argox.com/sitemap.xml"
+                                            value={inputSitemapUrl}
+                                            onChange={e => setInputSitemapUrl(e.target.value)}
+                                            style={{ width: '100%', padding: '10px 14px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                        />
+                                        <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                                            💡 VD: <code>https://www.argox.com/sitemap.xml</code> hoặc <code>https://brand.com/product-sitemap.xml</code>
+                                        </p>
+                                    </div>
+
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowSitemapModal(false)}
+                                            className="btn btn-secondary"
+                                            style={{ padding: '8px 16px', fontSize: 13 }}
+                                        >
+                                            Hủy
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={async () => {
+                                                if (!inputSitemapUrl.trim()) {
+                                                    toast('⚠️ Vui lòng nhập link sitemap!', 'warning');
+                                                    return;
+                                                }
+                                                try {
+                                                    await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`, {
+                                                        method: 'POST',
+                                                        body: JSON.stringify({ sitemapUrl: inputSitemapUrl.trim() })
+                                                    });
+                                                    setSitemapInfo(prev => ({ ...prev, sitemapUrl: inputSitemapUrl.trim() }));
+                                                    toast('✅ Đã lưu Link Sitemap.xml thành công!', 'success');
+                                                    setShowSitemapModal(false);
+                                                } catch (err) {
+                                                    toast('❌ ' + (err.message || 'Lỗi lưu Link Sitemap'), 'danger');
+                                                }
+                                            }}
+                                            style={{ padding: '8px 20px', fontSize: 13, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 600 }}
+                                        >
+                                            💾 Lưu Link Sitemap Online
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal 2: Cấu hình Link Website Hãng (Thay thế prompt() cũ) */}
+            {showTargetUrlModal && (
+                <div className="modal-backdrop" onClick={() => setShowTargetUrlModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '95vw', padding: 0, borderRadius: 'var(--radius-xl)', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)', background: 'var(--bg-card)', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+                        {/* Header */}
+                        <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    🌐 Cấu Hình Link Website Hãng
+                                </h3>
+                                <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.9 }}>
+                                    Profile: <strong>{currentProfile?.name || profileSlug}</strong>
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setShowTargetUrlModal(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {/* Modal Body */}
+                        <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            <div>
+                                <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: 6 }}>
+                                    Đường Dẫn Website Chính của Hãng:
+                                </label>
+                                <input
+                                    type="url"
+                                    placeholder="https://www.argox.com"
+                                    value={inputTargetUrl}
+                                    onChange={e => setInputTargetUrl(e.target.value)}
+                                    style={{ width: '100%', padding: '10px 14px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                />
+                                <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                                    💡 Crawler sẽ truy cập đường dẫn này để quét danh mục, series và tất cả sản phẩm của hãng.
+                                </p>
+                            </div>
+
+                            {/* Preview Domain Card */}
+                            {inputTargetUrl && (
+                                <div style={{ background: 'var(--bg-primary)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    <span>Tên miền nhận diện: <strong style={{ color: '#0284c7' }}>{inputTargetUrl.replace(/^https?:\/\//, '').split('/')[0]}</strong></span>
+                                </div>
+                            )}
+
+                            {/* Footer Buttons */}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTargetUrlModal(false)}
+                                    className="btn btn-secondary"
+                                    style={{ padding: '8px 16px', fontSize: 13 }}
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={async () => {
+                                        try {
+                                            await fetchApi(`/api/products/profiles/${profileSlug}`, {
+                                                method: 'PATCH',
+                                                body: JSON.stringify({ name: currentProfile?.name || profileSlug, target_url: inputTargetUrl.trim() })
+                                            });
+                                            setCurrentProfile(prev => ({ ...prev, target_url: inputTargetUrl.trim() }));
+                                            toast('✅ Đã cập nhật Link Website Hãng thành công!', 'success');
+                                            setShowTargetUrlModal(false);
+                                        } catch (err) {
+                                            toast('❌ ' + (err.message || 'Lỗi cập nhật Link Website'), 'danger');
+                                        }
+                                    }}
+                                    style={{ padding: '8px 20px', fontSize: 13, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 600 }}
+                                >
+                                    💾 Lưu Link Website Hãng
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Sub-Modal 1: Cell Detail Viewer & Editor (Products Page) */}
             {pageCellDetailModal && (
                 <div className="modal-backdrop" onClick={() => setPageCellDetailModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
@@ -2960,6 +2996,259 @@ function ProductsContent() {
             )}
 
             {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* View Mode 2: Danh Sách Sản Phẩm Crawler (Product Data Grid) */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {viewMode === 'products' && (
+                <div style={{ marginBottom: 24 }}>
+                    {/* Header Controls: Search, Filter, Batch Action Toolbar */}
+                    <div className="card" style={{ padding: '16px 20px', marginBottom: 16, background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+                            {/* Search & Category Filter */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: 1 }}>
+                                <div style={{ position: 'relative', minWidth: 260 }}>
+                                    <Search size={15} style={{ position: 'absolute', left: 12, top: 11, color: 'var(--text-muted)' }} />
+                                    <input
+                                        type="text"
+                                        placeholder="Tìm theo tên sản phẩm, mã, series..."
+                                        value={searchInput}
+                                        onChange={e => setSearchInput(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') { setSearchTerm(searchInput); setCurrentPage(1); } }}
+                                        style={{ width: '100%', padding: '8px 12px 8px 36px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                                    />
+                                </div>
+                                <select
+                                    value={selectedCategory}
+                                    onChange={e => { setSelectedCategory(e.target.value); setCurrentPage(1); }}
+                                    style={{ padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                                >
+                                    <option value="">-- Tất cả danh mục ({categories.length}) --</option>
+                                    {categories.map(c => (
+                                        <option key={c} value={c}>{c}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Batch Action Buttons & Clear Profile Button */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                {selectedCrawlerProductIds.length > 0 && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => setSelectedCrawlerProductIds([])}
+                                            style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
+                                        >
+                                            <Square size={13} /> Bỏ chọn ({selectedCrawlerProductIds.length})
+                                        </button>
+                                    <button
+                                        type="button"
+                                        className="btn"
+                                        onClick={async () => {
+                                            const confirmDelete = window.confirm(`⚠️ Bạn có chắc chắn muốn XÓA ${selectedCrawlerProductIds.length} sản phẩm đã chọn?`);
+                                            if (!confirmDelete) return;
+                                            try {
+                                                await fetchApi('/api/products/batch', {
+                                                    method: 'DELETE',
+                                                    body: JSON.stringify({ ids: selectedCrawlerProductIds })
+                                                });
+                                                toast(`🗑️ Đã xóa thành công ${selectedCrawlerProductIds.length} sản phẩm!`, 'success');
+                                                setSelectedCrawlerProductIds([]);
+                                                fetchProducts();
+                                            } catch (err) {
+                                                toast('❌ ' + (err.message || 'Lỗi khi xóa sản phẩm'), 'danger');
+                                            }
+                                        }}
+                                        style={{ padding: '8px 14px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, fontWeight: 700, fontSize: 12.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(220,38,38,0.3)' }}
+                                        >
+                                            <Trash2 size={14} /> Xóa {selectedCrawlerProductIds.length} sản phẩm đã chọn
+                                        </button>
+                                    </>
+                                )}
+
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        const confirmClear = window.confirm(`🚨 CẢNH BÁO: Bạn có chắc chắn muốn XÓA TOÀN BỘ sản phẩm của Profile "${currentProfile?.name || profileSlug}"?\n\nHành động này không thể hoàn tác!`);
+                                        if (!confirmClear) return;
+                                        try {
+                                            await fetchApi('/api/products/clear-profile', {
+                                                method: 'DELETE',
+                                                body: JSON.stringify({ profile: profileSlug })
+                                            });
+                                            toast(`🗑️ Đã xóa sạch toàn bộ sản phẩm của Profile!`, 'info');
+                                            setSelectedCrawlerProductIds([]);
+                                            fetchProducts();
+                                        } catch (err) {
+                                            toast('❌ ' + (err.message || 'Lỗi khi xóa dữ liệu Profile'), 'danger');
+                                        }
+                                    }}
+                                    style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                                >
+                                    <Trash2 size={13} /> Xóa sạch dữ liệu Profile
+                                </button>
+
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setShowCrawlerToSheetModal(true)}
+                                    disabled={products.length === 0}
+                                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600 }}
+                                >
+                                    <FileSpreadsheet size={14} style={{ color: '#0284c7' }} />
+                                    Chuyển {selectedCrawlerProductIds.length > 0 ? `${selectedCrawlerProductIds.length} đã chọn` : 'tất cả'} sang Sheet
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Products Table Card */}
+                    <div className="card" style={{ padding: 0, overflow: 'hidden', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                <thead>
+                                    <tr style={{ background: 'var(--bg-secondary)', borderBottom: '2px solid var(--border-color)' }}>
+                                        <th style={{ padding: '12px 14px', width: 40, textAlign: 'center' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={products.length > 0 && selectedCrawlerProductIds.length === products.length}
+                                                onChange={toggleSelectAllCrawlerProducts}
+                                                style={{ cursor: 'pointer', width: 16, height: 16, accentColor: 'var(--accent)' }}
+                                            />
+                                        </th>
+                                        <th style={{ padding: '12px 14px', textAlign: 'left', width: 80, fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Ảnh</th>
+                                        <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Tên Sản Phẩm</th>
+                                        <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 140 }}>Danh Mục</th>
+                                        <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 130 }}>Series</th>
+                                        <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 120 }}>Part Number</th>
+                                        <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 130 }}>Thao Tác</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {loading ? (
+                                        <tr>
+                                            <td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                <Loader2 className="spin" size={24} style={{ color: 'var(--accent)', marginBottom: 8 }} />
+                                                <div>Đang tải danh sách sản phẩm...</div>
+                                            </td>
+                                        </tr>
+                                    ) : products.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={7} style={{ padding: '50px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                <Package size={40} style={{ opacity: 0.3, marginBottom: 10 }} />
+                                                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Chưa có sản phẩm nào trong Profile này</div>
+                                                <div style={{ fontSize: 12.5 }}>Hãy nạp File HAR / Sitemap.xml và bấm <strong>Bắt Đầu Crawl (Double Check)</strong> để thu thập dữ liệu.</div>
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        products.map(p => {
+                                            const isSelected = selectedCrawlerProductIds.includes(p.id);
+                                            return (
+                                                <tr key={p.id} style={{ borderBottom: '1px solid var(--border-color)', background: isSelected ? 'rgba(99,102,241,0.06)' : 'transparent' }}>
+                                                    <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isSelected}
+                                                            onChange={() => toggleSelectCrawlerProduct(p.id)}
+                                                            style={{ cursor: 'pointer', width: 16, height: 16, accentColor: 'var(--accent)' }}
+                                                        />
+                                                    </td>
+                                                    <td style={{ padding: '10px 14px' }}>
+                                                        {p.image_url ? (
+                                                            <img src={p.image_url} alt={p.name} style={{ width: 44, height: 44, objectFit: 'contain', borderRadius: 6, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }} />
+                                                        ) : (
+                                                            <div style={{ width: 44, height: 44, borderRadius: 6, background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 11 }}>No Pic</div>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: '12px 14px' }}>
+                                                        <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)' }}>{p.name}</div>
+                                                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }}>
+                                                            {p.url}
+                                                        </div>
+                                                    </td>
+                                                    <td style={{ padding: '12px 14px' }}>
+                                                        <span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+                                                            {p.category || 'Chưa rõ'}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '12px 14px' }}>
+                                                        <span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 12, background: 'rgba(59,130,246,0.1)', color: '#2563eb', fontWeight: 600 }}>
+                                                            {p.series || '—'}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: '12px 14px', fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                                        {p.part_number || '—'}
+                                                    </td>
+                                                    <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => { setSelectedProduct(p); setShowModal(true); }}
+                                                                style={{ padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 4 }}
+                                                                title="Xem chi tiết sản phẩm"
+                                                            >
+                                                                <Eye size={13} /> Xem
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={async () => {
+                                                                    const confirmSingle = window.confirm(`⚠️ Xóa sản phẩm "${p.name}"?`);
+                                                                    if (!confirmSingle) return;
+                                                                    try {
+                                                                        await fetchApi(`/api/products/${p.id}`, { method: 'DELETE' });
+                                                                        toast(`🗑️ Đã xóa sản phẩm "${p.name}"`, 'success');
+                                                                        fetchProducts();
+                                                                    } catch (err) {
+                                                                        toast('❌ ' + (err.message || 'Lỗi khi xóa sản phẩm'), 'danger');
+                                                                    }
+                                                                }}
+                                                                style={{ padding: '6px 8px', background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}
+                                                                title="Xóa sản phẩm này"
+                                                            >
+                                                                <Trash2 size={13} />
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Pagination Footer */}
+                        {totalPages > 1 && (
+                            <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+                                    Hiển thị trang {currentPage} / {totalPages} (Tổng {totalProducts} sản phẩm)
+                                </span>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <button
+                                        type="button"
+                                        disabled={currentPage <= 1}
+                                        onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: 12, padding: '6px 12px' }}
+                                    >
+                                        <ChevronLeft size={14} /> Trang trước
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={currentPage >= totalPages}
+                                        onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: 12, padding: '6px 12px' }}
+                                    >
+                                        Trang sau <ChevronRight size={14} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* ═══════════════════════════════════════════════════════════════ */}
             {/* View Mode 3: HAR Analysis Report Tab */}
             {/* ═══════════════════════════════════════════════════════════════ */}
             {viewMode === 'har' && (
@@ -3006,25 +3295,28 @@ function ProductsContent() {
                                             </p>
                                         )}
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={async () => {
-                                            try {
-                                                await fetchApi('/api/products/crawler/trigger', { method: 'POST', body: JSON.stringify({ concurrency: 3 }) });
-                                                toast('🚀 Đã kích hoạt Crawler! Đang tiến hành crawl sản phẩm...', 'success');
-                                            } catch (err) {
-                                                toast('❌ ' + (err.message || 'Lỗi khi kích hoạt crawler'), 'danger');
-                                            }
-                                        }}
-                                        style={{
-                                            padding: '10px 22px', background: '#16a34a', color: 'white',
-                                            border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 14,
-                                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-                                            whiteSpace: 'nowrap', boxShadow: '0 4px 12px rgba(22,163,74,0.4)'
-                                        }}
-                                    >
-                                        <Play size={16} /> 🚀 Bắt Đầu Crawl
-                                    </button>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                try {
+                                                    await fetchApi('/api/products/crawler/trigger', { method: 'POST', body: JSON.stringify({ concurrency: 3, profile: profileSlug }) });
+                                                    toast('🚀 Đã kích hoạt Crawler! Đang tiến hành crawl sản phẩm...', 'success');
+                                                } catch (err) {
+                                                    toast('❌ ' + (err.message || 'Lỗi khi kích hoạt crawler'), 'danger');
+                                                }
+                                            }}
+                                            style={{
+                                                padding: '10px 22px', background: '#16a34a', color: 'white',
+                                                border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 14,
+                                                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                                                whiteSpace: 'nowrap', boxShadow: '0 4px 12px rgba(22,163,74,0.4)'
+                                            }}
+                                        >
+                                            <Play size={16} /> 🚀 Bắt Đầu Crawl (Double Check)
+                                        </button>
+                                        <span style={{ fontSize: 11, opacity: 0.8 }}>✅ Quét kết hợp HAR + Sitemap + Web Scan</span>
+                                    </div>
                                 </div>
                             </div>
 
@@ -3044,6 +3336,114 @@ function ProductsContent() {
                                 ))}
                             </div>
 
+
+                             {/* Double-Check Multi-Source Configuration & Indicator Panel */}
+                             <div className="card" style={{ padding: '18px 22px', marginBottom: 16, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', borderRadius: 10 }}>
+                                 {/* Title */}
+                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
+                                     <div>
+                                         <h4 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                             <span>⚡</span> Chế Độ Crawl Double-Check (Đồng Bộ Đa Nguồn 100%)
+                                         </h4>
+                                         <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+                                             Tự động quét & khử trùng lặp link sản phẩm từ Website chính, File HAR và Sitemap.xml để lấy dữ liệu 100% sản phẩm.
+                                         </p>
+                                     </div>
+                                 </div>
+
+                                 {/* Status Badges Row */}
+                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', background: 'var(--bg-primary)', borderRadius: 8, border: '1px solid var(--border-color)', marginBottom: 14 }}>
+                                     <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginRight: 4 }}>Chỉ báo nguồn:</span>
+
+                                     {/* 1. Website Link Status */}
+                                     {currentProfile?.target_url ? (
+                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
+                                             🟢 Link Web: {currentProfile.target_url.replace(/^https?:\/\//, '').split('/')[0]}
+                                         </span>
+                                     ) : (
+                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(239,68,68,0.12)', color: '#b91c1c', fontSize: 12, fontWeight: 600, border: '1px solid rgba(239,68,68,0.3)' }}>
+                                             🔴 Chưa có Link Web
+                                         </span>
+                                     )}
+
+                                     {/* 2. HAR Analysis Status */}
+                                     {harReport?.harFileName ? (
+                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
+                                             🟢 File HAR: {harReport.harFileName} ({harReport.summary?.totalEntries || 0} reqs)
+                                         </span>
+                                     ) : (
+                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(245,158,11,0.12)', color: '#b45309', fontSize: 12, fontWeight: 600, border: '1px solid rgba(245,158,11,0.3)' }}>
+                                             🟡 Chưa nạp File HAR
+                                         </span>
+                                     )}
+
+                                     {/* 3. Sitemap Status */}
+                                     {sitemapInfo?.sitemapXml || sitemapInfo?.sitemapUrl || currentProfile?.sitemap_url ? (
+                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
+                                             🟢 Sitemap: Đã sẵn sàng
+                                         </span>
+                                     ) : (
+                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(245,158,11,0.12)', color: '#b45309', fontSize: 12, fontWeight: 600, border: '1px solid rgba(245,158,11,0.3)' }}>
+                                             🟡 Chưa nạp Sitemap
+                                         </span>
+                                     )}
+                                 </div>
+
+                                 {/* Quick Action Buttons Row */}
+                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                     {/* Action 1: Nhập/Sửa Link Web Hãng */}
+                                     <button
+                                         type="button"
+                                         onClick={() => {
+                                             setInputTargetUrl(currentProfile?.target_url || '');
+                                             setShowTargetUrlModal(true);
+                                         }}
+                                         style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', color: 'var(--text-primary)', boxShadow: 'var(--shadow-sm)' }}
+                                     >
+                                         🌐 {currentProfile?.target_url ? 'Sửa Link Web Hãng' : '➕ Nhập Link Web Hãng'}
+                                     </button>
+
+                                     {/* Action 2: Nạp File HAR */}
+                                     <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', color: 'var(--text-primary)', boxShadow: 'var(--shadow-sm)' }}>
+                                         📡 Nạp File HAR
+                                         <input
+                                             type="file"
+                                             accept=".har,application/json"
+                                             style={{ display: 'none' }}
+                                             onChange={async (e) => {
+                                                 const file = e.target.files?.[0];
+                                                 if (!file) return;
+                                                 try {
+                                                     const form = new FormData();
+                                                     form.append('har', file);
+                                                     form.append('profile', profileSlug);
+                                                     const result = await fetchApi(`/api/products/profiles/${profileSlug}/har`, {
+                                                         method: 'POST',
+                                                         body: form,
+                                                         headers: {}
+                                                     });
+                                                     if (result?.report) setHarReport(result.report);
+                                                     toast(`✅ Phân tích HAR thành công (${result?.report?.summary?.detectableFieldsCount || 0} trường)!`, 'success');
+                                                 } catch (err) {
+                                                     toast('❌ ' + (err.message || 'Lỗi upload HAR'), 'danger');
+                                                 }
+                                             }}
+                                         />
+                                     </label>
+
+                                     {/* Action 3: Gộp 2 nút Sitemap thành 1 nút Cấu hình Sitemap XML */}
+                                     <button
+                                         type="button"
+                                         onClick={() => {
+                                             setInputSitemapUrl(sitemapInfo?.sitemapUrl || currentProfile?.sitemap_url || '');
+                                             setShowSitemapModal(true);
+                                         }}
+                                         style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', color: 'var(--text-primary)', boxShadow: 'var(--shadow-sm)' }}
+                                     >
+                                         🗺️ Nạp / Cấu Hình Sitemap XML
+                                     </button>
+                                 </div>
+                             </div>
                             {/* Crawlable Fields Table */}
                             <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
                                 <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -3397,4 +3797,4 @@ export default function ProductsPage() {
             <ProductsContent />
         </Suspense>
     );
-}
+}

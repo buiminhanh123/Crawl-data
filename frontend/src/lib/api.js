@@ -10,10 +10,16 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
 export async function fetchApi(path, options = {}) {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
     const headers = {
-        'Content-Type': 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         ...options.headers,
     };
+
+    if (isFormData) {
+        delete headers['Content-Type'];
+    }
 
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
