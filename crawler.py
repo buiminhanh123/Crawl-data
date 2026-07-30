@@ -27,7 +27,9 @@ except ImportError:
 os.environ["CAMOUFOX_INSTALL_DIR"] = r"C:\Users\LEGION\AppData\Local\camoufox"
 from camoufox import AsyncCamoufox
 
-DB_PATH = r"E:\sp\Newland\server\data\products.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "server", "data", "products.db")
+APP_DB_PATH = os.path.join(BASE_DIR, "server", "data", "app.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 # ── HTTP headers that mimic a real Chrome browser ───────────────────
@@ -315,8 +317,6 @@ async def get_page_content(session, browser, browser_sem, url):
 # ══════════════════════════════════════════════════════════════════
 #  DATA EXTRACTION
 # ══════════════════════════════════════════════════════════════════
-
-APP_DB_PATH = r"E:\sp\Newland\server\data\app.db"
 
 async def get_product_urls(profile_slug='newland'):
     """Fetch product URLs for the given profile (strictly from HAR report in DB for custom profiles)."""

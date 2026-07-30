@@ -592,9 +592,13 @@ router.get('/crawler/status', async (req, res) => {
 let activeCrawlerProcess = null;
 
 function isProcessAlive(proc) {
-    if (!proc) return false;
-    if (proc.exitCode !== null || proc.signalCode !== null || proc.killed) return false;
-    return true;
+    if (!proc || !proc.pid) return false;
+    try {
+        if (proc.exitCode !== null || proc.signalCode !== null || proc.killed) return false;
+        return process.kill(proc.pid, 0);
+    } catch (e) {
+        return false;
+    }
 }
 
 // POST /api/products/crawler/trigger — trigger the crawler
@@ -602,26 +606,23 @@ router.post('/crawler/trigger', async (req, res) => {
     try {
         const { concurrency = 3, profile = 'newland' } = req.body;
         
-        const currentStatus = await productQueries.getCrawlerStatus();
         if (activeCrawlerProcess && isProcessAlive(activeCrawlerProcess)) {
             return res.status(400).json({ error: 'Crawler is already running.' });
         }
-        if (!isProcessAlive(activeCrawlerProcess)) {
-            activeCrawlerProcess = null;
-        }
+        activeCrawlerProcess = null;
         
         // Reset status to starting
         await productQueries.updateCrawlerStatus('Starting', 0, 0, 0, 'Launching crawler process...', profile);
         
         console.log(`Spawning Python crawler.py for profile: ${profile} with concurrency: ${concurrency}...`);
         
-        // Spawn crawler process asynchronously (not detached so we can easily kill it)
+        // Spawn crawler process asynchronously
         const crawlerScriptPath = path.resolve(process.cwd(), 'crawler.py');
         const pythonProcess = spawn('python', ['-u', crawlerScriptPath, '--profile', profile, '--concurrency', concurrency.toString()], {
+            cwd: process.cwd(),
             stdio: 'ignore'
         });
 
-        
         activeCrawlerProcess = pythonProcess;
 
         pythonProcess.on('error', async (err) => {
@@ -645,7 +646,7 @@ router.post('/crawler/trigger', async (req, res) => {
         res.json({ message: 'Crawler triggered successfully.' });
     } catch (err) {
         console.error('Failed to trigger crawler:', err);
-        res.status(500).json({ error: 'Failed to start crawler.' });
+        res.status(500).json({ error: err.message || 'Failed to start crawler.' });
     }
 });
 
@@ -831,7 +832,7 @@ router.post('/crawler/trigger-from-file', async (req, res) => {
 
         let targetFilePath = '';
         if (useLocalFile) {
-            targetFilePath = 'E:\\sp\\Newland\\list-link.txt';
+            targetFilePath = path.resolve(process.cwd(), 'list-link.txt');
         } else if (urls && Array.isArray(urls) && urls.length > 0) {
             const dataDir = path.join(__dirname, '..', 'data');
             if (!fs.existsSync(dataDir)) {
