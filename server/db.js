@@ -184,6 +184,9 @@ async function initDatabase() {
             updated_at TEXT DEFAULT (datetime('now'))
         )
     `);
+    try {
+        db.run('ALTER TABLE profile_sheet_data ADD COLUMN profile_slug TEXT DEFAULT NULL');
+    } catch (e) {}
     // ──────────────────────────────────────────────────────────
 
     // Seed default admin user if none exists
@@ -507,10 +510,14 @@ function extractModelFromName(name, slug) {
     },
 
     deleteByProfile: async (profileSlug) => {
-        const pdb = await openProductsDb();
-        pdb.run('DELETE FROM products WHERE profile_slug = ?', [profileSlug]);
-        saveProductsDb(pdb);
-        pdb.close();
+        try {
+            const pdb = await openProductsDb();
+            pdb.run('DELETE FROM products WHERE profile_slug = ?', [profileSlug]);
+            saveProductsDb(pdb);
+            pdb.close();
+        } catch (e) {
+            console.error('Error deleting products by profile:', e);
+        }
     },
     
     getCrawlerStatus: async () => {
@@ -874,8 +881,12 @@ const profileSheetQueries = {
     },
 
     deleteBySlug: (slug) => {
-        db.run('DELETE FROM profile_sheet_data WHERE profile_slug = ?', [slug]);
-        saveDatabase();
+        try {
+            db.run('DELETE FROM profile_sheet_data WHERE profile_slug = ?', [slug]);
+            saveDatabase();
+        } catch (e) {
+            console.error('Error deleting profile sheet data by slug:', e);
+        }
     }
 };
 

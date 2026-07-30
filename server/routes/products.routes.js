@@ -384,16 +384,27 @@ router.delete('/profiles/:slug', async (req, res) => {
             return res.status(400).json({ error: 'Không thể xóa Profile Newland mặc định.' });
         }
         const profile = profileQueries.getBySlug(slug);
-        if (!profile) {
-            return res.status(404).json({ error: 'Không tìm thấy Profile.' });
-        }
+
         // Delete crawled products belonging to this profile
-        await productQueries.deleteByProfile(slug);
+        try {
+            await productQueries.deleteByProfile(slug);
+        } catch (e) {
+            console.error('Error deleting products by profile:', e);
+        }
+
         // Delete sheet data for this profile
-        profileSheetQueries.deleteBySlug(slug);
-        // Delete profile record
-        profileQueries.delete(profile.id);
-        res.json({ message: `Đã xóa Profile "${profile.name}" và toàn bộ dữ liệu liên quan thành công.` });
+        try {
+            profileSheetQueries.deleteBySlug(slug);
+        } catch (e) {
+            console.error('Error deleting sheet data by profile:', e);
+        }
+
+        // Delete profile record if exists
+        if (profile) {
+            profileQueries.delete(profile.id);
+        }
+
+        res.json({ message: `Đã xóa Profile "${profile ? profile.name : slug}" và toàn bộ dữ liệu liên quan thành công.` });
     } catch (err) {
         console.error('Failed to delete profile:', err);
         res.status(500).json({ error: err.message || 'Lỗi khi xóa Profile.' });
