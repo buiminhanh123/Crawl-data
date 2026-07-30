@@ -1,4 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
+const getApiBase = () => {
+    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+    if (typeof window !== 'undefined') return '';
+    return 'http://localhost:3002';
+};
 
 /**
  * Fetch wrapper with auth token and error handling.
@@ -8,6 +12,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
  * - On error: throws Error with server message
  */
 export async function fetchApi(path, options = {}) {
+    const API_BASE = getApiBase();
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;

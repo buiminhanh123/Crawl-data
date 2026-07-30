@@ -1458,7 +1458,7 @@ function ProductsContent() {
     const handleExport = async () => {
         try {
             const token = localStorage.getItem('token');
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || (typeof window !== 'undefined' ? '' : 'http://localhost:3002');
             
             toast('Generating Excel file...', 'info');
             
