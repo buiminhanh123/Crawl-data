@@ -331,8 +331,6 @@ async function openProductsDb() {
         )
     `);
 
-    db.run("INSERT OR IGNORE INTO crawler_status (id, status, progress, total_items, current_item, last_message, profile_slug) VALUES (1, 'Idle', 0, 0, 0, 'Ready', 'newland')");
-
     let needsSave = false;
     const migrations = [
         'ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL',
@@ -348,6 +346,14 @@ async function openProductsDb() {
             db.run(stmt);
             needsSave = true;
         } catch (e) {}
+    }
+
+    try {
+        db.run("INSERT OR IGNORE INTO crawler_status (id, status, progress, total_items, current_item, last_message, profile_slug) VALUES (1, 'Idle', 0, 0, 0, 'Ready', 'newland')");
+    } catch (e) {
+        try {
+            db.run("INSERT OR IGNORE INTO crawler_status (id, status, progress, total_items, current_item, last_message) VALUES (1, 'Idle', 0, 0, 0, 'Ready')");
+        } catch (err) {}
     }
 
     if (needsSave || !fs.existsSync(PRODUCTS_DB_PATH)) {
