@@ -281,70 +281,70 @@ const PRODUCTS_DB_PATH = path.join(__dirname, 'data', 'products.db');
 // Helper to open products DB
 async function openProductsDb() {
     const SQL = await initSqlJs();
+    let db;
     if (fs.existsSync(PRODUCTS_DB_PATH)) {
         const fileBuffer = fs.readFileSync(PRODUCTS_DB_PATH);
-        return new SQL.Database(fileBuffer);
+        db = new SQL.Database(fileBuffer);
     } else {
-        const db = new SQL.Database();
-        // Initialize schema
-        db.run(`
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT,
-                slug TEXT,
-                name TEXT,
-                description TEXT,
-                image_url TEXT,
-                url TEXT UNIQUE,
-                specifications TEXT,
-                part_number TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        // Migrate: add profile_slug column if not exists
-        try {
-            db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
-        } catch (e) {}
-
-        try {
-            db.run("ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'");
-        } catch (e) {}
-
-        db.run(`
-            CREATE TABLE IF NOT EXISTS crawler_status (
-                id INTEGER PRIMARY KEY,
-                status TEXT,
-                progress INTEGER,
-                total_items INTEGER,
-                current_item INTEGER,
-                last_message TEXT,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-        db.run("INSERT OR IGNORE INTO crawler_status (id, status, progress, total_items, current_item, last_message) VALUES (1, 'Idle', 0, 0, 0, 'Ready')");
-        // Save database
-        const data = db.export();
-        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(data));
-        return db;
+        db = new SQL.Database();
     }
 
-    // If DB already exists, also migrate
-    try {
-        db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
-    } catch (e) {}
-    try {
-        db.run('ALTER TABLE products ADD COLUMN series TEXT DEFAULT NULL');
-    } catch (e) {}
-    try {
-        db.run('ALTER TABLE products ADD COLUMN main_category TEXT DEFAULT NULL');
-    } catch (e) {}
-    try {
-        db.run("ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'");
-    } catch (e) {}
-    try {
-        const dbData = db.export();
-        fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(dbData));
-    } catch (e) {}
+    db.run(`
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            slug TEXT,
+            name TEXT,
+            description TEXT,
+            image_url TEXT,
+            url TEXT UNIQUE,
+            specifications TEXT,
+            part_number TEXT,
+            profile_slug TEXT,
+            series TEXT,
+            main_category TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS crawler_status (
+            id INTEGER PRIMARY KEY,
+            status TEXT,
+            progress INTEGER,
+            total_items INTEGER,
+            current_item INTEGER,
+            last_message TEXT,
+            profile_slug TEXT DEFAULT 'newland',
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    db.run("INSERT OR IGNORE INTO crawler_status (id, status, progress, total_items, current_item, last_message, profile_slug) VALUES (1, 'Idle', 0, 0, 0, 'Ready', 'newland')");
+
+    let needsSave = false;
+    const migrations = [
+        'ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN series TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN main_category TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN part_number TEXT DEFAULT NULL',
+        "ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'",
+        "ALTER TABLE crawler_failed ADD COLUMN profile_slug TEXT DEFAULT NULL"
+    ];
+
+    for (const stmt of migrations) {
+        try {
+            db.run(stmt);
+            needsSave = true;
+        } catch (e) {}
+    }
+
+    if (needsSave || !fs.existsSync(PRODUCTS_DB_PATH)) {
+        try {
+            const dbData = db.export();
+            fs.writeFileSync(PRODUCTS_DB_PATH, Buffer.from(dbData));
+        } catch (e) {}
+    }
 
     return db;
 }
@@ -363,8 +363,11 @@ const productQueries = {
         let query = 'SELECT * FROM products WHERE 1=1';
         const params = [];
         if (profileSlug) {
-            query += ' AND profile_slug = ?';
-            params.push(profileSlug);
+            try {
+                pdb.exec('SELECT profile_slug FROM products LIMIT 1');
+                query += ' AND profile_slug = ?';
+                params.push(profileSlug);
+            } catch (e) {}
         }
         if (search) {
             query += ' AND (name LIKE ? OR description LIKE ? OR part_number LIKE ?)';
@@ -448,14 +451,16 @@ function extractModelFromName(name, slug) {
     
     getCategories: async (profileSlug = '') => {
         const pdb = await openProductsDb();
-        let query = 'SELECT DISTINCT category FROM products WHERE 1=1';
-        const params = [];
+        let res;
         if (profileSlug) {
-            query += ' AND profile_slug = ?';
-            params.push(profileSlug);
+            try {
+                res = pdb.exec('SELECT DISTINCT category FROM products WHERE profile_slug = ? ORDER BY category ASC', [profileSlug]);
+            } catch (e) {
+                res = pdb.exec('SELECT DISTINCT category FROM products ORDER BY category ASC');
+            }
+        } else {
+            res = pdb.exec('SELECT DISTINCT category FROM products ORDER BY category ASC');
         }
-        query += ' ORDER BY category ASC';
-        const res = pdb.exec(query, params);
         pdb.close();
         if (!res[0]) return [];
         return res[0].values.map(v => v[0]);
@@ -463,12 +468,6 @@ function extractModelFromName(name, slug) {
     
     getStats: async (profileSlug = '') => {
         const pdb = await openProductsDb();
-        let countQuery = 'SELECT COUNT(*) FROM products WHERE 1=1';
-        const params = [];
-        if (profileSlug) {
-            countQuery += ' AND profile_slug = ?';
-            params.push(profileSlug);
-        }
         const countRes = pdb.exec(countQuery, params);
         const totalProducts = countRes[0]?.values[0]?.[0] || 0;
         
@@ -531,22 +530,33 @@ function extractModelFromName(name, slug) {
     },
     
     updateCrawlerStatus: async (status, progress, total_items, current_item, last_message, profile_slug = '') => {
-        const pdb = await openProductsDb();
-        if (profile_slug) {
-            pdb.run(`
-                UPDATE crawler_status 
-                SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, profile_slug = ?, updated_at = datetime('now')
-                WHERE id = 1
-            `, [status, progress, total_items, current_item, last_message, profile_slug]);
-        } else {
-            pdb.run(`
-                UPDATE crawler_status 
-                SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, updated_at = datetime('now')
-                WHERE id = 1
-            `, [status, progress, total_items, current_item, last_message]);
+        try {
+            const pdb = await openProductsDb();
+            let updated = false;
+            if (profile_slug) {
+                try {
+                    pdb.run(`
+                        UPDATE crawler_status 
+                        SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, profile_slug = ?, updated_at = datetime('now')
+                        WHERE id = 1
+                    `, [status, progress, total_items, current_item, last_message, profile_slug]);
+                    updated = true;
+                } catch (e) {}
+            }
+            if (!updated) {
+                try {
+                    pdb.run(`
+                        UPDATE crawler_status 
+                        SET status = ?, progress = ?, total_items = ?, current_item = ?, last_message = ?, updated_at = datetime('now')
+                        WHERE id = 1
+                    `, [status, progress, total_items, current_item, last_message]);
+                } catch (e) {}
+            }
+            saveProductsDb(pdb);
+            pdb.close();
+        } catch (err) {
+            console.error('Failed to update crawler status:', err);
         }
-        saveProductsDb(pdb);
-        pdb.close();
     },
 
     getCrawlerLogs: async () => {
