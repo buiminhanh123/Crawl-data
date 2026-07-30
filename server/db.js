@@ -17,7 +17,9 @@ async function initDatabase() {
         fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    const SQL = await initSqlJs();
+    const SQL = await initSqlJs({
+        locateFile: file => path.resolve(path.dirname(require.resolve('sql.js')), file)
+    });
 
     if (fs.existsSync(DB_PATH)) {
         const fileBuffer = fs.readFileSync(DB_PATH);
@@ -287,7 +289,9 @@ const PRODUCTS_DB_PATH = path.join(__dirname, 'data', 'products.db');
 
 // Helper to open products DB
 async function openProductsDb() {
-    const SQL = await initSqlJs();
+    const SQL = await initSqlJs({
+        locateFile: file => path.resolve(path.dirname(require.resolve('sql.js')), file)
+    });
     let db;
     if (fs.existsSync(PRODUCTS_DB_PATH)) {
         const fileBuffer = fs.readFileSync(PRODUCTS_DB_PATH);
