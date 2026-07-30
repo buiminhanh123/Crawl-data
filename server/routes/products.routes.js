@@ -627,19 +627,31 @@ router.post('/crawler/trigger', async (req, res) => {
         
         console.log(`Spawning Python crawler.py for profile: ${profile} with concurrency: ${concurrency}...`);
         
-        // Spawn crawler process asynchronously
+        // Spawn crawler process asynchronously with piped stdio for logging
         const crawlerScriptPath = path.resolve(process.cwd(), 'crawler.py');
         const pythonProcess = spawn('python', ['-u', crawlerScriptPath, '--profile', profile, '--concurrency', concurrency.toString()], {
             cwd: process.cwd(),
-            stdio: 'ignore'
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
+
+        if (pythonProcess.stdout) {
+            pythonProcess.stdout.on('data', (data) => {
+                console.log(`[Python Crawler]: ${data.toString('utf8').trim()}`);
+            });
+        }
+        if (pythonProcess.stderr) {
+            pythonProcess.stderr.on('data', (data) => {
+                console.error(`[Python Crawler Error]: ${data.toString('utf8').trim()}`);
+            });
+        }
 
         activeCrawlerProcess = pythonProcess;
 
         pythonProcess.on('error', async (err) => {
             console.error('Lỗi khi kích hoạt tiến trình Python crawler:', err);
             activeCrawlerProcess = null;
-            await productQueries.updateCrawlerStatus('Error', 0, 0, 0, `Lỗi khởi chạy Python: ${err.message}`);
+            await productQueries.updateCrawlerStatus('Error', 0, 0, 0, `Lỗi khởi chạy Python: ${err.message}`, profile);
         });
         
         pythonProcess.on('exit', async (code) => {
@@ -647,10 +659,13 @@ router.post('/crawler/trigger', async (req, res) => {
             activeCrawlerProcess = null;
             
             const status = await productQueries.getCrawlerStatus();
+            if (status && status.status === 'Completed') {
+                return;
+            }
             if (code === 0 || (status && status.total_items > 0 && status.current_item >= status.total_items)) {
-                await productQueries.updateCrawlerStatus('Completed', 100, status?.total_items || 0, status?.total_items || 0, 'Crawling completed successfully.', status?.profile_slug || '');
+                await productQueries.updateCrawlerStatus('Completed', 100, status?.total_items || 0, status?.total_items || 0, 'Crawling completed successfully.', status?.profile_slug || profile);
             } else {
-                await productQueries.updateCrawlerStatus('Error', status?.progress || 0, status?.total_items || 0, status?.current_item || 0, `Process exited with code ${code}`, status?.profile_slug || '');
+                await productQueries.updateCrawlerStatus('Error', status?.progress || 0, status?.total_items || 0, status?.current_item || 0, `Process exited with code ${code}`, status?.profile_slug || profile);
             }
         });
         

@@ -9,12 +9,17 @@ import re
 import urllib.parse
 from bs4 import BeautifulSoup
 
-# Fix Windows console encoding
-if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf-8-sig'):
-    try:
+# Fix Windows console & redirected stdio encoding
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    else:
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 try:
     import aiohttp
@@ -128,16 +133,19 @@ def init_db():
     conn.close()
 
 def log_message(message):
-    print(message)
-    sys.stdout.flush()
+    try:
+        print(message)
+        sys.stdout.flush()
+    except Exception:
+        pass
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO crawler_logs (message) VALUES (?)", (message,))
+        cursor.execute("INSERT INTO crawler_logs (message) VALUES (?)", (str(message),))
         conn.commit()
         conn.close()
-    except Exception as e:
-        print(f"Failed to save log: {e}", file=sys.stderr)
+    except Exception:
+        pass
 
 def update_status(status, progress, total_items, current_item, last_message, profile_slug=None):
     try:
