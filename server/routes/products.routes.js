@@ -7,6 +7,11 @@ const path = require('path');
 const multer = require('multer');
 const { productQueries, profileQueries, profileSheetQueries } = require('../db');
 
+const getPythonCmd = () => {
+    if (process.env.PYTHON_PATH) return process.env.PYTHON_PATH;
+    return process.platform === 'win32' ? 'python' : 'python3';
+};
+
 // Multer: store HAR in memory (max 80MB)
 const harUpload = multer({
     storage: multer.memoryStorage(),
@@ -629,7 +634,7 @@ router.post('/crawler/trigger', async (req, res) => {
         
         // Spawn crawler process asynchronously with piped stdio for logging
         const crawlerScriptPath = path.resolve(process.cwd(), 'crawler.py');
-        const pythonProcess = spawn('python', ['-u', crawlerScriptPath, '--profile', profile, '--concurrency', concurrency.toString()], {
+        const pythonProcess = spawn(getPythonCmd(), ['-u', crawlerScriptPath, '--profile', profile, '--concurrency', concurrency.toString()], {
             cwd: process.cwd(),
             stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
@@ -776,11 +781,11 @@ router.post('/crawler/retry-failed', async (req, res) => {
 
         console.log(`Spawning Python crawler.py --retry-failed with concurrency: ${concurrency}...`);
 
-        const pythonProcess = spawn('python', [
+        const pythonProcess = spawn(getPythonCmd(), [
             '-u', 'crawler.py',
             '--retry-failed',
             '--concurrency', concurrency.toString()
-        ], { stdio: 'ignore' });
+        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeCrawlerProcess = pythonProcess;
 
@@ -818,11 +823,11 @@ router.post('/crawler/fill-downloads', async (req, res) => {
 
         console.log(`Spawning Python crawler.py --fill-downloads with concurrency: ${concurrency}...`);
 
-        const pythonProcess = spawn('python', [
+        const pythonProcess = spawn(getPythonCmd(), [
             '-u', 'crawler.py',
             '--fill-downloads',
             '--concurrency', concurrency.toString()
-        ], { stdio: 'ignore' });
+        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeCrawlerProcess = pythonProcess;
 
@@ -879,12 +884,12 @@ router.post('/crawler/trigger-from-file', async (req, res) => {
 
         console.log(`Spawning Python crawler.py for profile: ${profile} with --from-file: ${targetFilePath} and concurrency: ${concurrency}...`);
 
-        const pythonProcess = spawn('python', [
+        const pythonProcess = spawn(getPythonCmd(), [
             '-u', 'crawler.py',
             '--profile', profile,
             '--from-file', targetFilePath,
             '--concurrency', concurrency.toString()
-        ], { stdio: 'ignore' });
+        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeCrawlerProcess = pythonProcess;
 

@@ -29,7 +29,9 @@ except ImportError:
     print("ERROR: aiohttp is required. Install with: pip install aiohttp", file=sys.stderr)
     sys.exit(1)
 
-os.environ["CAMOUFOX_INSTALL_DIR"] = r"C:\Users\LEGION\AppData\Local\camoufox"
+custom_camou_dir = r"C:\Users\LEGION\AppData\Local\camoufox"
+if os.path.exists(custom_camou_dir):
+    os.environ["CAMOUFOX_INSTALL_DIR"] = custom_camou_dir
 from camoufox import AsyncCamoufox
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
