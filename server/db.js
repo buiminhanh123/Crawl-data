@@ -499,19 +499,22 @@ function extractModelFromName(name, slug) {
     
     getStats: async (profileSlug = '') => {
         const pdb = await openProductsDb();
-        const countRes = pdb.exec(countQuery, params);
-        const totalProducts = countRes[0]?.values[0]?.[0] || 0;
-        
-        let catQuery = 'SELECT category, COUNT(*) as count FROM products WHERE 1=1';
-        const catParams = [...params];
+        let countRes, catRes;
         if (profileSlug) {
-            catQuery += ' AND profile_slug = ?';
-            catParams.push(profileSlug);
+            try {
+                countRes = pdb.exec('SELECT COUNT(*) FROM products WHERE profile_slug = ?', [profileSlug]);
+                catRes = pdb.exec('SELECT category, COUNT(*) as count FROM products WHERE profile_slug = ? GROUP BY category ORDER BY count DESC', [profileSlug]);
+            } catch (e) {
+                countRes = pdb.exec('SELECT COUNT(*) FROM products');
+                catRes = pdb.exec('SELECT category, COUNT(*) as count FROM products GROUP BY category ORDER BY count DESC');
+            }
+        } else {
+            countRes = pdb.exec('SELECT COUNT(*) FROM products');
+            catRes = pdb.exec('SELECT category, COUNT(*) as count FROM products GROUP BY category ORDER BY count DESC');
         }
-        catQuery += ' GROUP BY category ORDER BY count DESC';
-        const catRes = pdb.exec(catQuery, catParams);
         pdb.close();
         
+        const totalProducts = countRes[0]?.values[0]?.[0] || 0;
         const categoryCounts = [];
         if (catRes[0]) {
             const cols = catRes[0].columns;
@@ -591,14 +594,25 @@ function extractModelFromName(name, slug) {
     },
 
     getCrawlerLogs: async () => {
-        const pdb = await openProductsDb();
-        const res = pdb.exec('SELECT message, datetime(created_at, "localtime") as time FROM crawler_logs ORDER BY id DESC LIMIT 50');
-        pdb.close();
-        if (!res[0]) return [];
-        const cols = res[0].columns;
-        return res[0].values.map(vals => 
-            Object.fromEntries(cols.map((c, i) => [c, vals[i]]))
-        );
+        try {
+            const pdb = await openProductsDb();
+            pdb.run(`
+                CREATE TABLE IF NOT EXISTS crawler_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            const res = pdb.exec('SELECT message, datetime(created_at, "localtime") as time FROM crawler_logs ORDER BY id DESC LIMIT 50');
+            pdb.close();
+            if (!res[0]) return [];
+            const cols = res[0].columns;
+            return res[0].values.map(vals => 
+                Object.fromEntries(cols.map((c, i) => [c, vals[i]]))
+            );
+        } catch (e) {
+            return [];
+        }
     },
 
     getFailedUrls: async () => {
