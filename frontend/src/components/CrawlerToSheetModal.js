@@ -57,7 +57,8 @@ const DEFAULT_PRESETS = [
 const AVAILABLE_FIELDS = [
     { value: 'detail_url', label: '🌐 Link bài viết chi tiết' },
     { value: 'brand', label: '🏷️ Hãng / Thương hiệu' },
-    { value: 'category', label: '📂 Danh mục sản phẩm' },
+    { value: 'main_category', label: '📁 Danh mục lớn (Main Category)' },
+    { value: 'category', label: '📂 Danh mục con (Sub Category)' },
     { value: 'series', label: '📌 Dòng Series sản phẩm' },
     { value: 'model', label: '🔢 Model / Mã sản phẩm' },
     { value: 'name', label: '📝 Tên sản phẩm' },

@@ -330,6 +330,12 @@ async function openProductsDb() {
         db.run('ALTER TABLE products ADD COLUMN profile_slug TEXT DEFAULT NULL');
     } catch (e) {}
     try {
+        db.run('ALTER TABLE products ADD COLUMN series TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE products ADD COLUMN main_category TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
         db.run("ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'");
     } catch (e) {}
     try {
@@ -387,12 +393,29 @@ const productQueries = {
             profilesMap[p.slug] = p.brand_name || p.name;
         });
 
+function extractModelFromName(name, slug) {
+    if (!name) return slug ? slug.toUpperCase() : '';
+    const m = name.match(/\b([A-Za-z]{1,4}[-_/]?[0-9]{2,5}[A-Za-z0-9]*)\b/);
+    if (m) return m[1].toUpperCase();
+    const words = name.split(/\s+/);
+    for (const w of words) {
+        const clean = w.replace(/[(),:;[\]{}]/g, '');
+        if (/\d/.test(clean) && clean.length >= 2) return clean.toUpperCase();
+    }
+    return slug ? slug.toUpperCase() : '';
+}
+
         const items = res[0].values.map(vals => {
             const item = Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
             const pSlug = item.profile_slug || profileSlug || '';
             const resolvedBrand = profilesMap[pSlug] || (pSlug ? pSlug.replace(/^profile-?/i, '').toUpperCase() : 'Newland');
             item.brand = resolvedBrand;
             item.brand_name = resolvedBrand;
+            const cleanModel = extractModelFromName(item.name, item.slug);
+            item.model = (item.part_number && item.part_number.trim().toLowerCase() !== 'description') ? item.part_number : cleanModel;
+            if (!item.part_number || item.part_number.trim().toLowerCase() === 'description') {
+                item.part_number = item.model;
+            }
             return item;
         });
         return { total, items };
@@ -412,6 +435,11 @@ const productQueries = {
         const resolvedBrand = profileObj?.brand_name || profileObj?.name || (pSlug ? pSlug.replace(/^profile-?/i, '').toUpperCase() : 'Newland');
         item.brand = resolvedBrand;
         item.brand_name = resolvedBrand;
+        const cleanModel = extractModelFromName(item.name, item.slug);
+        item.model = (item.part_number && item.part_number.trim().toLowerCase() !== 'description') ? item.part_number : cleanModel;
+        if (!item.part_number || item.part_number.trim().toLowerCase() === 'description') {
+            item.part_number = item.model;
+        }
         return item;
     },
     
