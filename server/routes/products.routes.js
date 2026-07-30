@@ -499,7 +499,7 @@ router.get('/', async (req, res) => {
         res.json({ total, items, page: parseInt(page), limit: parseInt(limit) });
     } catch (err) {
         console.error('Failed to get products:', err);
-        res.status(500).json({ error: 'Failed to retrieve products.' });
+        res.status(500).json({ error: err.message || 'Failed to retrieve products.' });
     }
 });
 
@@ -553,7 +553,7 @@ router.get('/categories', async (req, res) => {
         res.json(categories);
     } catch (err) {
         console.error('Failed to get categories:', err);
-        res.status(500).json({ error: 'Failed to retrieve categories.' });
+        res.status(500).json({ error: err.message || 'Failed to retrieve categories.' });
     }
 });
 
@@ -590,7 +590,7 @@ router.get('/stats', async (req, res) => {
         res.json(stats);
     } catch (err) {
         console.error('Failed to get stats:', err);
-        res.status(500).json({ error: 'Failed to retrieve stats.' });
+        res.status(500).json({ error: err.message || 'Failed to retrieve stats.' });
     }
 });
 
@@ -601,7 +601,7 @@ router.get('/crawler/status', async (req, res) => {
         res.json(status);
     } catch (err) {
         console.error('Failed to get crawler status:', err);
-        res.status(500).json({ error: 'Failed to retrieve crawler status.' });
+        res.status(500).json({ error: err.message || 'Failed to retrieve crawler status.' });
     }
 });
 
