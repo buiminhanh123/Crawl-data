@@ -46,16 +46,50 @@ export default function Sidebar() {
     const [creating, setCreating] = useState(false);
     const [activeProfileSlug, setActiveProfileSlug] = useState('');
 
+    const completedTimerRef = useRef(null);
+
     useEffect(() => {
         const fetchStatus = async () => {
             try {
                 const s = await fetchApi('/api/products/crawler/status');
-                if (s) setCrawlerStatus(s);
+                if (s) {
+                    setCrawlerStatus(s);
+
+                    // If Completed, Stopped, or Error, schedule auto-reset after 15 seconds
+                    if (s.status === 'Completed' || s.status === 'Stopped' || s.status === 'Error') {
+                        if (!completedTimerRef.current) {
+                            completedTimerRef.current = setTimeout(async () => {
+                                try {
+                                    await fetchApi('/api/products/crawler/reset', { method: 'POST' });
+                                    setCrawlerStatus({
+                                        status: 'Idle',
+                                        progress: 0,
+                                        total_items: 0,
+                                        current_item: 0,
+                                        failed_items: 0,
+                                        skipped_items: 0,
+                                        last_message: 'Ready',
+                                        profile_slug: ''
+                                    });
+                                } catch (e) {}
+                                completedTimerRef.current = null;
+                            }, 15000);
+                        }
+                    } else {
+                        if (completedTimerRef.current) {
+                            clearTimeout(completedTimerRef.current);
+                            completedTimerRef.current = null;
+                        }
+                    }
+                }
             } catch (e) {}
         };
         fetchStatus();
         const timer = setInterval(fetchStatus, 2500);
-        return () => clearInterval(timer);
+        return () => {
+            clearInterval(timer);
+            if (completedTimerRef.current) clearTimeout(completedTimerRef.current);
+        };
     }, []);
 
     // ── Right-click context menu state ──

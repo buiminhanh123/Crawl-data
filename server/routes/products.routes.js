@@ -609,8 +609,27 @@ router.get('/stats', async (req, res) => {
 // GET /api/products/crawler/status — get crawler progress/status
 router.get('/crawler/status', async (req, res) => {
     try {
-        const status = await productQueries.getCrawlerStatus();
+        let status = await productQueries.getCrawlerStatus();
         const failed_items = await productQueries.getFailedCount();
+
+        if (status && (status.status === 'Completed' || status.status === 'Stopped' || status.status === 'Error')) {
+            const updatedAt = status.updated_at ? new Date(status.updated_at).getTime() : 0;
+            const now = Date.now();
+            // Auto-reset to Idle if completed/stopped over 15 seconds ago
+            if (updatedAt > 0 && (now - updatedAt) > 15000) {
+                await productQueries.updateCrawlerStatus('Idle', 0, 0, 0, 'Ready', '');
+                status = {
+                    ...(status || {}),
+                    status: 'Idle',
+                    progress: 0,
+                    total_items: 0,
+                    current_item: 0,
+                    last_message: 'Ready',
+                    profile_slug: ''
+                };
+            }
+        }
+
         res.json({
             ...(status || {}),
             failed_items: failed_items || 0
@@ -618,6 +637,16 @@ router.get('/crawler/status', async (req, res) => {
     } catch (err) {
         console.error('Failed to get crawler status:', err);
         res.status(500).json({ error: err.message || 'Failed to retrieve crawler status.' });
+    }
+});
+
+// POST /api/products/crawler/reset — force reset status to Idle
+router.post('/crawler/reset', async (req, res) => {
+    try {
+        await productQueries.updateCrawlerStatus('Idle', 0, 0, 0, 'Ready', '');
+        res.json({ success: true, status: 'Idle' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 

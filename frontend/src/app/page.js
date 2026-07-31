@@ -113,11 +113,13 @@ export default function DashboardPage() {
         }
     };
 
+    const completedTimerRef = useRef(null);
+
     useEffect(() => {
         fetchStatsAndStatus();
         fetchLogs();
         fetchFailed();
-        
+
         // Poll status and logs every 2 seconds
         intervalRef.current = setInterval(async () => {
             try {
@@ -129,9 +131,30 @@ export default function DashboardPage() {
                         if (statsData) setStats(statsData);
                     }
                     fetchLogs();
-                    // Refresh failed list after crawler finishes
-                    if (statusData.status === 'Completed' || statusData.status === 'Error') {
+                    // Refresh failed list after crawler finishes and schedule 15s auto-reset
+                    if (statusData.status === 'Completed' || statusData.status === 'Error' || statusData.status === 'Stopped') {
                         fetchFailed();
+                        if (!completedTimerRef.current) {
+                            completedTimerRef.current = setTimeout(async () => {
+                                try {
+                                    await fetchApi('/api/products/crawler/reset', { method: 'POST' });
+                                    setCrawlerStatus({
+                                        status: 'Idle',
+                                        progress: 0,
+                                        total_items: 0,
+                                        current_item: 0,
+                                        failed_items: 0,
+                                        last_message: 'Ready'
+                                    });
+                                } catch (e) {}
+                                completedTimerRef.current = null;
+                            }, 15000);
+                        }
+                    } else {
+                        if (completedTimerRef.current) {
+                            clearTimeout(completedTimerRef.current);
+                            completedTimerRef.current = null;
+                        }
                     }
                 }
             } catch (err) {
@@ -141,6 +164,7 @@ export default function DashboardPage() {
 
         return () => {
             if (intervalRef.current) clearInterval(intervalRef.current);
+            if (completedTimerRef.current) clearTimeout(completedTimerRef.current);
         };
     }, []);
 
