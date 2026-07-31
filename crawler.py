@@ -7,7 +7,36 @@ import sys
 import random
 import re
 import urllib.parse
-from bs4 import BeautifulSoup
+import ssl
+import subprocess
+
+# Bypass SSL certificate validation errors on Linux VPS
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except Exception:
+    pass
+
+# Auto-install missing critical Python dependencies if pip is available
+def ensure_dependencies():
+    missing = []
+    try:
+        import bs4
+    except ImportError:
+        missing.append("beautifulsoup4")
+    try:
+        import aiohttp
+    except ImportError:
+        missing.append("aiohttp")
+
+    if missing:
+        print(f"Installing missing Python packages: {missing}...", file=sys.stderr)
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+            print("Successfully installed missing packages!", file=sys.stderr)
+        except Exception as e:
+            print(f"Failed to auto-install packages: {e}", file=sys.stderr)
+
+ensure_dependencies()
 
 # Fix Windows console & redirected stdio encoding
 try:
@@ -20,6 +49,8 @@ try:
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 except Exception:
     pass
+
+from bs4 import BeautifulSoup
 
 try:
     import aiohttp

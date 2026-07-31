@@ -652,6 +652,7 @@ router.post('/crawler/trigger', async (req, res) => {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
 
+        let lastStderr = '';
         if (pythonProcess.stdout) {
             pythonProcess.stdout.on('data', (data) => {
                 console.log(`[Python Crawler]: ${data.toString('utf8').trim()}`);
@@ -659,7 +660,9 @@ router.post('/crawler/trigger', async (req, res) => {
         }
         if (pythonProcess.stderr) {
             pythonProcess.stderr.on('data', (data) => {
-                console.error(`[Python Crawler Error]: ${data.toString('utf8').trim()}`);
+                const str = data.toString('utf8').trim();
+                console.error(`[Python Crawler Error]: ${str}`);
+                lastStderr = str;
             });
         }
 
@@ -682,7 +685,8 @@ router.post('/crawler/trigger', async (req, res) => {
             if (code === 0 || (status && status.total_items > 0 && status.current_item >= status.total_items)) {
                 await productQueries.updateCrawlerStatus('Completed', 100, status?.total_items || 0, status?.total_items || 0, 'Crawling completed successfully.', status?.profile_slug || profile);
             } else {
-                await productQueries.updateCrawlerStatus('Error', status?.progress || 0, status?.total_items || 0, status?.current_item || 0, `Process exited with code ${code}`, status?.profile_slug || profile);
+                const errMsg = lastStderr ? `Lỗi Python: ${lastStderr.slice(0, 200)}` : `Process exited with code ${code}`;
+                await productQueries.updateCrawlerStatus('Error', status?.progress || 0, status?.total_items || 0, status?.current_item || 0, errMsg, status?.profile_slug || profile);
             }
         });
         
