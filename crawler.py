@@ -706,196 +706,6 @@ async def get_product_urls(profile_slug='newland'):
         print(f"Error fetching sitemap: {e}")
         return []
 
-def extract_product_data(soup, slug, url=""):
-    """
-    Extract product details including:
-    - name: Product Name / Title
-    - main_category: Danh mục lớn (e.g. Barcode Printers, Barcode Scanners)
-    - category: Danh mục con (e.g. Desktop Printers, Industrial Printers)
-    - series: Dòng Series (e.g. CP / CX Series, OS Series)
-    - description, image_url, specs, part_number, download_links
-    """
-    # 1. Name
-    name_el = soup.find("h1") or soup.find("h2", class_=re.compile(r'title|product', re.I))
-    name = name_el.text.strip() if name_el else slug.replace("-", " ").replace("_", " ").title()
-
-    # 2. Specifications table & Part Number
-    specs = {}
-    part_number = ""
-    tables = soup.find_all("table")
-    for table in tables:
-        for row in table.find_all("tr"):
-            cols = row.find_all(["td", "th"])
-            if len(cols) >= 2:
-                key = cols[0].text.strip()
-                val = cols[1].text.strip()
-                if key and val:
-                    specs[key] = val
-                    if "part number" in key.lower() or key.lower() == "pn" or "model" in key.lower():
-                        if not part_number: part_number = val
-
-    if not part_number and tables:
-        for row in tables[-1].find_all("tr"):
-            cols = [c.text.strip() for c in row.find_all(["td", "th"])]
-            if len(cols) >= 2 and ("nls-" in cols[0].lower() or "part number" in cols[0].lower()):
-                part_number = cols[0]
-
-    if not part_number or part_number.strip().lower() in ('', 'description'):
-        m_code = re.search(r'\b([A-Za-z]{1,4}[-_/]?[0-9]{2,5}[A-Za-z0-9]*)\b', name)
-        if m_code:
-            part_number = m_code.group(1).upper()
-        elif slug:
-            part_number = slug.upper()
-
-    # 3. Multi-level Category & Series Extraction
-    main_category = ""
-    category = ""
-    series = ""
-
-    INVALID_NAV_KEYWORDS = {
-        'about us', 'about', 'company', 'contact us', 'contact', 'news', 'solutions',
-        'privacy', 'terms', 'support', 'downloads', 'investors', 'careers', 'home',
-        'trang chủ', 'main', 'index', '公司簡介', '關於立象', '關於我們', '聯絡我們',
-        '新聞', '解決方案', '首頁', '企業簡介', 'about-us', 'company-info'
-    }
-
-    # Check Argox model lookup table first for known brand families
-    ARGOX_PATTERNS = [
-        (r'\b(cx[-_]?2040|cx[-_]?2140|cx[-_]?3040|cx[-_]?3140|cp[-_]?2140|cp[-_]?2140ex)\b', "Barcode Printers", "Desktop Printers", "CP / CX Series"),
-        (r'\b(os[-_]?214|os[-_]?2130|os[-_]?200|os[-_]?214ex|os[-_]?2130d)\b', "Barcode Printers", "Desktop Printers", "OS Series"),
-        (r'\b(o4[-_]?250|o4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "O4 Series"),
-        (r'\b(p4[-_]?250|p4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "P4 Series"),
-        (r'\b(d4[-_]?250|d4[-_]?350|d4[-_]?280|d4[-_]?280plus)\b', "Barcode Printers", "Desktop Printers", "D4 Series"),
-        (r'\b(d2[-_]?250|d2[-_]?350)\b', "Barcode Printers", "Desktop Printers", "D2 Series"),
-        (r'\b(mp[-_]?2140)\b', "Barcode Printers", "Desktop Printers", "MP Series"),
-        (r'\b(ix4[-_]?250|ix4[-_]?350)\b', "Barcode Printers", "Industrial Printers", "iX4 Series"),
-        (r'\b(ix6[-_]?250|ix6[-_]?350)\b', "Barcode Printers", "Industrial Printers", "iX6 Series"),
-        (r'\b(xm4[-_]?250)\b', "Barcode Printers", "Industrial Printers", "XM4 Series"),
-        (r'\b(as[-_]?8000|as[-_]?8060|as[-_]?8050|as[-_]?9400|as[-_]?9400dc|ai[-_]?6800|ai[-_]?6820|ar[-_]?3201)\b', "Barcode Scanners", "Handheld Scanners", "AS / AI Series"),
-    ]
-    
-    text_for_argox = f"{name} {slug} {url}"
-    for pattern, m_cat, cat, ser in ARGOX_PATTERNS:
-        if re.search(pattern, text_for_argox, re.I):
-            main_category = m_cat
-            category = cat
-            series = ser
-            break
-
-    # Strategy A: Breadcrumbs HTML parsing if not resolved
-    if not category or not main_category:
-        bc_elements = soup.find_all(class_=re.compile(r'breadcrumb|crumbs|nav-path|location|site-map', re.I))
-        if not bc_elements:
-            bc_elements = soup.find_all(['nav', 'div', 'ul', 'ol'], attrs={"aria-label": re.compile(r'breadcrumb', re.I)})
-        if not bc_elements:
-            bc_elements = soup.find_all(attrs={"itemtype": re.compile(r'BreadcrumbList', re.I)})
-
-        crumbs = []
-        if bc_elements:
-            for bc_el in bc_elements:
-                items = bc_el.find_all(["a", "li", "span"])
-                for item in items:
-                    t = item.text.strip()
-                    t_lower = t.lower()
-                    if t and t not in crumbs and not any(k in t_lower for k in INVALID_NAV_KEYWORDS) and not any(x in t for x in ('>', '/')):
-                        crumbs.append(t)
-                if len(crumbs) >= 1:
-                    break
-
-        clean_crumbs = [c for c in crumbs if c.lower() != name.lower() and c.lower() != slug.lower()]
-        if len(clean_crumbs) >= 3:
-            if not main_category: main_category = clean_crumbs[0]
-            if not category: category = clean_crumbs[1]
-            if not series: series = clean_crumbs[2]
-        elif len(clean_crumbs) == 2:
-            if not main_category: main_category = clean_crumbs[0]
-            if not category: category = clean_crumbs[1]
-        elif len(clean_crumbs) == 1:
-            if not category: category = clean_crumbs[0]
-
-    # Clean up any leftover invalid nav items in category or series
-    if any(k in (category or '').lower() for k in INVALID_NAV_KEYWORDS):
-        category = ""
-    if any(k in (series or '').lower() for k in INVALID_NAV_KEYWORDS):
-        series = ""
-
-    # Strategy B: Prettified URL Path parsing
-    GENERIC_SEGMENTS = {
-        'en', 'vn', 'products', 'product', 'products-detail', 'product-detail', 
-        'detail', 'item', 'items', 'p', 'catalog', 'category', 'categories', 
-        'shop', 'home', 'default.aspx', 'index.html', 'index.php'
-    }
-    
-    parsed_url = urllib.parse.urlparse(url) if url else None
-    parts = [p for p in parsed_url.path.split('/') if p] if parsed_url else []
-    meaningful_parts = [
-        p.replace('-', ' ').replace('_', ' ').title() 
-        for p in parts 
-        if p.lower() not in GENERIC_SEGMENTS and not p.isdigit()
-    ]
-
-    if not category:
-        if len(meaningful_parts) >= 2:
-            if not main_category: main_category = meaningful_parts[0]
-            category = meaningful_parts[1] if len(meaningful_parts) >= 2 else meaningful_parts[0]
-            if not series and len(meaningful_parts) >= 3:
-                series = meaningful_parts[2]
-        elif len(meaningful_parts) == 1:
-            category = meaningful_parts[0]
-
-    if not main_category:
-        main_category = category if category else "Thiết bị mã số mã vạch"
-
-    # Strategy C: Series Extraction from Specifications or Product Name / Model
-    if not series:
-        for k, v in specs.items():
-            if any(term in k.lower() for term in ('series', 'dòng', 'family', 'product line', 'model series')):
-                series = v
-                break
-
-    if not series and (name or part_number or slug):
-        text_to_search = f"{name} {part_number} {slug}"
-        m_series = re.search(r'\b([A-Za-z0-9\-]+(?:\s+Series|\s+Family))\b', text_to_search, re.I)
-        if m_series:
-            series = m_series.group(1).title()
-        else:
-            m_code = re.search(r'\b([A-Z]{2,4}[-_\s]?[0-9]{2,4})\b', text_to_search)
-            if m_code:
-                code_str = m_code.group(1).upper()
-                series = f"{code_str} Series"
-
-    if not series:
-        series = f"{category} Series" if category and category != "Chung" else "Default Series"
-
-    # 4. Description
-    description = ""
-    prose = soup.find("div", class_=re.compile(r'prose|description|intro|summary', re.I))
-    if prose:
-        description = prose.text.strip()
-    else:
-        meta = soup.find("meta", attrs={"name": "description"}) or \
-               soup.find("meta", property="og:description")
-        if meta:
-            description = meta.get("content", "").strip()
-
-    # 5. Image URL (Rich Image Link Extraction)
-    image_url = ""
-    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
-    if og_img and og_img.get("content"):
-        image_url = og_img.get("content").strip()
-
-    if not image_url:
-        for img in soup.find_all("img"):
-            src = img.get("src", "") or img.get("data-src", "")
-            if not src or any(ext in src.lower() for ext in ('.svg', 'icon', 'logo', 'banner', 'button', 'loading')):
-                continue
-            if any(k in src.lower() for k in ("katanapim", "upload", "catalog", "product", "item", "media", "images", "detail")):
-                image_url = src
-                break
-
-    if image_url and not image_url.startswith("http") and url:
-        image_url = urllib.parse.urljoin(url, image_url)
-
 def prefer_english_url(url):
     if not url or not isinstance(url, str):
         return url
@@ -1107,7 +917,7 @@ def extract_product_data(soup, slug, url=""):
         for row in tables[-1].find_all("tr"):
             cols = [c.text.strip() for c in row.find_all(["td", "th"])]
             if len(cols) >= 2 and ("nls-" in cols[0].lower() or "part number" in cols[0].lower()):
-                if not part_number: part_number = cols[0]
+                part_number = cols[0]
 
     if not part_number or part_number.strip().lower() in ('', 'description'):
         m_code = re.search(r'\b([A-Za-z]{1,4}[-_/]?[0-9]{2,5}[A-Za-z0-9]*)\b', name)
@@ -1305,6 +1115,7 @@ def extract_product_data(soup, slug, url=""):
     download_links = extract_download_links(soup)
 
     return name, main_category, category, series, description, image_url, specs, part_number, download_links
+
 
 def extract_download_links(soup):
     """Extract downloadable file links from parsed HTML."""
