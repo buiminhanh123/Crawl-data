@@ -18,7 +18,11 @@ const DEFAULT_PRESET_PROMPTS = [
         id: 'sapo',
         name: 'Viết SAPO Giới Thiệu Sản Phẩm',
         targetCol: 'D',
-        variables: [{ name: 'ten-sp', col: 'A' }, { name: 'ma-sp', col: 'B' }, { name: 'noi-dung', col: 'C' }],
+        variables: [
+            { id: 'sapo-1', name: 'ten-sp', label: 'Tên SP', col: 'A' },
+            { id: 'sapo-2', name: 'ma-sp', label: 'Mã SP', col: 'B' },
+            { id: 'sapo-3', name: 'noi-dung', label: 'Nội Dung', col: 'C' }
+        ],
         prompt: `Viết đoạn SAPO mở đầu bài viết (2-3 câu ngắn gọn, hấp dẫn, chuẩn SEO) cho sản phẩm dựa vào thông tin sau. Chỉ trả về nội dung SAPO, không kèm câu chào hay tiêu đề:
 
 Tên sản phẩm: {ten-sp}
@@ -29,7 +33,9 @@ Thông số: {noi-dung}`
         id: 'dich',
         name: 'Dịch Bảng Thông Số Kỹ Thuật (Sang Tiếng Việt)',
         targetCol: 'C',
-        variables: [{ name: 'noi-dung', col: 'C' }],
+        variables: [
+            { id: 'dich-1', name: 'noi-dung', label: 'Nội Dung', col: 'C' }
+        ],
         prompt: `Dịch bảng thông số kỹ thuật sau sang tiếng Việt chuyên ngành tự nhiên. Giữ nguyên đơn vị đo lường và định dạng. Không thêm câu chào:
 
 {noi-dung}`
@@ -38,7 +44,10 @@ Thông số: {noi-dung}`
         id: 'meta',
         name: 'Tạo Meta Title & Description SEO',
         targetCol: 'E',
-        variables: [{ name: 'ten-sp', col: 'A' }, { name: 'ma-sp', col: 'B' }],
+        variables: [
+            { id: 'meta-1', name: 'ten-sp', label: 'Tên SP', col: 'A' },
+            { id: 'meta-2', name: 'ma-sp', label: 'Mã SP', col: 'B' }
+        ],
         prompt: `Viết Meta Title (dưới 60 ký tự) và Meta Description (130-160 ký tự) chuẩn SEO tiếng Việt cho sản phẩm. Format output:
 Title: [Nội dung title]
 Description: [Nội dung description]
@@ -321,9 +330,9 @@ export default function AIAssistantPage() {
 
     // Dynamic Variables (like AiAssistantModal)
     const [variables, setVariables] = useState([
-        { id: 1, name: 'ten-sp', col: 'A' },
-        { id: 2, name: 'ma-sp', col: 'B' },
-        { id: 3, name: 'noi-dung', col: 'C' }
+        { id: 'init-1', name: 'ten-sp', label: 'Tên SP', col: 'A' },
+        { id: 'init-2', name: 'ma-sp', label: 'Mã SP', col: 'B' },
+        { id: 'init-3', name: 'noi-dung', label: 'Nội Dung', col: 'C' }
     ]);
 
     // Performance & Execution Parameters
@@ -429,33 +438,41 @@ export default function AIAssistantPage() {
     // Variable operations
     const handleAddVariable = () => {
         const nextLetter = String.fromCharCode(65 + variables.length);
+        const uniqueId = `var_${Date.now()}_${variables.length}_${Math.random().toString(36).substring(2, 7)}`;
         setVariables(prev => [
             ...prev,
-            { id: Date.now(), name: `bien-${variables.length + 1}`, col: nextLetter }
+            { id: uniqueId, name: `bien-${prev.length + 1}`, label: '', col: nextLetter }
         ]);
     };
 
-    const handleRemoveVariable = (id) => {
-        setVariables(prev => prev.filter(v => v.id !== id));
+    const handleRemoveVariable = (targetId, idx) => {
+        setVariables(prev => prev.filter((v, i) => (v.id && targetId ? v.id !== targetId : i !== idx)));
     };
 
-    const handleUpdateVariable = (id, field, value) => {
-        setVariables(prev => prev.map(v => v.id === id ? { ...v, [field]: value } : v));
+    const handleUpdateVariable = (targetId, idx, field, value) => {
+        setVariables(prev => prev.map((v, i) => {
+            const isMatch = (v.id && targetId) ? v.id === targetId : i === idx;
+            return isMatch ? { ...v, [field]: value } : v;
+        }));
     };
 
     // Update label AND auto-generate slug name in one setState call (avoids React batching issue)
-    const handleLabelChange = (id, label) => {
+    const handleLabelChange = (targetId, idx, label) => {
         const slug = toVarName(label);
-        setVariables(prev => prev.map(v =>
-            v.id === id ? { ...v, label, name: slug || v.name } : v
-        ));
+        setVariables(prev => prev.map((v, i) => {
+            const isMatch = (v.id && targetId) ? v.id === targetId : i === idx;
+            return isMatch ? { ...v, label, name: slug || v.name } : v;
+        }));
     };
 
     // Convert to slug when user finishes typing (onBlur)
-    const handleBlurVariableName = (id, value) => {
+    const handleBlurVariableName = (targetId, idx, value) => {
         const slug = toVarName(value);
         if (slug !== value) {
-            setVariables(prev => prev.map(v => v.id === id ? { ...v, name: slug } : v));
+            setVariables(prev => prev.map((v, i) => {
+                const isMatch = (v.id && targetId) ? v.id === targetId : i === idx;
+                return isMatch ? { ...v, name: slug } : v;
+            }));
         }
     };
 
@@ -475,7 +492,12 @@ export default function AIAssistantPage() {
             if (preset.targetCol) setTargetCol(preset.targetCol);
             if (preset.startRow !== undefined) setStartRow(preset.startRow);
             if (preset.endRow !== undefined) setEndRow(preset.endRow);
-            if (preset.variables && Array.isArray(preset.variables)) setVariables(preset.variables);
+            if (preset.variables && Array.isArray(preset.variables)) {
+                setVariables(preset.variables.map((v, i) => ({
+                    ...v,
+                    id: v.id ? `${v.id}_${Date.now()}_${i}` : `var_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 7)}`
+                })));
+            }
             if (preset.concurrency) setConcurrency(preset.concurrency);
             if (preset.delayMs !== undefined) setDelayMs(preset.delayMs);
             showToast(`Đã nạp Cấu hình Prompt: "${preset.name}"`, 'success');
@@ -1183,7 +1205,8 @@ export default function AIAssistantPage() {
                                             <input
                                                 type="text"
                                                 value={v.label || ''}
-                                                onChange={e => handleLabelChange(v.id, e.target.value)}
+                                                onChange={e => handleLabelChange(v.id, idx, e.target.value)}
+                                                onBlur={e => handleBlurVariableName(v.id, idx, e.target.value)}
                                                 placeholder="Nhập nhãn biến (vd: Tên Sản Phẩm)"
                                                 style={{ flex: 1, minWidth: 0, padding: '5px 8px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)' }}
                                             />
@@ -1198,13 +1221,13 @@ export default function AIAssistantPage() {
                                             <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Cột:</span>
                                             <input
                                                 type="text"
-                                                value={v.col}
-                                                onChange={e => handleUpdateVariable(v.id, 'col', e.target.value.toUpperCase())}
+                                                value={v.col || ''}
+                                                onChange={e => handleUpdateVariable(v.id, idx, 'col', e.target.value.toUpperCase())}
                                                 placeholder="A"
                                                 style={{ width: 44, padding: '5px 6px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', textAlign: 'center', fontWeight: 700, textTransform: 'uppercase' }}
                                             />
                                             {variables.length > 1 && (
-                                                <button type="button" onClick={() => handleRemoveVariable(v.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4, flexShrink: 0 }} title="Xóa biến này">
+                                                <button type="button" onClick={() => handleRemoveVariable(v.id, idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4, flexShrink: 0 }} title="Xóa biến này">
                                                     <Trash2 size={14} />
                                                 </button>
                                             )}
