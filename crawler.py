@@ -1124,11 +1124,13 @@ async def main():
     # limit_per_host prevents overwhelming the target server.
     # Even with 50 workers, only limit_per_host connections run in parallel to the server.
     limit_per_host = min(concurrency, 20)
-    connector = aiohttp.TCPConnector(
-        limit=concurrency + 10,
-        limit_per_host=limit_per_host,
-        ssl=False
-    )
+    connector = None
+    if AIOHTTP_AVAILABLE and 'aiohttp' in globals() and aiohttp is not None:
+        connector = aiohttp.TCPConnector(
+            limit=concurrency + 10,
+            limit_per_host=limit_per_host,
+            ssl=False
+        )
 
     update_status("Starting", 0, total, 0, f"Found {total} items. Launching ({concurrency} workers, max {MAX_BROWSER_CONCURRENT} browser slots)...")
     log_message(
