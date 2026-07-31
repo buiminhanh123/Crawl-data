@@ -8,10 +8,8 @@ const AI_API_KEY = 'chatgpt2api';
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
 // Server-side Request Queue Pacer
-// Ensures outgoing API calls to AI provider are spaced out by at least MIN_INTERVAL_MS
-// to prevent 429 Rate Limit / 502 Bad Gateway when running multi-threaded batches.
 let pacerChain = Promise.resolve();
-const MIN_INTERVAL_MS = 800; // 800ms spacing between AI calls
+const MIN_INTERVAL_MS = 600; // 600ms spacing between AI calls
 
 function enqueuePacedRequest(fn) {
     const resultPromise = pacerChain.then(async () => {
@@ -23,12 +21,11 @@ function enqueuePacedRequest(fn) {
         throw err;
     });
 
-    // Keep queue chain alive even if a request fails
     pacerChain = resultPromise.catch(() => {});
     return resultPromise;
 }
 
-// Helper function to safely extract clean JSON or text content from AI response
+// Safe AI text extraction
 function extractAiContent(jsonObj, rawText) {
     if (!jsonObj && !rawText) return '';
     if (jsonObj) {
@@ -46,11 +43,10 @@ function extractAiContent(jsonObj, rawText) {
 
 // ──────────────────────────────────────────────────────────────
 // POST /api/ai/chat
-// Body: { message: string, history: Array, mode?: string }
-// Proxy to aidesign.io.vn chatbot API with Paced Queue + Retry Engine
+// Body: { message: string, history: Array }
 // ──────────────────────────────────────────────────────────────
 router.post('/chat', async (req, res) => {
-    const { message, history = [], mode } = req.body;
+    const { message, history = [] } = req.body;
 
     if (!message || typeof message !== 'string' || message.trim() === '') {
         return res.status(400).json({ error: 'Nội dung tin nhắn không được để trống' });
@@ -80,7 +76,7 @@ router.post('/chat', async (req, res) => {
                             'Authorization': `Bearer ${AI_API_KEY}`,
                         },
                         body: JSON.stringify(payload),
-                        signal: AbortSignal.timeout(30000), // 30s timeout
+                        signal: AbortSignal.timeout(25000),
                     });
 
                     lastStatus = response.status;
@@ -100,11 +96,10 @@ router.post('/chat', async (req, res) => {
                         }
                     }
 
-                    // If rate limited or 502/503 bad gateway, retry with increasing delay
                     if (response.status === 429 || response.status >= 500) {
-                        console.warn(`[AI] Attempt ${attempts}/${maxAttempts} failed with status ${response.status}. Retrying in ${attempts * 1500}ms...`);
+                        console.warn(`[AI] Attempt ${attempts}/${maxAttempts} status ${response.status}. Retrying in ${attempts * 1200}ms...`);
                         if (attempts < maxAttempts) {
-                            await delay(attempts * 1500);
+                            await delay(attempts * 1200);
                             continue;
                         }
                     } else {
@@ -114,14 +109,14 @@ router.post('/chat', async (req, res) => {
                     console.error(`[AI] Attempt ${attempts}/${maxAttempts} fetch error:`, err.message);
                     lastRaw = err.message;
                     if (attempts < maxAttempts) {
-                        await delay(attempts * 1500);
+                        await delay(attempts * 1200);
                     }
                 }
             }
 
             throw {
                 status: lastStatus,
-                message: `Server AI đang quá tải hoặc tạm thời bận (Status ${lastStatus}). Khuyên dùng 2-3 luồng để chạy ổn định.`
+                message: `Server AI đang quá tải hoặc phản hồi chậm (Status ${lastStatus}). Hãy thử lại hoặc giảm số luồng xuống 1-2.`
             };
         });
 
@@ -129,7 +124,7 @@ router.post('/chat', async (req, res) => {
 
     } catch (err) {
         const status = err.status || 502;
-        const msg = err.message || 'Lỗi kết nối Server AI. Vui lòng giảm số luồng xuống 2-3 luồng.';
+        const msg = err.message || 'Lỗi kết nối Server AI. Vui lòng thử lại sau.';
         return res.status(status).json({
             error: msg,
             status
@@ -139,9 +134,10 @@ router.post('/chat', async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────
 // GET /api/ai/health
-// Quick check if the AI API is reachable
+// Real-time Health Check & Ping for AI Server Endpoint
 // ──────────────────────────────────────────────────────────────
 router.get('/health', async (req, res) => {
+    const startTime = Date.now();
     try {
         const response = await fetch(AI_API_URL, {
             method: 'POST',
@@ -150,11 +146,101 @@ router.get('/health', async (req, res) => {
                 'Authorization': `Bearer ${AI_API_KEY}`,
             },
             body: JSON.stringify({ message: 'ping', stream: false, history: [] }),
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(12000),
         });
-        res.json({ ok: response.ok, status: response.status });
+
+        const latencyMs = Date.now() - startTime;
+        const rawText = await response.text();
+
+        let isOk = response.ok;
+        let snippet = rawText.slice(0, 150);
+
+        if (response.ok) {
+            try {
+                const parsed = JSON.parse(rawText);
+                const extracted = extractAiContent(parsed, rawText);
+                if (extracted) isOk = true;
+            } catch (e) {}
+        }
+
+        res.json({
+            ok: isOk,
+            status: response.status,
+            latencyMs,
+            endpoint: AI_API_URL,
+            message: isOk
+                ? `✅ Kết nối thành công! Server AI hoạt động tốt (${latencyMs}ms)`
+                : `⚠️ Server AI trả về mã lỗi ${response.status} (${latencyMs}ms)`,
+            snippet
+        });
     } catch (err) {
-        res.json({ ok: false, error: err.message });
+        const latencyMs = Date.now() - startTime;
+        res.json({
+            ok: false,
+            status: 504,
+            latencyMs,
+            endpoint: AI_API_URL,
+            message: `❌ Lỗi kết nối Server AI: ${err.message}`,
+            error: err.message
+        });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/ai/test-connection
+// Sends a real test prompt to verify AI output response
+// ──────────────────────────────────────────────────────────────
+router.post('/test-connection', async (req, res) => {
+    const startTime = Date.now();
+    try {
+        const response = await fetch(AI_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${AI_API_KEY}`,
+            },
+            body: JSON.stringify({ message: 'Xin chào! Hãy trả về dòng chữ "AI OK".', stream: false, history: [] }),
+            signal: AbortSignal.timeout(15000),
+        });
+
+        const latencyMs = Date.now() - startTime;
+        const rawText = await response.text();
+
+        if (!response.ok) {
+            return res.status(response.status).json({
+                ok: false,
+                status: response.status,
+                latencyMs,
+                message: `Server AI trả về lỗi HTTP ${response.status}`,
+                details: rawText.slice(0, 200)
+            });
+        }
+
+        let parsed;
+        try {
+            parsed = JSON.parse(rawText);
+        } catch (e) {
+            parsed = null;
+        }
+
+        const reply = extractAiContent(parsed, rawText);
+
+        res.json({
+            ok: true,
+            status: response.status,
+            latencyMs,
+            reply: reply || rawText.slice(0, 200),
+            message: `🎉 Kết nối API AI hoàn hảo! Thời gian phản hồi: ${latencyMs}ms`
+        });
+    } catch (err) {
+        const latencyMs = Date.now() - startTime;
+        res.status(504).json({
+            ok: false,
+            status: 504,
+            latencyMs,
+            message: `❌ Không thể kết nối tới Server AI: ${err.message}`,
+            error: err.message
+        });
     }
 });
 

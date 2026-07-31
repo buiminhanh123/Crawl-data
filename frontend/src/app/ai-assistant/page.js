@@ -1096,6 +1096,51 @@ export default function AIAssistantPage() {
                         </div>
                     </div>
 
+                    {/* Test API Connection Card */}
+                    <div className="card" style={{ padding: '16px 20px', background: 'var(--bg-card)', borderRadius: 16, border: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                            <div>
+                                <h4 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-primary)' }}>
+                                    <Zap size={16} style={{ color: '#eab308' }} /> Kiểm Tra Kết Nối & Độ Trễ API AI (Server Health Check)
+                                </h4>
+                                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+                                    Bấm nút để gửi 1 yêu cầu thử nghiệm tới Server AI và đo thời gian phản hồi thực tế trước khi chạy hàng loạt.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleTestApiConnection}
+                                disabled={apiTestState.testing}
+                                style={{ padding: '8px 16px', background: apiTestState.testing ? 'var(--bg-secondary)' : 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: 13, cursor: apiTestState.testing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 12px rgba(99,102,241,0.2)' }}
+                            >
+                                {apiTestState.testing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={15} />}
+                                {apiTestState.testing ? 'Đang Kiểm Tra Kết Nối...' : '⚡ Kiểm Tra Kết Nối API AI Ngay'}
+                            </button>
+                        </div>
+
+                        {apiTestState.result && (
+                            <div style={{ marginTop: 14, padding: '12px 16px', borderRadius: 'var(--radius-md)', background: apiTestState.result.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)', border: `1px solid ${apiTestState.result.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, fontSize: 13 }}>
+                                <div style={{ fontWeight: 700, color: apiTestState.result.ok ? '#15803d' : '#b91c1c', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                    {apiTestState.result.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                                    <span>{apiTestState.result.message}</span>
+                                    <span style={{ fontSize: 11.5, opacity: 0.85, fontWeight: 600, background: 'rgba(0,0,0,0.06)', padding: '2px 8px', borderRadius: 10 }}>
+                                        {apiTestState.result.latencyMs} ms
+                                    </span>
+                                </div>
+                                {apiTestState.result.ok && apiTestState.result.reply && (
+                                    <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'monospace', background: 'var(--bg-card)', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                                        💬 Phản hồi thử từ AI: "{apiTestState.result.reply}"
+                                    </p>
+                                )}
+                                {!apiTestState.result.ok && (
+                                    <p style={{ margin: '4px 0 0', fontSize: 12, color: '#b91c1c' }}>
+                                        💡 <strong>Hướng dẫn khắc phục:</strong> Server AI (aidesign.io.vn) hiện đang bị nghẽn/timeout (Status 504). Vui lòng thử lại sau vài phút hoặc chạy 1-2 luồng.
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
                     {/* Section 1: Choose Profiles & Sheet Tabs */}
                     <div className="card" style={{ padding: 24, background: 'var(--bg-card)', borderRadius: 16, border: '1px solid var(--border-color)' }}>
                         <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
