@@ -7,6 +7,9 @@ const path = require('path');
 const multer = require('multer');
 const { productQueries, profileQueries, profileSheetQueries } = require('../db');
 
+const ROOT_DIR = path.resolve(__dirname, '../..');
+const CRAWLER_SCRIPT = path.resolve(ROOT_DIR, 'crawler.py');
+
 const getPythonCmd = () => {
     if (process.env.PYTHON_PATH) return process.env.PYTHON_PATH;
     return process.platform === 'win32' ? 'python' : 'python3';
@@ -633,9 +636,8 @@ router.post('/crawler/trigger', async (req, res) => {
         console.log(`Spawning Python crawler.py for profile: ${profile} with concurrency: ${concurrency}...`);
         
         // Spawn crawler process asynchronously with piped stdio for logging
-        const crawlerScriptPath = path.resolve(process.cwd(), 'crawler.py');
-        const pythonProcess = spawn(getPythonCmd(), ['-u', crawlerScriptPath, '--profile', profile, '--concurrency', concurrency.toString()], {
-            cwd: process.cwd(),
+        const pythonProcess = spawn(getPythonCmd(), ['-u', CRAWLER_SCRIPT, '--profile', profile, '--concurrency', concurrency.toString()], {
+            cwd: ROOT_DIR,
             stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
         });
@@ -782,10 +784,10 @@ router.post('/crawler/retry-failed', async (req, res) => {
         console.log(`Spawning Python crawler.py --retry-failed with concurrency: ${concurrency}...`);
 
         const pythonProcess = spawn(getPythonCmd(), [
-            '-u', 'crawler.py',
+            '-u', CRAWLER_SCRIPT,
             '--retry-failed',
             '--concurrency', concurrency.toString()
-        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+        ], { cwd: ROOT_DIR, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeCrawlerProcess = pythonProcess;
 
@@ -824,10 +826,10 @@ router.post('/crawler/fill-downloads', async (req, res) => {
         console.log(`Spawning Python crawler.py --fill-downloads with concurrency: ${concurrency}...`);
 
         const pythonProcess = spawn(getPythonCmd(), [
-            '-u', 'crawler.py',
+            '-u', CRAWLER_SCRIPT,
             '--fill-downloads',
             '--concurrency', concurrency.toString()
-        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+        ], { cwd: ROOT_DIR, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeCrawlerProcess = pythonProcess;
 
@@ -863,7 +865,7 @@ router.post('/crawler/trigger-from-file', async (req, res) => {
 
         let targetFilePath = '';
         if (useLocalFile) {
-            targetFilePath = path.resolve(process.cwd(), 'list-link.txt');
+            targetFilePath = path.resolve(ROOT_DIR, 'list-link.txt');
         } else if (urls && Array.isArray(urls) && urls.length > 0) {
             const dataDir = path.join(__dirname, '..', 'data');
             if (!fs.existsSync(dataDir)) {
@@ -885,11 +887,11 @@ router.post('/crawler/trigger-from-file', async (req, res) => {
         console.log(`Spawning Python crawler.py for profile: ${profile} with --from-file: ${targetFilePath} and concurrency: ${concurrency}...`);
 
         const pythonProcess = spawn(getPythonCmd(), [
-            '-u', 'crawler.py',
+            '-u', CRAWLER_SCRIPT,
             '--profile', profile,
             '--from-file', targetFilePath,
             '--concurrency', concurrency.toString()
-        ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+        ], { cwd: ROOT_DIR, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeCrawlerProcess = pythonProcess;
 
@@ -1055,11 +1057,11 @@ async function runNextInQueue() {
         // Reset crawler status in DB for this profile crawl run
         await productQueries.updateCrawlerStatus('Starting', 0, 0, 0, `[Batch] Bắt đầu crawl profile: ${profileEntry.name}`);
 
-        const pythonProcess = spawn('python', [
-            '-u', 'crawler.py',
+        const pythonProcess = spawn(getPythonCmd(), [
+            '-u', CRAWLER_SCRIPT,
             '--profile', profileEntry.slug,
             '--concurrency', '3'
-        ], { stdio: 'ignore' });
+        ], { cwd: ROOT_DIR, stdio: 'ignore', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
 
         activeBatchProcess = pythonProcess;
         batchQueue.activePid = pythonProcess.pid;
