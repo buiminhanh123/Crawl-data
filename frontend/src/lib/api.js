@@ -62,7 +62,7 @@ export async function fetchApi(path, options = {}) {
     } else {
         const rawText = await res.text();
         if (!res.ok) {
-            throw new Error(`Lỗi kết nối Server AI (${res.status} ${res.statusText}): Vui lòng kiểm tra lại backend server!`);
+            throw new Error(`Lỗi Backend Server (Mã ${res.status} ${res.statusText}): Server backend tạm thời không phản hồi. Vui lòng kiểm tra lại!`);
         }
         try {
             data = JSON.parse(rawText);

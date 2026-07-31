@@ -377,12 +377,15 @@ router.post('/parse-excel', uploadMemory.single('file'), (req, res) => {
 router.post('/parse-url', async (req, res) => {
     try {
         const { url } = req.body;
-        if (!url) return res.status(400).json({ error: 'Vui lòng nhập link Google Sheets.' });
+        if (!url || typeof url !== 'string' || !url.trim()) {
+            return res.status(400).json({ error: 'Vui lòng nhập link Google Sheets hợp lệ.' });
+        }
         
-        const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-        const spreadsheetId = match ? match[1] : url.trim();
+        const trimmedUrl = url.trim();
+        const match = trimmedUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+        const spreadsheetId = match ? match[1] : trimmedUrl;
 
-        // 1. Try Google Sheets API with credentials.json
+        // 1. Try Google Sheets API with credentials.json if available
         if (fs.existsSync(CREDENTIALS_PATH)) {
             try {
                 const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf-8'));
@@ -393,52 +396,63 @@ router.post('/parse-url', async (req, res) => {
                 const sheetsApi = google.sheets({ version: 'v4', auth });
                 
                 const metadata = await sheetsApi.spreadsheets.get({ spreadsheetId });
-                const tabNames = metadata.data.sheets.map(s => s.properties.title);
+                const tabNames = (metadata.data?.sheets || []).map(s => s.properties.title);
 
-                const sheetPromises = tabNames.map(async (sheetName) => {
-                    const rangeRes = await sheetsApi.spreadsheets.values.get({
-                        spreadsheetId,
-                        range: `${sheetName}`,
+                if (tabNames.length > 0) {
+                    const sheetPromises = tabNames.map(async (sheetName) => {
+                        try {
+                            const rangeRes = await sheetsApi.spreadsheets.values.get({
+                                spreadsheetId,
+                                range: `${sheetName}`,
+                            });
+                            return {
+                                name: sheetName,
+                                data: rangeRes.data.values || []
+                            };
+                        } catch (e) {
+                            return { name: sheetName, data: [] };
+                        }
                     });
-                    return {
-                        name: sheetName,
-                        data: rangeRes.data.values || []
-                    };
-                });
 
-                const sheetsData = await Promise.all(sheetPromises);
-                return res.json({ sheets: sheetsData, spreadsheetId });
+                    const sheetsData = await Promise.all(sheetPromises);
+                    return res.json({ sheets: sheetsData, spreadsheetId });
+                }
             } catch (apiErr) {
-                console.warn('Google API fetch failed, trying public CSV fallback...', apiErr.message);
+                console.warn('[Sheets Parse URL] Google API fetch warning:', apiErr.message);
             }
         }
 
-        // 2. Fallback: Public Google Sheet CSV fetch via gviz API
+        // 2. Fallback: Public Google Sheet CSV fetch via gviz API with 8s timeout
         try {
             const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv`;
-            const resp = await fetch(csvUrl);
+            const resp = await fetch(csvUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                signal: AbortSignal.timeout(8000)
+            });
             if (resp.ok) {
                 const csvText = await resp.text();
-                const workbook = XLSX.read(csvText, { type: 'string' });
-                const sheetName = workbook.SheetNames[0] || 'Sheet1';
-                const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
-                return res.json({
-                    sheets: [{ name: sheetName, data }],
-                    spreadsheetId,
-                    isPublicFallback: true
-                });
+                if (csvText && !csvText.includes('<!DOCTYPE html>')) {
+                    const workbook = XLSX.read(csvText, { type: 'string' });
+                    const sheetName = workbook.SheetNames[0] || 'Sheet1';
+                    const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+                    return res.json({
+                        sheets: [{ name: sheetName, data }],
+                        spreadsheetId,
+                        isPublicFallback: true
+                    });
+                }
             }
         } catch (pubErr) {
-            console.warn('Public CSV fallback failed:', pubErr.message);
+            console.warn('[Sheets Parse URL] Public CSV fallback warning:', pubErr.message);
         }
 
         return res.status(400).json({
-            error: 'Không thể đọc Google Sheet. Vui lòng nạp file credentials.json (Google Service Account) bên dưới hoặc bật chế độ "Bất kỳ ai có liên kết đều có thể xem" trên Google Sheet.'
+            error: 'Không thể đọc Google Sheet này. Vui lòng kiểm tra lại: 1. Đã bật quyền "Bất kỳ ai có liên kết đều có thể xem" trên Google Sheet chưa?, hoặc 2. Đã chia sẻ quyền Xem cho email Service Account chưa?'
         });
 
     } catch (err) {
         console.error('Failed to parse google sheet url:', err);
-        res.status(500).json({ error: 'Không thể đọc Google Sheet: ' + (err.message || 'Lỗi kết nối') });
+        return res.status(400).json({ error: 'Lỗi khi đọc Google Sheet: ' + (err.message || 'Vui lòng kiểm tra lại đường link') });
     }
 });
 
