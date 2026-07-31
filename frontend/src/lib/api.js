@@ -1,15 +1,20 @@
 const getApiBase = () => {
     if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-    if (typeof window !== 'undefined') return '';
+    if (typeof window !== 'undefined') {
+        if (window.location.port === '3000') {
+            return 'http://localhost:3002';
+        }
+        return '';
+    }
     return 'http://localhost:3002';
 };
 
 /**
- * Fetch wrapper with auth token and error handling.
+ * Fetch wrapper with auth token and safe JSON/error handling.
  * - Auto-attaches Bearer token from localStorage
  * - Auto-sets Content-Type: application/json
  * - On 401: clears token, redirects to /login
- * - On error: throws Error with server message
+ * - Safely handles non-JSON / HTML error pages without throwing raw JSON syntax errors
  */
 export async function fetchApi(path, options = {}) {
     const API_BASE = getApiBase();
@@ -44,10 +49,30 @@ export async function fetchApi(path, options = {}) {
         throw new Error('Session expired');
     }
 
-    const data = await res.json();
+    const contentType = res.headers.get('content-type') || '';
+    let data;
+
+    if (contentType.includes('application/json')) {
+        try {
+            data = await res.json();
+        } catch (e) {
+            const rawText = await res.text();
+            throw new Error(`Phản hồi Server lỗi cấu trúc JSON (${res.status}): ${rawText.slice(0, 150)}`);
+        }
+    } else {
+        const rawText = await res.text();
+        if (!res.ok) {
+            throw new Error(`Lỗi kết nối Server AI (${res.status} ${res.statusText}): Vui lòng kiểm tra lại backend server!`);
+        }
+        try {
+            data = JSON.parse(rawText);
+        } catch (e) {
+            throw new Error(`Server không trả về định dạng JSON (${res.status}): ${rawText.slice(0, 120)}`);
+        }
+    }
 
     if (!res.ok) {
-        throw new Error(data.error || 'An error occurred');
+        throw new Error(data.error || data.message || `Lỗi API (${res.status})`);
     }
 
     return data;
