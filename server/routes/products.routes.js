@@ -610,7 +610,11 @@ router.get('/stats', async (req, res) => {
 router.get('/crawler/status', async (req, res) => {
     try {
         const status = await productQueries.getCrawlerStatus();
-        res.json(status);
+        const failed_items = await productQueries.getFailedCount();
+        res.json({
+            ...(status || {}),
+            failed_items: failed_items || 0
+        });
     } catch (err) {
         console.error('Failed to get crawler status:', err);
         res.status(500).json({ error: err.message || 'Failed to retrieve crawler status.' });

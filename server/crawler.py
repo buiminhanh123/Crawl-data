@@ -75,6 +75,15 @@ except ImportError:
             search(self)
             return results
 
+        def has_attr(self, attr):
+            return attr in self.attrs
+
+        def __getitem__(self, item):
+            return self.attrs.get(item, '')
+
+        def __contains__(self, item):
+            return item in self.attrs
+
         def find(self, name=None, **kwargs):
             res = self.find_all(name, **kwargs)
             return res[0] if res else None
@@ -247,8 +256,23 @@ def log_message(message):
     except Exception:
         pass
 
+def get_current_db_status():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM crawler_status WHERE id=1")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 'Running'
+    except Exception:
+        return 'Running'
+
 def update_status(status, progress, total_items, current_item, last_message, profile_slug=None):
     try:
+        curr_status = get_current_db_status()
+        if curr_status in ('Paused', 'Stopped') and status not in ('Completed', 'Error', 'Stopped'):
+            status = curr_status
+
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         if profile_slug:
@@ -1007,6 +1031,15 @@ async def worker(queue, session, browser, browser_sem, total, mode, profile_slug
     Uses HTTP-first approach, so many workers can run concurrently without overloading the browser.
     """
     while not queue.empty():
+        # Pause / stop check
+        while True:
+            st = get_current_db_status()
+            if st == 'Stopped':
+                return
+            if st != 'Paused':
+                break
+            await asyncio.sleep(2)
+
         index = None
         try:
             index, url_info = await queue.get()
