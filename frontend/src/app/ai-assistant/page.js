@@ -341,6 +341,38 @@ export default function AIAssistantPage() {
     const [skipExisting, setSkipExisting] = useState(true);
     const [autoClean, setAutoClean] = useState(true);
 
+    // API Connection Test State
+    const [apiTestState, setApiTestState] = useState({ testing: false, result: null });
+
+    const handleTestApiConnection = async () => {
+        setApiTestState({ testing: true, result: null });
+        const startTime = Date.now();
+        try {
+            const res = await fetchApi('/api/ai/test-connection', { method: 'POST' });
+            setApiTestState({
+                testing: false,
+                result: {
+                    ok: true,
+                    latencyMs: res.latencyMs || (Date.now() - startTime),
+                    message: res.message || '🎉 Kết nối API AI hoàn hảo!',
+                    reply: res.reply || ''
+                }
+            });
+            showToast('✅ Kết nối API AI phản hồi tốt!', 'success');
+        } catch (err) {
+            setApiTestState({
+                testing: false,
+                result: {
+                    ok: false,
+                    latencyMs: Date.now() - startTime,
+                    message: err.message || '❌ Kết nối tới Server AI thất bại!',
+                    error: err.message
+                }
+            });
+            showToast('❌ Kết nối API AI thất bại!', 'danger');
+        }
+    };
+
     // Live Runner State
     const [runnerState, setRunnerStateInternal] = useState({
         isRunning: false,
