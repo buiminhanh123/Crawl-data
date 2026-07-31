@@ -1353,11 +1353,16 @@ export default function AIAssistantPage() {
                                     style={{ width: '100%', padding: '9px 12px', fontSize: 13.5, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontWeight: 700 }}
                                 >
                                     <option value={1}>1 Luồng (An toàn tuyệt đối - Dành cho cày 24/7)</option>
-                                    <option value={2}>2 Luồng (Khuyên dùng - Ổn định)</option>
+                                    <option value={2}>2 Luồng (Khuyên dùng - Ổn định nhất)</option>
                                     <option value={3}>3 Luồng (Tốc độ vừa)</option>
                                     <option value={5}>5 Luồng (Tốc độ cao)</option>
-                                    <option value={10}>⚡ 10 Luồng (SIÊU TỐC - Tối đa hiệu năng)</option>
+                                    <option value={10}>⚡ 10 Luồng (Tối đa hiệu năng)</option>
                                 </select>
+                                {concurrency > 3 && (
+                                    <p style={{ fontSize: 12, color: '#d97706', marginTop: 6, marginBottom: 0, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <AlertCircle size={14} /> 💡 Khuyên dùng 2-3 luồng để chạy ổn định và không bị Server AI từ chối (Rate Limit 502).
+                                    </p>
+                                )}
                             </div>
 
                             <div>
