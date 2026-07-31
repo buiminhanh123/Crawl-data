@@ -1,12 +1,12 @@
 const getApiBase = () => {
-    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
     if (typeof window !== 'undefined') {
         if (window.location.port === '3000') {
             return 'http://localhost:3002';
         }
         return '';
     }
-    return 'http://localhost:3002';
+    return process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'http://localhost:3002';
 };
 
 /**
