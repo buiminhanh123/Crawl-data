@@ -896,6 +896,56 @@ def extract_product_data(soup, slug, url=""):
     if image_url and not image_url.startswith("http") and url:
         image_url = urllib.parse.urljoin(url, image_url)
 
+    ZH_EN_MAP = {
+        '產品介紹': 'Products Overview',
+        '產品': 'Products',
+        '产品': 'Products',
+        '條碼印表機': 'Barcode Printers',
+        '条码打印机': 'Barcode Printers',
+        '桌面型印表機': 'Desktop Printers',
+        '桌面型打印机': 'Desktop Printers',
+        '工業型印表機': 'Industrial Printers',
+        '工业型打印机': 'Industrial Printers',
+        '攜帶型印表機': 'Mobile Printers',
+        '便携式打印机': 'Mobile Printers',
+        '條碼掃瞄器': 'Barcode Scanners',
+        '条码扫描器': 'Barcode Scanners',
+        '輕工業型掃瞄器': 'Light Industrial Scanners',
+        '通用型1D掃瞄器': 'General 1D Scanners',
+        '通用型2D掃瞄器': 'General 2D Scanners',
+        '桌上型掃瞄器': 'Desktop Scanners',
+        '手持式掃瞄器': 'Handheld Scanners',
+        '固定式掃瞄器': 'Fixed Mount Scanners',
+        '系列': 'Series',
+        '公司簡介': '',
+        '關於立象': '',
+        '關於我們': '',
+        '聯絡我們': '',
+    }
+
+    def clean_field(val):
+        if not val:
+            return ""
+        val = val.strip()
+        # Reject blob menu container dumps over 45 chars
+        if len(val) > 45:
+            return ""
+        # Auto-translate Chinese exact terms
+        if val in ZH_EN_MAP:
+            return ZH_EN_MAP[val]
+        # Replace Chinese sub-terms
+        for zh, en in ZH_EN_MAP.items():
+            if zh in val:
+                val = val.replace(zh, en).strip()
+        return val
+
+    main_category = clean_field(main_category)
+    category = clean_field(category)
+    series = clean_field(series)
+
+    if not main_category:
+        main_category = category if category else "Thiết bị mã số mã vạch"
+
     # 6. Download links
     download_links = extract_download_links(soup)
 
