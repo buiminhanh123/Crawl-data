@@ -34,9 +34,9 @@ function setToCache(key, data) {
     responseCache.set(key, { data, timestamp: Date.now() });
 }
 
-// Server-side Request Queue Pacer (Optimized 200ms spacing)
+// Server-side Request Queue Pacer (Optimized 250ms spacing)
 let pacerChain = Promise.resolve();
-const MIN_INTERVAL_MS = 200; // 200ms spacing per call for fast 10-thread throughput
+const MIN_INTERVAL_MS = 250;
 
 function enqueuePacedRequest(fn) {
     const resultPromise = pacerChain.then(async () => {
@@ -71,7 +71,7 @@ function extractAiContent(jsonObj, rawText) {
 // ──────────────────────────────────────────────────────────────
 // POST /api/ai/chat
 // Body: { message: string, history: Array }
-// High-Speed Multi-Threaded AI Proxy with Caching & Fast Retry
+// High-Speed AI Proxy with Generous 45s Timeout & Auto-Retry
 // ──────────────────────────────────────────────────────────────
 router.post('/chat', async (req, res) => {
     const { message, history = [] } = req.body;
@@ -116,7 +116,7 @@ router.post('/chat', async (req, res) => {
                             'Authorization': `Bearer ${AI_API_KEY}`,
                         },
                         body: JSON.stringify(payload),
-                        signal: AbortSignal.timeout(12000), // Fast 12s timeout per attempt
+                        signal: AbortSignal.timeout(45000), // Generous 45s timeout for complex product prompts
                     });
 
                     lastStatus = response.status;
@@ -139,9 +139,9 @@ router.post('/chat', async (req, res) => {
                     }
 
                     if (response.status === 429 || response.status >= 500) {
-                        console.warn(`[AI] Attempt ${attempts}/${maxAttempts} status ${response.status}. Retrying in ${attempts * 600}ms...`);
+                        console.warn(`[AI] Attempt ${attempts}/${maxAttempts} status ${response.status}. Retrying in ${attempts * 1000}ms...`);
                         if (attempts < maxAttempts) {
-                            await delay(attempts * 600);
+                            await delay(attempts * 1000);
                             continue;
                         }
                     } else {
@@ -151,7 +151,7 @@ router.post('/chat', async (req, res) => {
                     console.error(`[AI] Attempt ${attempts}/${maxAttempts} fetch error:`, err.message);
                     lastRaw = err.message;
                     if (attempts < maxAttempts) {
-                        await delay(attempts * 600);
+                        await delay(attempts * 1000);
                     }
                 }
             }
@@ -188,7 +188,7 @@ router.get('/health', async (req, res) => {
                 'Authorization': `Bearer ${AI_API_KEY}`,
             },
             body: JSON.stringify({ message: 'ping', stream: false, history: [] }),
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(15000),
         });
 
         const latencyMs = Date.now() - startTime;
@@ -242,7 +242,7 @@ router.post('/test-connection', async (req, res) => {
                 'Authorization': `Bearer ${AI_API_KEY}`,
             },
             body: JSON.stringify({ message: 'Xin chào! Hãy trả về dòng chữ "AI OK".', stream: false, history: [] }),
-            signal: AbortSignal.timeout(12000),
+            signal: AbortSignal.timeout(20000),
         });
 
         const latencyMs = Date.now() - startTime;
