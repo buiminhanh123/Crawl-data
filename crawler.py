@@ -896,92 +896,374 @@ def extract_product_data(soup, slug, url=""):
     if image_url and not image_url.startswith("http") and url:
         image_url = urllib.parse.urljoin(url, image_url)
 
-    ZH_EN_MAP = {
-        '標籤': 'Label',
-        '商品比較': 'Product Comparison',
-        '提出詢問': 'Submit Inquiry',
-        '產品介紹': 'Products Overview',
-        '產品': 'Products',
-        '产品': 'Products',
-        '條碼印表機': 'Barcode Printers',
-        '条码打印机': 'Barcode Printers',
-        '桌面型印表機': 'Desktop Printers',
-        '桌面型打印机': 'Desktop Printers',
-        '工業型印表機': 'Industrial Printers',
-        '工业型打印机': 'Industrial Printers',
-        '攜帶型印表機': 'Mobile Printers',
-        '便携式打印机': 'Mobile Printers',
-        '條碼掃瞄器': 'Barcode Scanners',
-        '条码扫描器': 'Barcode Scanners',
-        '輕工業型掃瞄器': 'Light Industrial Scanners',
-        '通用型1D掃瞄器': 'General 1D Scanners',
-        '通用型2D掃瞄器': 'General 2D Scanners',
-        '桌上型掃瞄器': 'Desktop Scanners',
-        '手持式掃瞄器': 'Handheld Scanners',
-        '固定式掃瞄器': 'Fixed Mount Scanners',
-        '感熱式/熱轉印': 'Thermal / Thermal Transfer',
-        '熱轉印': 'Thermal Transfer',
-        '熱感應': 'Direct Thermal',
-        '印表機': 'Printers',
-        '打印机': 'Printers',
-        '掃瞄器': 'Scanners',
-        '扫描器': 'Scanners',
-        '系列': 'Series',
-        '碳帶長度': 'Ribbon Length',
-        '碳帶': 'Ribbon',
-        '長度': 'Length',
-        '寬度': 'Width',
-        '高度': 'Height',
-        '厚度': 'Thickness',
-        '解析度': 'Resolution',
-        '分辨率': 'Resolution',
-        '列印速度': 'Print Speed',
-        '打印速度': 'Print Speed',
-        '列印寬度': 'Print Width',
-        '打印宽度': 'Print Width',
-        '列印長度': 'Print Length',
-        '打印长度': 'Print Length',
-        '傳輸介面': 'Interface',
-        '传输接口': 'Interface',
-        '記憶體': 'Memory',
-        '内存': 'Memory',
-        '重量': 'Weight',
-        '體積': 'Dimensions',
-        '尺寸': 'Dimensions',
-        '電源': 'Power Supply',
-        '电源': 'Power Supply',
-        '工作溫度': 'Operating Temperature',
-        '儲存溫度': 'Storage Temperature',
-        '相對濕度': 'Humidity',
-        '公尺': 'm',
-        '吋': 'inch',
-        '公司簡介': '',
-        '關於立象': '',
-        '關於我們': '',
-        '聯絡我們': '',
-        '最新消息': 'Latest News',
-        '技術支援': 'Support',
-        '下載專區': 'Downloads',
+def prefer_english_url(url):
+    if not url or not isinstance(url, str):
+        return url
+    # Convert Chinese path segments (/tc/, /zh-tw/, /zh-cn/, /zh/, /cn/, /sc/) to /en/
+    url = re.sub(r'/(tc|zh-tw|zh-cn|zh|cn|sc)/', '/en/', url, flags=re.IGNORECASE)
+    url = re.sub(r'([?&])lang=(tc|zh|cn|sc|zh-tw|zh-cn)', r'\1lang=en', url, flags=re.IGNORECASE)
+    return url
+
+ZH_EN_MAP = {
+    # Actions & UI Buttons
+    '標籤': 'Label',
+    '商品比較': 'Product Comparison',
+    '提出詢問': 'Submit Inquiry',
+    '產品介紹': 'Products Overview',
+    '產品': 'Products',
+    '产品': 'Products',
+    '首頁': 'Home',
+    '主頁': 'Home',
+    '詳細資料': 'Details',
+    '詳細內容': 'Details',
+
+    # Product Categories & Types
+    '條碼印表機': 'Barcode Printers',
+    '条码打印机': 'Barcode Printers',
+    '桌面型印表機': 'Desktop Printers',
+    '桌面型打印机': 'Desktop Printers',
+    '工業型印表機': 'Industrial Printers',
+    '工业型打印机': 'Industrial Printers',
+    '攜帶型印表機': 'Mobile Printers',
+    '便携式打印机': 'Mobile Printers',
+    '條碼掃瞄器': 'Barcode Scanners',
+    '条码扫描器': 'Barcode Scanners',
+    '輕工業型掃瞄器': 'Light Industrial Scanners',
+    '通用型1D掃瞄器': 'General 1D Scanners',
+    '通用型2D掃瞄器': 'General 2D Scanners',
+    '桌上型掃瞄器': 'Desktop Scanners',
+    '手持式掃瞄器': 'Handheld Scanners',
+    '固定式掃瞄器': 'Fixed Mount Scanners',
+    '感熱式/熱轉印': 'Thermal / Thermal Transfer',
+    '熱轉印': 'Thermal Transfer',
+    '熱感應': 'Direct Thermal',
+    '印表機': 'Printers',
+    '打印机': 'Printers',
+    '掃瞄器': 'Scanners',
+    '扫描器': 'Scanners',
+    '系列': 'Series',
+    '配件': 'Accessories',
+    '耗材': 'Consumables',
+
+    # Specifications Keys
+    '列印方式': 'Print Method',
+    '打印方式': 'Print Method',
+    '解析度': 'Resolution',
+    '分辨率': 'Resolution',
+    '列印速度': 'Print Speed',
+    '打印速度': 'Print Speed',
+    '列印寬度': 'Print Width',
+    '打印宽度': 'Print Width',
+    '列印長度': 'Print Length',
+    '打印长度': 'Print Length',
+    '傳輸介面': 'Interface',
+    '传输接口': 'Interface',
+    '通訊介面': 'Communication Interface',
+    '介面': 'Interface',
+    '接口': 'Interface',
+    '記憶體': 'Memory',
+    '内存': 'Memory',
+    '中央處理器': 'Processor (CPU)',
+    '微處理器': 'Microprocessor',
+    '處理器': 'Processor',
+    '印字頭': 'Printhead',
+    '打印头': 'Printhead',
+    '感測器': 'Sensors',
+    '传感器': 'Sensors',
+    '顯示器': 'Display',
+    '显示屏': 'Display Screen',
+    '螢幕': 'Screen',
+    '重量': 'Weight',
+    '體積': 'Dimensions',
+    '尺寸': 'Dimensions',
+    '外型尺寸': 'Dimensions',
+    '電源': 'Power Supply',
+    '电源': 'Power Supply',
+    '輸入電壓': 'Input Voltage',
+    '工作溫度': 'Operating Temperature',
+    '儲存溫度': 'Storage Temperature',
+    '相對濕度': 'Humidity',
+    '工作濕度': 'Operating Humidity',
+    '環境濕度': 'Environmental Humidity',
+    '防護等級': 'IP Rating / Protection',
+    '防水防塵': 'Waterproof / Dustproof',
+    '跌落測試': 'Drop Test',
+    '抗震能力': 'Shock Resistance',
+    '碳帶長度': 'Ribbon Length',
+    '碳帶寬度': 'Ribbon Width',
+    '碳帶': 'Ribbon',
+    '長度': 'Length',
+    '寬度': 'Width',
+    '高度': 'Height',
+    '厚度': 'Thickness',
+    '直徑': 'Diameter',
+    '軸芯': 'Core Size',
+    '字型': 'Fonts',
+    '條碼': 'Barcodes',
+    '一維條碼': '1D Barcodes',
+    '二維條碼': '2D Barcodes',
+    '軟體': 'Software',
+    '指令集': 'Emulations / Command Set',
+    '認證': 'Certifications',
+    '安規認證': 'Safety Certifications',
+
+    # Values / Units / Attributes
+    '公尺': 'm',
+    '公分': 'cm',
+    '公釐': 'mm',
+    '毫米': 'mm',
+    '吋': 'inch',
+    '英吋': 'inch',
+    '公斤': 'kg',
+    '公克': 'g',
+    '克': 'g',
+    '秒': 'sec',
+    '點': 'dots',
+    '點/毫米': 'dots/mm',
+    '標準': 'Standard',
+    '選配': 'Optional',
+    '無': 'None',
+    '有': 'Yes',
+    '支援': 'Supported',
+    '不支援': 'Not Supported',
+    '內建': 'Built-in',
+    '外接': 'External',
+    '單張': 'Single Sheet',
+    '連續': 'Continuous',
+    '黑標': 'Black Mark',
+    '穿透式': 'Transmissive',
+    '反射式': 'Reflective',
+    '自動裁刀': 'Auto Cutter',
+    '剝紙器': 'Peeler',
+    '回捲器': 'Rewinder',
+
+    # Navigation / Meta
+    '公司簡介': 'Company Profile',
+    '關於立象': 'About Us',
+    '關於我們': 'About Us',
+    '聯絡我們': 'Contact Us',
+    '最新消息': 'Latest News',
+    '技術支援': 'Support',
+    '下載專區': 'Downloads',
+    '常見問題': 'FAQ',
+}
+
+def translate_zh_to_en(text):
+    if not text or not isinstance(text, str):
+        return text or ""
+    for zh, en in ZH_EN_MAP.items():
+        if zh in text:
+            text = text.replace(zh, en)
+    return text.strip()
+
+def is_js_or_ui_noise(line):
+    if not line or not isinstance(line, str): return True
+    l = line.strip()
+    if len(l) < 2: return True
+    if re.match(r'^\s*\}\)?;?\s*$', l): return True
+    if re.match(r'^\s*\}\s*else\s*\{?\s*$', l): return True
+    if re.match(r'^\s*if\s*\(', l, re.I): return True
+    if re.match(r'^\s*(return|break|continue)\s*;?\s*$', l, re.I): return True
+    if re.search(r'\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b', l, re.I): return True
+    if re.search(r'\b(return\s+false|return\s+true|typeof|void\(0\))\b', l, re.I): return True
+    if re.search(r'==|===|!=|!==|&&|\|\||=>|\$\(', l): return True
+    if re.search(r'\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b', l, re.I): return True
+    if re.search(r'\$\.[a-zA-Z0-9_]+', l): return True
+    if re.match(r'^\s*(url|type|data|cache|dataType|contentType|success|error|headers|async)\s*:', l, re.I): return True
+    if re.match(r'^\s*[a-zA-Z0-9_$]+\s*:\s*[\'"]?.*?[\'"]?,?\s*$', l, re.I) and ' ' not in l and 'http' not in l: return True
+    if re.search(r'btn_buy_type|index_id|inquiry/act|act=\d+', l, re.I): return True
+    if '商品比較' in l or '提出詢問' in l or l.lower() in ('compare', 'inquire'): return True
+    return False
+
+def extract_product_data(soup, slug, url=""):
+    """
+    Extract product details including:
+    - name: Product Name / Title
+    - main_category: Danh mục lớn (e.g. Barcode Printers, Barcode Scanners)
+    - category: Danh mục con (e.g. Desktop Printers, Industrial Printers)
+    - series: Dòng Series (e.g. CP / CX Series, OS Series)
+    - description, image_url, specs, part_number, download_links
+    """
+    # 1. Name
+    name_el = soup.find("h1") or soup.find("h2", class_=re.compile(r'title|product', re.I))
+    name = name_el.text.strip() if name_el else slug.replace("-", " ").replace("_", " ").title()
+
+    # 2. Specifications table & Part Number
+    specs = {}
+    part_number = ""
+    tables = soup.find_all("table")
+    for table in tables:
+        for row in table.find_all("tr"):
+            cols = row.find_all(["td", "th"])
+            if len(cols) >= 2:
+                key = cols[0].text.strip()
+                val = cols[1].text.strip()
+                if key and val:
+                    specs[key] = val
+                    if "part number" in key.lower() or key.lower() == "pn" or "model" in key.lower():
+                        if not part_number: part_number = val
+
+    if not part_number and tables:
+        for row in tables[-1].find_all("tr"):
+            cols = [c.text.strip() for c in row.find_all(["td", "th"])]
+            if len(cols) >= 2 and ("nls-" in cols[0].lower() or "part number" in cols[0].lower()):
+                if not part_number: part_number = cols[0]
+
+    if not part_number or part_number.strip().lower() in ('', 'description'):
+        m_code = re.search(r'\b([A-Za-z]{1,4}[-_/]?[0-9]{2,5}[A-Za-z0-9]*)\b', name)
+        if m_code:
+            part_number = m_code.group(1).upper()
+        elif slug:
+            part_number = slug.upper()
+
+    # 3. Multi-level Category & Series Extraction
+    main_category = ""
+    category = ""
+    series = ""
+
+    INVALID_NAV_KEYWORDS = {
+        'about us', 'about', 'company', 'contact us', 'contact', 'news', 'solutions',
+        'privacy', 'terms', 'support', 'downloads', 'investors', 'careers', 'home',
+        'trang chủ', 'main', 'index', '公司簡介', '關於立象', '關於我們', '聯絡我們',
+        '新聞', '解決方案', '首頁', '企業簡介', 'about-us', 'company-info'
     }
 
-    def is_js_or_ui_noise(line):
-        if not line or not isinstance(line, str): return True
-        l = line.strip()
-        if len(l) < 2: return True
-        if re.match(r'^\s*\}\)?;?\s*$', l): return True
-        if re.match(r'^\s*\}\s*else\s*\{?\s*$', l): return True
-        if re.match(r'^\s*if\s*\(', l, re.I): return True
-        if re.match(r'^\s*(return|break|continue)\s*;?\s*$', l, re.I): return True
-        if re.search(r'\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b', l, re.I): return True
-        if re.search(r'\b(return\s+false|return\s+true|typeof|void\(0\))\b', l, re.I): return True
-        if re.search(r'==|===|!=|!==|&&|\|\||=>|\$\(', l): return True
-        if re.search(r'\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b', l, re.I): return True
-        if re.search(r'\$\.[a-zA-Z0-9_]+', l): return True
-        if re.match(r'^\s*(url|type|data|cache|dataType|contentType|success|error|headers|async)\s*:', l, re.I): return True
-        if re.match(r'^\s*[a-zA-Z0-9_$]+\s*:\s*[\'"]?.*?[\'"]?,?\s*$', l, re.I) and ' ' not in l and 'http' not in l: return True
-        if re.search(r'btn_buy_type|index_id|inquiry/act|act=\d+', l, re.I): return True
-        if '商品比較' in l or '提出詢問' in l or l.lower() in ('compare', 'inquire'): return True
-        return False
+    # Check Argox model lookup table first for known brand families
+    ARGOX_PATTERNS = [
+        (r'\b(cx[-_]?2040|cx[-_]?2140|cx[-_]?3040|cx[-_]?3140|cp[-_]?2140|cp[-_]?2140ex)\b', "Barcode Printers", "Desktop Printers", "CP / CX Series"),
+        (r'\b(os[-_]?214|os[-_]?2130|os[-_]?200|os[-_]?214ex|os[-_]?2130d)\b', "Barcode Printers", "Desktop Printers", "OS Series"),
+        (r'\b(o4[-_]?250|o4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "O4 Series"),
+        (r'\b(p4[-_]?250|p4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "P4 Series"),
+        (r'\b(d4[-_]?250|d4[-_]?350|d4[-_]?280|d4[-_]?280plus)\b', "Barcode Printers", "Desktop Printers", "D4 Series"),
+        (r'\b(d2[-_]?250|d2[-_]?350)\b', "Barcode Printers", "Desktop Printers", "D2 Series"),
+        (r'\b(mp[-_]?2140)\b', "Barcode Printers", "Desktop Printers", "MP Series"),
+        (r'\b(ix4[-_]?250|ix4[-_]?350)\b', "Barcode Printers", "Industrial Printers", "iX4 Series"),
+        (r'\b(ix6[-_]?250|ix6[-_]?350)\b', "Barcode Printers", "Industrial Printers", "iX6 Series"),
+        (r'\b(xm4[-_]?250)\b', "Barcode Printers", "Industrial Printers", "XM4 Series"),
+        (r'\b(as[-_]?8000|as[-_]?8060|as[-_]?8050|as[-_]?9400|as[-_]?9400dc|ai[-_]?6800|ai[-_]?6820|ar[-_]?3201)\b', "Barcode Scanners", "Handheld Scanners", "AS / AI Series"),
+    ]
+    
+    text_for_argox = f"{name} {slug} {url}"
+    for pattern, m_cat, cat, ser in ARGOX_PATTERNS:
+        if re.search(pattern, text_for_argox, re.I):
+            main_category = m_cat
+            category = cat
+            series = ser
+            break
+
+    # Strategy A: Breadcrumbs HTML parsing if not resolved
+    if not category or not main_category:
+        bc_elements = soup.find_all(class_=re.compile(r'breadcrumb|crumbs|nav-path|location|site-map', re.I))
+        if not bc_elements:
+            bc_elements = soup.find_all(['nav', 'div', 'ul', 'ol'], attrs={"aria-label": re.compile(r'breadcrumb', re.I)})
+        if not bc_elements:
+            bc_elements = soup.find_all(attrs={"itemtype": re.compile(r'BreadcrumbList', re.I)})
+
+        crumbs = []
+        if bc_elements:
+            for bc_el in bc_elements:
+                items = bc_el.find_all(["a", "li", "span"])
+                for item in items:
+                    t = item.text.strip()
+                    t_lower = t.lower()
+                    if t and t not in crumbs and not any(k in t_lower for k in INVALID_NAV_KEYWORDS) and not any(x in t for x in ('>', '/')):
+                        crumbs.append(t)
+                if len(crumbs) >= 1:
+                    break
+
+        clean_crumbs = [c for c in crumbs if c.lower() != name.lower() and c.lower() != slug.lower()]
+        if len(clean_crumbs) >= 3:
+            if not main_category: main_category = clean_crumbs[0]
+            if not category: category = clean_crumbs[1]
+            if not series: series = clean_crumbs[2]
+        elif len(clean_crumbs) == 2:
+            if not main_category: main_category = clean_crumbs[0]
+            if not category: category = clean_crumbs[1]
+        elif len(clean_crumbs) == 1:
+            if not category: category = clean_crumbs[0]
+
+    # Clean up any leftover invalid nav items in category or series
+    if any(k in (category or '').lower() for k in INVALID_NAV_KEYWORDS):
+        category = ""
+    if any(k in (series or '').lower() for k in INVALID_NAV_KEYWORDS):
+        series = ""
+
+    # Strategy B: Prettified URL Path parsing
+    GENERIC_SEGMENTS = {
+        'en', 'vn', 'products', 'product', 'products-detail', 'product-detail', 
+        'detail', 'item', 'items', 'p', 'catalog', 'category', 'categories', 
+        'shop', 'home', 'default.aspx', 'index.html', 'index.php'
+    }
+    
+    parsed_url = urllib.parse.urlparse(url) if url else None
+    parts = [p for p in parsed_url.path.split('/') if p] if parsed_url else []
+    meaningful_parts = [
+        p.replace('-', ' ').replace('_', ' ').title() 
+        for p in parts 
+        if p.lower() not in GENERIC_SEGMENTS and not p.isdigit()
+    ]
+
+    if not category:
+        if len(meaningful_parts) >= 2:
+            if not main_category: main_category = meaningful_parts[0]
+            category = meaningful_parts[1] if len(meaningful_parts) >= 2 else meaningful_parts[0]
+            if not series and len(meaningful_parts) >= 3:
+                series = meaningful_parts[2]
+        elif len(meaningful_parts) == 1:
+            category = meaningful_parts[0]
+
+    if not main_category:
+        main_category = category if category else "Thiết bị mã số mã vạch"
+
+    # Strategy C: Series Extraction from Specifications or Product Name / Model
+    if not series:
+        for k, v in specs.items():
+            if any(term in k.lower() for term in ('series', 'dòng', 'family', 'product line', 'model series')):
+                series = v
+                break
+
+    if not series and (name or part_number or slug):
+        text_to_search = f"{name} {part_number} {slug}"
+        m_series = re.search(r'\b([A-Za-z0-9\-]+(?:\s+Series|\s+Family))\b', text_to_search, re.I)
+        if m_series:
+            series = m_series.group(1).title()
+        else:
+            m_code = re.search(r'\b([A-Z]{2,4}[-_\s]?[0-9]{2,4})\b', text_to_search)
+            if m_code:
+                code_str = m_code.group(1).upper()
+                series = f"{code_str} Series"
+
+    if not series:
+        series = f"{category} Series" if category and category != "Chung" else "Default Series"
+
+    # 4. Description
+    description = ""
+    prose = soup.find("div", class_=re.compile(r'prose|description|intro|summary', re.I))
+    if prose:
+        description = prose.text.strip()
+    else:
+        meta = soup.find("meta", attrs={"name": "description"}) or \
+               soup.find("meta", property="og:description")
+        if meta:
+            description = meta.get("content", "").strip()
+
+    # 5. Image URL (Rich Image Link Extraction)
+    image_url = ""
+    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
+    if og_img and og_img.get("content"):
+        image_url = og_img.get("content").strip()
+
+    if not image_url:
+        for img in soup.find_all("img"):
+            src = img.get("src", "") or img.get("data-src", "")
+            if not src or any(ext in src.lower() for ext in ('.svg', 'icon', 'logo', 'banner', 'button', 'loading')):
+                continue
+            if any(k in src.lower() for k in ("katanapim", "upload", "catalog", "product", "item", "media", "images", "detail")):
+                image_url = src
+                break
+
+    if image_url and not image_url.startswith("http") and url:
+        image_url = urllib.parse.urljoin(url, image_url)
 
     # Clean description JS inline code into PLAIN TEXT lines (no <p> tags!)
     if description:
@@ -996,10 +1278,7 @@ def extract_product_data(soup, slug, url=""):
         for line in lines:
             if is_js_or_ui_noise(line):
                 continue
-            for zh, en in ZH_EN_MAP.items():
-                if zh in line:
-                    line = line.replace(zh, en)
-            line = line.strip()
+            line = translate_zh_to_en(line)
             if line.endswith(':') or line in ('Label', 'Tags'):
                 continue
             if len(line) < 3:
@@ -1007,28 +1286,20 @@ def extract_product_data(soup, slug, url=""):
             clean_lines.append(line)
         description = "\n".join(clean_lines) if clean_lines else ""
 
-    def clean_field(val):
-        if not val:
-            return ""
-        val = val.strip()
-        # Reject blob menu container dumps over 45 chars
-        if len(val) > 45:
-            return ""
-        # Auto-translate Chinese exact terms
-        if val in ZH_EN_MAP:
-            return ZH_EN_MAP[val]
-        # Replace Chinese sub-terms
-        for zh, en in ZH_EN_MAP.items():
-            if zh in val:
-                val = val.replace(zh, en).strip()
-        return val
+    # Translate ALL extracted fields to English
+    name = translate_zh_to_en(name)
+    main_category = translate_zh_to_en(main_category)
+    category = translate_zh_to_en(category)
+    series = translate_zh_to_en(series)
 
-    main_category = clean_field(main_category)
-    category = clean_field(category)
-    series = clean_field(series)
-
-    if not main_category:
-        main_category = category if category else "Thiết bị mã số mã vạch"
+    # Translate all specs keys & values
+    clean_specs = {}
+    for k, v in specs.items():
+        k_clean = translate_zh_to_en(str(k))
+        v_clean = translate_zh_to_en(str(v))
+        if k_clean and v_clean:
+            clean_specs[k_clean] = v_clean
+    specs = clean_specs
 
     # 6. Download links
     download_links = extract_download_links(soup)

@@ -878,110 +878,184 @@ def extract_product_data(soup, slug, url=""):
         if meta:
             description = meta.get("content", "").strip()
 
-    # 5. Image URL (Rich Image Link Extraction)
-    image_url = ""
-    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
-    if og_img and og_img.get("content"):
-        image_url = og_img.get("content").strip()
+def prefer_english_url(url):
+    if not url or not isinstance(url, str):
+        return url
+    # Convert Chinese path segments (/tc/, /zh-tw/, /zh-cn/, /zh/, /cn/, /sc/) to /en/
+    url = re.sub(r'/(tc|zh-tw|zh-cn|zh|cn|sc)/', '/en/', url, flags=re.IGNORECASE)
+    url = re.sub(r'([?&])lang=(tc|zh|cn|sc|zh-tw|zh-cn)', r'\1lang=en', url, flags=re.IGNORECASE)
+    return url
 
-    if not image_url:
-        for img in soup.find_all("img"):
-            src = img.get("src", "") or img.get("data-src", "")
-            if not src or any(ext in src.lower() for ext in ('.svg', 'icon', 'logo', 'banner', 'button', 'loading')):
-                continue
-            if any(k in src.lower() for k in ("katanapim", "upload", "catalog", "product", "item", "media", "images", "detail")):
-                image_url = src
-                break
+ZH_EN_MAP = {
+    # Actions & UI Buttons
+    '標籤': 'Label',
+    '商品比較': 'Product Comparison',
+    '提出詢問': 'Submit Inquiry',
+    '產品介紹': 'Products Overview',
+    '產品': 'Products',
+    '产品': 'Products',
+    '首頁': 'Home',
+    '主頁': 'Home',
+    '詳細資料': 'Details',
+    '詳細內容': 'Details',
 
-    if image_url and not image_url.startswith("http") and url:
-        image_url = urllib.parse.urljoin(url, image_url)
+    # Product Categories & Types
+    '條碼印表機': 'Barcode Printers',
+    '条码打印机': 'Barcode Printers',
+    '桌面型印表機': 'Desktop Printers',
+    '桌面型打印机': 'Desktop Printers',
+    '工業型印表機': 'Industrial Printers',
+    '工业型打印机': 'Industrial Printers',
+    '攜帶型印表機': 'Mobile Printers',
+    '便携式打印机': 'Mobile Printers',
+    '條碼掃瞄器': 'Barcode Scanners',
+    '条码扫描器': 'Barcode Scanners',
+    '輕工業型掃瞄器': 'Light Industrial Scanners',
+    '通用型1D掃瞄器': 'General 1D Scanners',
+    '通用型2D掃瞄器': 'General 2D Scanners',
+    '桌上型掃瞄器': 'Desktop Scanners',
+    '手持式掃瞄器': 'Handheld Scanners',
+    '固定式掃瞄器': 'Fixed Mount Scanners',
+    '感熱式/熱轉印': 'Thermal / Thermal Transfer',
+    '熱轉印': 'Thermal Transfer',
+    '熱感應': 'Direct Thermal',
+    '印表機': 'Printers',
+    '打印机': 'Printers',
+    '掃瞄器': 'Scanners',
+    '扫描器': 'Scanners',
+    '系列': 'Series',
+    '配件': 'Accessories',
+    '耗材': 'Consumables',
 
-    ZH_EN_MAP = {
-        '標籤': 'Label',
-        '商品比較': 'Product Comparison',
-        '提出詢問': 'Submit Inquiry',
-        '產品介紹': 'Products Overview',
-        '產品': 'Products',
-        '产品': 'Products',
-        '條碼印表機': 'Barcode Printers',
-        '条码打印机': 'Barcode Printers',
-        '桌面型印表機': 'Desktop Printers',
-        '桌面型打印机': 'Desktop Printers',
-        '工業型印表機': 'Industrial Printers',
-        '工业型打印机': 'Industrial Printers',
-        '攜帶型印表機': 'Mobile Printers',
-        '便携式打印机': 'Mobile Printers',
-        '條碼掃瞄器': 'Barcode Scanners',
-        '条码扫描器': 'Barcode Scanners',
-        '輕工業型掃瞄器': 'Light Industrial Scanners',
-        '通用型1D掃瞄器': 'General 1D Scanners',
-        '通用型2D掃瞄器': 'General 2D Scanners',
-        '桌上型掃瞄器': 'Desktop Scanners',
-        '手持式掃瞄器': 'Handheld Scanners',
-        '固定式掃瞄器': 'Fixed Mount Scanners',
-        '感熱式/熱轉印': 'Thermal / Thermal Transfer',
-        '熱轉印': 'Thermal Transfer',
-        '熱感應': 'Direct Thermal',
-        '印表機': 'Printers',
-        '打印机': 'Printers',
-        '掃瞄器': 'Scanners',
-        '扫描器': 'Scanners',
-        '系列': 'Series',
-        '碳帶長度': 'Ribbon Length',
-        '碳帶': 'Ribbon',
-        '長度': 'Length',
-        '寬度': 'Width',
-        '高度': 'Height',
-        '厚度': 'Thickness',
-        '解析度': 'Resolution',
-        '分辨率': 'Resolution',
-        '列印速度': 'Print Speed',
-        '打印速度': 'Print Speed',
-        '列印寬度': 'Print Width',
-        '打印宽度': 'Print Width',
-        '列印長度': 'Print Length',
-        '打印长度': 'Print Length',
-        '傳輸介面': 'Interface',
-        '传输接口': 'Interface',
-        '記憶體': 'Memory',
-        '内存': 'Memory',
-        '重量': 'Weight',
-        '體積': 'Dimensions',
-        '尺寸': 'Dimensions',
-        '電源': 'Power Supply',
-        '电源': 'Power Supply',
-        '工作溫度': 'Operating Temperature',
-        '儲存溫度': 'Storage Temperature',
-        '相對濕度': 'Humidity',
-        '公尺': 'm',
-        '吋': 'inch',
-        '公司簡介': '',
-        '關於立象': '',
-        '關於我們': '',
-        '聯絡我們': '',
-        '最新消息': 'Latest News',
-        '技術支援': 'Support',
-        '下載專區': 'Downloads',
-    }
+    # Specifications Keys
+    '列印方式': 'Print Method',
+    '打印方式': 'Print Method',
+    '解析度': 'Resolution',
+    '分辨率': 'Resolution',
+    '列印速度': 'Print Speed',
+    '打印速度': 'Print Speed',
+    '列印寬度': 'Print Width',
+    '打印宽度': 'Print Width',
+    '列印長度': 'Print Length',
+    '打印长度': 'Print Length',
+    '傳輸介面': 'Interface',
+    '传输接口': 'Interface',
+    '通訊介面': 'Communication Interface',
+    '介面': 'Interface',
+    '接口': 'Interface',
+    '記憶體': 'Memory',
+    '内存': 'Memory',
+    '中央處理器': 'Processor (CPU)',
+    '微處理器': 'Microprocessor',
+    '處理器': 'Processor',
+    '印字頭': 'Printhead',
+    '打印头': 'Printhead',
+    '感測器': 'Sensors',
+    '传感器': 'Sensors',
+    '顯示器': 'Display',
+    '显示屏': 'Display Screen',
+    '螢幕': 'Screen',
+    '重量': 'Weight',
+    '體積': 'Dimensions',
+    '尺寸': 'Dimensions',
+    '外型尺寸': 'Dimensions',
+    '電源': 'Power Supply',
+    '电源': 'Power Supply',
+    '輸入電壓': 'Input Voltage',
+    '工作溫度': 'Operating Temperature',
+    '儲存溫度': 'Storage Temperature',
+    '相對濕度': 'Humidity',
+    '工作濕度': 'Operating Humidity',
+    '環境濕度': 'Environmental Humidity',
+    '防護等級': 'IP Rating / Protection',
+    '防水防塵': 'Waterproof / Dustproof',
+    '跌落測試': 'Drop Test',
+    '抗震能力': 'Shock Resistance',
+    '碳帶長度': 'Ribbon Length',
+    '碳帶寬度': 'Ribbon Width',
+    '碳帶': 'Ribbon',
+    '長度': 'Length',
+    '寬度': 'Width',
+    '高度': 'Height',
+    '厚度': 'Thickness',
+    '直徑': 'Diameter',
+    '軸芯': 'Core Size',
+    '字型': 'Fonts',
+    '條碼': 'Barcodes',
+    '一維條碼': '1D Barcodes',
+    '二維條碼': '2D Barcodes',
+    '軟體': 'Software',
+    '指令集': 'Emulations / Command Set',
+    '認證': 'Certifications',
+    '安規認證': 'Safety Certifications',
 
-    def is_js_or_ui_noise(line):
-        if not line or not isinstance(line, str): return True
-        l = line.strip()
-        if len(l) < 2: return True
-        if re.match(r'^\s*\}\)?;?\s*$', l): return True
-        if re.match(r'^\s*\}\s*else\s*\{?\s*$', l): return True
-        if re.match(r'^\s*if\s*\(', l, re.I): return True
-        if re.match(r'^\s*(return|break|continue)\s*;?\s*$', l, re.I): return True
-        if re.search(r'\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b', l, re.I): return True
-        if re.search(r'\b(return\s+false|return\s+true|typeof|void\(0\))\b', l, re.I): return True
-        if re.search(r'==|===|!=|!==|&&|\|\||=>|\$\(', l): return True
-        if re.search(r'\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b', l, re.I): return True
-        if re.search(r'\$\.[a-zA-Z0-9_]+', l): return True
-        if re.match(r'^\s*(url|type|data|cache|dataType|contentType|success|error|headers|async)\s*:', l, re.I): return True
-        if re.match(r'^\s*[a-zA-Z0-9_$]+\s*:\s*[\'"]?.*?[\'"]?,?\s*$', l, re.I) and ' ' not in l and 'http' not in l: return True
-        if re.search(r'btn_buy_type|index_id|inquiry/act|act=\d+', l, re.I): return True
-        if '商品比較' in l or '提出詢問' in l or l.lower() in ('compare', 'inquire'): return True
-        return False
+    # Values / Units / Attributes
+    '公尺': 'm',
+    '公分': 'cm',
+    '公釐': 'mm',
+    '毫米': 'mm',
+    '吋': 'inch',
+    '英吋': 'inch',
+    '公斤': 'kg',
+    '公克': 'g',
+    '克': 'g',
+    '秒': 'sec',
+    '點': 'dots',
+    '點/毫米': 'dots/mm',
+    '標準': 'Standard',
+    '選配': 'Optional',
+    '無': 'None',
+    '有': 'Yes',
+    '支援': 'Supported',
+    '不支援': 'Not Supported',
+    '內建': 'Built-in',
+    '外接': 'External',
+    '單張': 'Single Sheet',
+    '連續': 'Continuous',
+    '黑標': 'Black Mark',
+    '穿透式': 'Transmissive',
+    '反射式': 'Reflective',
+    '自動裁刀': 'Auto Cutter',
+    '剝紙器': 'Peeler',
+    '回捲器': 'Rewinder',
+
+    # Navigation / Meta
+    '公司簡介': 'Company Profile',
+    '關於立象': 'About Us',
+    '關於我們': 'About Us',
+    '聯絡我們': 'Contact Us',
+    '最新消息': 'Latest News',
+    '技術支援': 'Support',
+    '下載專區': 'Downloads',
+    '常見問題': 'FAQ',
+}
+
+def translate_zh_to_en(text):
+    if not text or not isinstance(text, str):
+        return text or ""
+    for zh, en in ZH_EN_MAP.items():
+        if zh in text:
+            text = text.replace(zh, en)
+    return text.strip()
+
+def is_js_or_ui_noise(line):
+    if not line or not isinstance(line, str): return True
+    l = line.strip()
+    if len(l) < 2: return True
+    if re.match(r'^\s*\}\)?;?\s*$', l): return True
+    if re.match(r'^\s*\}\s*else\s*\{?\s*$', l): return True
+    if re.match(r'^\s*if\s*\(', l, re.I): return True
+    if re.match(r'^\s*(return|break|continue)\s*;?\s*$', l, re.I): return True
+    if re.search(r'\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b', l, re.I): return True
+    if re.search(r'\b(return\s+false|return\s+true|typeof|void\(0\))\b', l, re.I): return True
+    if re.search(r'==|===|!=|!==|&&|\|\||=>|\$\(', l): return True
+    if re.search(r'\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b', l, re.I): return True
+    if re.search(r'\$\.[a-zA-Z0-9_]+', l): return True
+    if re.match(r'^\s*(url|type|data|cache|dataType|contentType|success|error|headers|async)\s*:', l, re.I): return True
+    if re.match(r'^\s*[a-zA-Z0-9_$]+\s*:\s*[\'"]?.*?[\'"]?,?\s*$', l, re.I) and ' ' not in l and 'http' not in l: return True
+    if re.search(r'btn_buy_type|index_id|inquiry/act|act=\d+', l, re.I): return True
+    if '商品比較' in l or '提出詢問' in l or l.lower() in ('compare', 'inquire'): return True
+    return False
 
     # Clean description JS inline code into PLAIN TEXT lines (no <p> tags!)
     if description:
@@ -996,10 +1070,7 @@ def extract_product_data(soup, slug, url=""):
         for line in lines:
             if is_js_or_ui_noise(line):
                 continue
-            for zh, en in ZH_EN_MAP.items():
-                if zh in line:
-                    line = line.replace(zh, en)
-            line = line.strip()
+            line = translate_zh_to_en(line)
             if line.endswith(':') or line in ('Label', 'Tags'):
                 continue
             if len(line) < 3:
