@@ -7,8 +7,9 @@ import sys
 import random
 import re
 import urllib.parse
+import urllib.request
 import ssl
-import subprocess
+import gzip
 
 # Bypass SSL certificate validation errors on Linux VPS
 try:
@@ -16,48 +17,27 @@ try:
 except Exception:
     pass
 
-def ensure_dependencies():
-    missing = []
-    try:
-        import bs4
-    except ImportError:
-        missing.append("beautifulsoup4")
-    try:
-        import aiohttp
-    except ImportError:
-        missing.append("aiohttp")
-
-    if missing:
-        print(f"Installing missing Python packages: {missing}...", file=sys.stderr)
-        cmd_base = [sys.executable, "-m", "pip", "install"]
-        flags = ["--break-system-packages"] if sys.platform != 'win32' else []
-        try:
-            subprocess.check_call(cmd_base + flags + missing)
-            print("Successfully installed missing packages!", file=sys.stderr)
-        except Exception as e1:
-            try:
-                subprocess.check_call(cmd_base + ["--user"] + missing)
-                print("Successfully installed missing packages with --user!", file=sys.stderr)
-            except Exception as e2:
-                print(f"Warning: Failed to auto-install packages ({e1} | {e2})", file=sys.stderr)
-
+# Fix Windows console & redirected stdio encoding
 try:
-    ensure_dependencies()
-except Exception as e:
-    print(f"Warning in ensure_dependencies: {e}", file=sys.stderr)
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    else:
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    BeautifulSoup = None
-
+# Optional high-performance async HTTP library
 try:
     import aiohttp
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
-    print("WARNING: aiohttp is missing. Falling back to urllib.", file=sys.stderr)
+    print("INFO: aiohttp not installed. Crawler running in native urllib mode.", file=sys.stderr)
 
+# Optional Camoufox anti-detect browser
 CAMOUFOX_AVAILABLE = False
 AsyncCamoufox = None
 try:
@@ -66,8 +46,8 @@ try:
         os.environ["CAMOUFOX_INSTALL_DIR"] = custom_camou_dir
     from camoufox import AsyncCamoufox
     CAMOUFOX_AVAILABLE = True
-except Exception as camou_err:
-    print(f"WARNING: Camoufox import failed ({camou_err}). Crawler will run in HTTP-only mode.", file=sys.stderr)
+except Exception:
+    CAMOUFOX_AVAILABLE = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if os.path.basename(BASE_DIR) == "server":
