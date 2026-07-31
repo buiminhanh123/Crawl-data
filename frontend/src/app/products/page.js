@@ -345,6 +345,106 @@ function ProductsContent() {
     const [renameTabTarget, setRenameTabTarget] = useState(null); // oldTabName
     const [renameTabInput, setRenameTabInput] = useState('');
 
+    // Column Header Context Menu State
+    const [pageColHeaderContextMenu, setPageColHeaderContextMenu] = useState(null); // { x, y, cIdx, currentTitle }
+    const [renameColTarget, setRenameColTarget] = useState(null); // { cIdx, currentTitle }
+    const [renameColInput, setRenameColInput] = useState('');
+
+
+    const handleRenameSheetColumn = async (cIdx, newTitle) => {
+        if (newTitle === undefined || newTitle === null) return;
+        const trimmed = newTitle.trim();
+        if (!trimmed) {
+            toast('⚠️ Tên cột không được để trống!', 'warning');
+            return;
+        }
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const newData = s.data.map(row => Array.isArray(row) ? [...row] : []);
+            while (newData.length <= autoHeaderRowIdx) {
+                newData.push([]);
+            }
+            while (newData[autoHeaderRowIdx].length <= cIdx) {
+                newData[autoHeaderRowIdx].push('');
+            }
+            newData[autoHeaderRowIdx][cIdx] = trimmed;
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        setRenameColTarget(null);
+        toast(`✅ Đã đổi tên cột thành "${trimmed}"`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (e) {
+            console.error('Failed to save renamed column:', e);
+        }
+    };
+
+    const handleInsertColumnAt = async (cIdx, side = 'right') => {
+        const insertIdx = side === 'left' ? cIdx : cIdx + 1;
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const newData = s.data.map((row, rIdx) => {
+                const newRow = Array.isArray(row) ? [...row] : [];
+                const newColVal = rIdx === autoHeaderRowIdx ? `Cột ${getColLetter(insertIdx)}` : '';
+                newRow.splice(insertIdx, 0, newColVal);
+                return newRow;
+            });
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        toast(`✨ Đã chèn 1 cột mới bên ${side === 'left' ? 'trái' : 'phải'} cột ${getColLetter(cIdx)}`, 'success');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (e) {
+            console.error('Failed to save after inserting column:', e);
+        }
+    };
+
+    const handleDeleteColumnAt = async (cIdx) => {
+        const colLetter = getColLetter(cIdx);
+        const colTitle = activePageSheetData[autoHeaderRowIdx]?.[cIdx] || `Cột ${colLetter}`;
+        const confirmDelete = window.confirm(`⚠️ Bạn có chắc chắn muốn XÓA cột [${colLetter}] "${colTitle}"?\n\nDữ liệu trong cột này sẽ bị xóa vĩnh viễn.`);
+        if (!confirmDelete) return;
+
+        const updatedSheets = profileSheets.map(s => {
+            if (s.name !== activeSheetTabName) return s;
+            const newData = s.data.map(row => {
+                if (!Array.isArray(row)) return row;
+                const newRow = [...row];
+                newRow.splice(cIdx, 1);
+                return newRow;
+            });
+            return { ...s, data: newData };
+        });
+
+        pushUndoSnapshot(profileSheets);
+        setProfileSheets(updatedSheets);
+        toast(`🗑️ Đã xóa cột [${colLetter}] "${colTitle}"`, 'info');
+
+        try {
+            await fetchApi('/api/products/profile-sheet', {
+                method: 'POST',
+                body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+            });
+        } catch (e) {
+            console.error('Failed to save after deleting column:', e);
+        }
+    };
+
     // Handlers for Tab Management
     const handleRenameSheetTab = async (oldName, newName) => {
         if (!newName || !newName.trim() || oldName === newName.trim()) return;
@@ -557,6 +657,7 @@ function ProductsContent() {
         const handleGlobalClick = () => {
             setContextMenu(null);
             setPageTabContextMenu(null);
+            setPageColHeaderContextMenu(null);
         };
 
         window.addEventListener('mouseup', handleGlobalMouseUp);
@@ -576,6 +677,8 @@ function ProductsContent() {
         setSelectedColIndices([]);
         setCellSelectionBox(null);
         setContextMenu(null);
+        setPageColHeaderContextMenu(null);
+        setRenameColTarget(null);
     }, [activeSheetTabName]);
 
     const autoHeaderRowIdx = useMemo(() => {
@@ -1912,6 +2015,17 @@ function ProductsContent() {
                                                                       handleColMouseDown(cIdx, e);
                                                                   }}
                                                                   onMouseEnter={() => handleColMouseEnter(cIdx)}
+                                                                  onContextMenu={(e) => {
+                                                                      e.preventDefault();
+                                                                      e.stopPropagation();
+                                                                      setPageColHeaderContextMenu({
+                                                                          x: e.clientX,
+                                                                          y: e.clientY,
+                                                                          cIdx: cIdx,
+                                                                          currentTitle: displayTitle
+                                                                      });
+                                                                  }}
+                                                                  title={`Chuột phải để Đổi tên, Chèn hoặc Xóa Cột ${displayTitle}`}
                                                                   style={{ 
                                                                       position: 'relative',
                                                                       userSelect: 'none',
@@ -3830,6 +3944,140 @@ function ProductsContent() {
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                             <button type="button" className="btn btn-ghost" onClick={() => setRenameTabTarget(null)}>Hủy</button>
                             <button type="button" className="btn btn-primary" onClick={() => handleRenameSheetTab(renameTabTarget, renameTabInput)} style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none' }}>
+                                Lưu tên mới
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Column Header Context Menu */}
+            {pageColHeaderContextMenu && (
+                <div
+                    className="sheet-context-menu"
+                    style={{
+                        position: 'fixed',
+                        left: Math.min(pageColHeaderContextMenu.x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 230),
+                        top: Math.min(pageColHeaderContextMenu.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 300),
+                        zIndex: 999999,
+                        background: 'var(--bg-card, #ffffff)',
+                        border: '1px solid var(--border-color, #cbd5e1)',
+                        borderRadius: 8,
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+                        minWidth: 210,
+                        padding: '4px 0',
+                        fontSize: 13
+                    }}
+                >
+                    <div style={{ padding: '6px 14px', fontWeight: 700, color: 'var(--text-muted)', fontSize: 11, borderBottom: '1px solid var(--border-color)' }}>
+                        Cột {getColLetter(pageColHeaderContextMenu.cIdx)}: {pageColHeaderContextMenu.currentTitle}
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setRenameColTarget({ cIdx: pageColHeaderContextMenu.cIdx, currentTitle: pageColHeaderContextMenu.currentTitle });
+                            setRenameColInput(pageColHeaderContextMenu.currentTitle);
+                            setPageColHeaderContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Edit3 size={14} style={{ color: 'var(--accent)' }} /> ✏️ Đổi tên cột này
+                    </button>
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '2px 0' }} />
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setColumnSortState({ colIndex: pageColHeaderContextMenu.cIdx, direction: 'asc' });
+                            setPageColHeaderContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <span>↑ Sắp xếp A → Z (Tăng dần)</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setColumnSortState({ colIndex: pageColHeaderContextMenu.cIdx, direction: 'desc' });
+                            setPageColHeaderContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <span>↓ Sắp xếp Z → A (Giảm dần)</span>
+                    </button>
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '2px 0' }} />
+                    <button
+                        type="button"
+                        onClick={() => {
+                            handleInsertColumnAt(pageColHeaderContextMenu.cIdx, 'left');
+                            setPageColHeaderContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Plus size={14} style={{ color: '#2563eb' }} /> Chèn 1 cột bên trái
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            handleInsertColumnAt(pageColHeaderContextMenu.cIdx, 'right');
+                            setPageColHeaderContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Plus size={14} style={{ color: '#2563eb' }} /> Chèn 1 cột bên phải
+                    </button>
+                    <div style={{ height: 1, background: 'var(--border-color)', margin: '2px 0' }} />
+                    <button
+                        type="button"
+                        onClick={() => {
+                            handleDeleteColumnAt(pageColHeaderContextMenu.cIdx);
+                            setPageColHeaderContextMenu(null);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 14px', background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                        <Trash2 size={14} /> Xóa cột này
+                    </button>
+                </div>
+            )}
+
+            {/* Rename Column Modal */}
+            {renameColTarget && (
+                <div className="modal-backdrop" onClick={() => setRenameColTarget(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999998, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: 400, padding: 20, boxShadow: '0 20px 40px rgba(0,0,0,0.3)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                            <span style={{ fontWeight: 700, fontSize: 15, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Edit3 size={16} style={{ color: 'var(--accent)' }} /> Đổi Tên Cột [{getColLetter(renameColTarget.cIdx)}]
+                            </span>
+                            <button onClick={() => setRenameColTarget(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}><X size={18} /></button>
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+                            Tên hiện tại: <strong style={{ color: 'var(--text-primary)' }}>{renameColTarget.currentTitle}</strong>
+                        </p>
+                        <input
+                            type="text"
+                            value={renameColInput}
+                            onChange={e => setRenameColInput(e.target.value)}
+                            placeholder="Nhập tên Cột mới..."
+                            autoFocus
+                            onKeyDown={e => {
+                                if (e.key === 'Enter') handleRenameSheetColumn(renameColTarget.cIdx, renameColInput);
+                            }}
+                            style={{ width: '100%', padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 14 }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                            <button type="button" className="btn btn-ghost" onClick={() => setRenameColTarget(null)}>Hủy</button>
+                            <button type="button" className="btn btn-primary" onClick={() => handleRenameSheetColumn(renameColTarget.cIdx, renameColInput)} style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none' }}>
                                 Lưu tên mới
                             </button>
                         </div>
