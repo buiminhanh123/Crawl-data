@@ -1060,38 +1060,40 @@ async def main():
 
     try:
         session = aiohttp.ClientSession(connector=connector) if AIOHTTP_AVAILABLE else None
-        try:
-            queue = asyncio.Queue()
-            for i, url_info in enumerate(product_urls, start=1):
-                await queue.put((i, url_info))
+        queue = asyncio.Queue()
+        for i, url_info in enumerate(product_urls, start=1):
+            await queue.put((i, url_info))
 
-            browser_used = False
-            if CAMOUFOX_AVAILABLE and AsyncCamoufox is not None:
-                try:
-                    async with AsyncCamoufox(headless=True, block_images=True) as browser:
-                        log_message("Browser ready. Starting workers...")
-                        workers = []
-                        for i in range(concurrency):
-                            await asyncio.sleep(0.1)
-                            task = asyncio.create_task(
-                                worker(queue, session, browser, browser_sem, total, mode, profile_slug)
-                            )
-                            workers.append(task)
-                        await asyncio.gather(*workers)
-                        browser_used = True
-                except Exception as b_err:
-                    log_message(f"Browser execution failed ({b_err}). Falling back to HTTP-only mode...")
+        browser_used = False
+        if CAMOUFOX_AVAILABLE and AsyncCamoufox is not None:
+            try:
+                async with AsyncCamoufox(headless=True, block_images=True) as browser:
+                    log_message("Browser ready. Starting workers...")
+                    workers = []
+                    for i in range(concurrency):
+                        await asyncio.sleep(0.1)
+                        task = asyncio.create_task(
+                            worker(queue, session, browser, browser_sem, total, mode, profile_slug)
+                        )
+                        workers.append(task)
+                    await asyncio.gather(*workers)
+                    browser_used = True
+            except Exception as b_err:
+                log_message(f"Browser execution failed ({b_err}). Falling back to HTTP-only mode...")
 
-            if not browser_used:
-                log_message("Running crawler in HTTP-only mode...")
-                workers = []
-                for i in range(concurrency):
-                    await asyncio.sleep(0.1)
-                    task = asyncio.create_task(
-                        worker(queue, session, None, browser_sem, total, mode, profile_slug)
-                    )
-                    workers.append(task)
-                await asyncio.gather(*workers)
+        if not browser_used:
+            log_message("Running crawler in HTTP-only mode...")
+            workers = []
+            for i in range(concurrency):
+                await asyncio.sleep(0.1)
+                task = asyncio.create_task(
+                    worker(queue, session, None, browser_sem, total, mode, profile_slug)
+                )
+                workers.append(task)
+            await asyncio.gather(*workers)
+
+        if session and hasattr(session, 'close'):
+            await session.close()
     except Exception as s_err:
         log_message(f"Session closed with note: {s_err}")
     finally:
