@@ -1878,7 +1878,7 @@ function ProductsContent() {
                             )}
 
                             {/* Main Interactive Grid Table */}
-                            <div className="sheet-table-container" style={{ maxHeight: 540 }}>
+                            <div className="sheet-table-container" style={{ minHeight: 380, maxHeight: 540, overflow: 'auto', position: 'relative' }}>
                                 {(() => {
                                     if (activePageSheetData.length === 0) {
                                         return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Tab này chưa có dữ liệu.</div>;
@@ -1907,7 +1907,10 @@ function ProductsContent() {
                                                          return (
                                                               <th 
                                                                   key={cIdx} 
-                                                                  onMouseDown={(e) => handleColMouseDown(cIdx, e)}
+                                                                  onMouseDown={(e) => {
+                                                                      if (e.target.closest('.sheet-filter-btn') || e.target.closest('.sheet-filter-popover')) return;
+                                                                      handleColMouseDown(cIdx, e);
+                                                                  }}
                                                                   onMouseEnter={() => handleColMouseEnter(cIdx)}
                                                                   style={{ 
                                                                       position: 'relative',
@@ -1929,8 +1932,10 @@ function ProductsContent() {
                                                                           <button
                                                                               type="button"
                                                                               className="sheet-filter-btn"
+                                                                              onMouseDown={(e) => e.stopPropagation()}
                                                                               onClick={(e) => {
                                                                                   e.stopPropagation();
+                                                                                  e.preventDefault();
                                                                                   if (!isColSorted) setColumnSortState({ colIndex: cIdx, direction: 'asc' });
                                                                                   else if (sortDir === 'asc') setColumnSortState({ colIndex: cIdx, direction: 'desc' });
                                                                                   else setColumnSortState({ colIndex: null, direction: null });
@@ -1956,8 +1961,10 @@ function ProductsContent() {
                                                                           <button
                                                                               type="button"
                                                                               className="sheet-filter-btn"
+                                                                              onMouseDown={(e) => e.stopPropagation()}
                                                                               onClick={(e) => {
                                                                                   e.stopPropagation();
+                                                                                  e.preventDefault();
                                                                                   setDropdownSearch('');
                                                                                   setActiveFilterDropdownCol(activeFilterDropdownCol === cIdx ? null : cIdx);
                                                                               }}
@@ -2108,7 +2115,7 @@ function ProductsContent() {
                                                                                               <div style={{ fontSize: 11, color: '#94a3b8', padding: '6px', textAlign: 'center' }}>Không có giá trị nào</div>
                                                                                           ) : (
                                                                                               filteredVals.map((val) => {
-                                                                                                  const isChecked = currentSelected.length === 0 || currentSelected.includes(val);
+                                                                                                  const isChecked = currentSelected.length === 0 || (currentSelected.includes(val) && !currentSelected.includes('__NONE__'));
                                                                                                   return (
                                                                                                       <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px', fontSize: 11.5, cursor: 'pointer', borderRadius: 3, userSelect: 'none' }}>
                                                                                                           <input
@@ -2117,16 +2124,21 @@ function ProductsContent() {
                                                                                                               onChange={(e) => {
                                                                                                                   const checked = e.target.checked;
                                                                                                                   setColumnSelectedValues(prev => {
-                                                                                                                      const existing = prev[cIdx] ? [...prev[cIdx]] : [];
-                                                                                                                      if (existing.length === 0) {
-                                                                                                                          const allExceptVal = uniqueVals.filter(v => v !== val);
-                                                                                                                          return { ...prev, [cIdx]: allExceptVal };
+                                                                                                                      const rawExisting = prev[cIdx] || [];
+                                                                                                                      const existing = rawExisting.filter(v => v !== '__NONE__');
+
+                                                                                                                      if (rawExisting.length === 0) {
+                                                                                                                          if (!checked) {
+                                                                                                                              return { ...prev, [cIdx]: uniqueVals.filter(v => v !== val) };
+                                                                                                                          }
                                                                                                                       }
+
                                                                                                                       if (checked) {
-                                                                                                                          const next = [...existing, val];
+                                                                                                                          const next = Array.from(new Set([...existing, val]));
                                                                                                                           return { ...prev, [cIdx]: next.length >= uniqueVals.length ? [] : next };
                                                                                                                       } else {
-                                                                                                                          return { ...prev, [cIdx]: existing.filter(v => v !== val) };
+                                                                                                                          const next = existing.filter(v => v !== val);
+                                                                                                                          return { ...prev, [cIdx]: next.length === 0 ? ['__NONE__'] : next };
                                                                                                                       }
                                                                                                                   });
                                                                                                               }}
@@ -2174,7 +2186,22 @@ function ProductsContent() {
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                {renderedPageRows.map((row, rIdx) => {
+                                                {renderedPageRows.length === 0 ? (
+                                                    <tr>
+                                                        <td colSpan={Math.max(maxPageCols + 1, 2)} style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b', fontSize: 13, background: '#ffffff' }}>
+                                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                                                                <span>🚫 Không có hàng nào khớp với bộ lọc hiện tại.</span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleClearAllFilters}
+                                                                    style={{ color: '#2563eb', fontWeight: 600, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 12 }}
+                                                                >
+                                                                    🧹 Xóa tất cả bộ lọc
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ) : renderedPageRows.map((row, rIdx) => {
                                                     const isRowPinned = rIdx < pageFreezeRows;
                                                     const isLastPinnedRow = pageFreezeRows > 0 && rIdx === pageFreezeRows - 1;
                                                     const isRowSelected = selectedRowSet.has(rIdx);
@@ -3018,142 +3045,6 @@ function ProductsContent() {
                 aiState={aiTaskState}
                 setAiState={setAiTaskState}
             />
-
-            {/* Column Unique Values Filter Dropdown Popover Modal */}
-            {activeFilterDropdownCol !== null && (
-                <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'fadeIn 0.15s ease' }} onClick={() => setActiveFilterDropdownCol(null)}>
-                    <div style={{ background: 'var(--bg-card)', width: 380, maxWidth: '90vw', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-xl)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '80vh' }} onClick={e => e.stopPropagation()}>
-                        {/* Header */}
-                        <div style={{ padding: '14px 18px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <Filter size={15} style={{ color: 'var(--accent)' }} /> 
-                                Lọc Cột {String.fromCharCode(activeFilterDropdownCol % 26 + 65)} 
-                                {activePageSheetData[0]?.[activeFilterDropdownCol] ? `: ${String(activePageSheetData[0][activeFilterDropdownCol]).slice(0, 20)}` : ''}
-                            </div>
-                            <button type="button" onClick={() => setActiveFilterDropdownCol(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
-                                <X size={16} />
-                            </button>
-                        </div>
-
-                        {/* Dropdown Body */}
-                        <div style={{ padding: '14px 18px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                            {/* Search inside unique values */}
-                            <div style={{ position: 'relative' }}>
-                                <Search size={13} style={{ position: 'absolute', left: 10, top: 9, color: 'var(--text-muted)' }} />
-                                <input
-                                    type="text"
-                                    value={dropdownSearch}
-                                    onChange={e => setDropdownSearch(e.target.value)}
-                                    placeholder="Tìm giá trị trong danh sách..."
-                                    style={{ width: '100%', padding: '6px 10px 6px 30px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-                                />
-                            </div>
-
-                            {/* Select All / Clear All Buttons */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            const allVals = activeColUniqueValues.map(v => v.value);
-                                            setColumnSelectedValues(prev => ({ ...prev, [activeFilterDropdownCol]: allVals }));
-                                        }}
-                                        style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600, padding: 0 }}
-                                    >
-                                        Chọn tất cả ({activeColUniqueValues.length})
-                                    </button>
-                                    <span style={{ color: 'var(--border-color)' }}>|</span>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setColumnSelectedValues(prev => ({ ...prev, [activeFilterDropdownCol]: [] }));
-                                        }}
-                                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 600, padding: 0 }}
-                                    >
-                                        Bỏ chọn tất cả
-                                    </button>
-                                </div>
-                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                    {(columnSelectedValues[activeFilterDropdownCol] || []).length} / {activeColUniqueValues.length} đã chọn
-                                </span>
-                            </div>
-
-                            {/* Checkbox List of Unique Column Values */}
-                            <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', maxHeight: 220, overflowY: 'auto', background: 'var(--bg-secondary)', padding: '6px 0' }}>
-                                {activeColUniqueValues
-                                    .filter(item => !dropdownSearch || item.value.toLowerCase().includes(dropdownSearch.toLowerCase()))
-                                    .map((item, i) => {
-                                        const currentSelected = columnSelectedValues[activeFilterDropdownCol];
-                                        const isChecked = !currentSelected || currentSelected.includes(item.value);
-                                        return (
-                                            <label
-                                                key={i}
-                                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 12px', fontSize: 12, cursor: 'pointer', userSelect: 'none', background: isChecked ? 'rgba(99,102,241,0.06)' : 'transparent' }}
-                                            >
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={isChecked}
-                                                        onChange={e => {
-                                                            const isCheckedNow = e.target.checked;
-                                                            setColumnSelectedValues(prev => {
-                                                                const cur = prev[activeFilterDropdownCol] || activeColUniqueValues.map(v => v.value);
-                                                                let updated;
-                                                                if (isCheckedNow) {
-                                                                    updated = Array.from(new Set([...cur, item.value]));
-                                                                } else {
-                                                                    updated = cur.filter(v => v !== item.value);
-                                                                }
-                                                                return { ...prev, [activeFilterDropdownCol]: updated };
-                                                            });
-                                                        }}
-                                                    />
-                                                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-primary)', fontWeight: isChecked ? 600 : 400 }}>
-                                                        {item.value}
-                                                    </span>
-                                                </div>
-                                                <span style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-card)', padding: '1px 6px', borderRadius: 10, border: '1px solid var(--border-color)', flexShrink: 0 }}>
-                                                    {item.count}
-                                                </span>
-                                            </label>
-                                        );
-                                    })}
-                            </div>
-                        </div>
-
-                        {/* Modal Footer */}
-                        <div style={{ padding: '10px 18px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setColumnFilters(prev => {
-                                        const cp = { ...prev };
-                                        delete cp[activeFilterDropdownCol];
-                                        return cp;
-                                    });
-                                    setColumnSelectedValues(prev => {
-                                        const cp = { ...prev };
-                                        delete cp[activeFilterDropdownCol];
-                                        return cp;
-                                    });
-                                    setActiveFilterDropdownCol(null);
-                                }}
-                                style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}
-                            >
-                                Xóa lọc cột này
-                            </button>
-                            <button
-                                type="button"
-                                className="btn btn-primary"
-                                onClick={() => setActiveFilterDropdownCol(null)}
-                                style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none', padding: '6px 16px', fontSize: 12.5, borderRadius: 'var(--radius-md)' }}
-                            >
-                                <Check size={14} /> Áp dụng
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* ═══════════════════════════════════════════════════════════════ */}
             {/* View Mode 2: Danh Sách Sản Phẩm Crawler (Product Data Grid) */}
