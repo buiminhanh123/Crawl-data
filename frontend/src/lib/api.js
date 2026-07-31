@@ -1,11 +1,13 @@
 const getApiBase = () => {
-    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
     if (typeof window !== 'undefined') {
+        // Local Next.js dev server on port 3000 -> hit local Express on 3002
         if (window.location.port === '3000') {
             return 'http://localhost:3002';
         }
+        // Production domain or Vercel -> use relative /api path
         return '';
     }
+    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
     return process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'http://localhost:3002';
 };
 
