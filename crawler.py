@@ -916,12 +916,65 @@ def extract_product_data(soup, slug, url=""):
         '桌上型掃瞄器': 'Desktop Scanners',
         '手持式掃瞄器': 'Handheld Scanners',
         '固定式掃瞄器': 'Fixed Mount Scanners',
+        '感熱式/熱轉印': 'Thermal / Thermal Transfer',
+        '熱轉印': 'Thermal Transfer',
+        '熱感應': 'Direct Thermal',
+        '印表機': 'Printers',
+        '打印机': 'Printers',
+        '掃瞄器': 'Scanners',
+        '扫描器': 'Scanners',
         '系列': 'Series',
+        '解析度': 'Resolution',
+        '分辨率': 'Resolution',
+        '列印速度': 'Print Speed',
+        '打印速度': 'Print Speed',
+        '列印寬度': 'Print Width',
+        '打印宽度': 'Print Width',
+        '列印長度': 'Print Length',
+        '打印长度': 'Print Length',
+        '傳輸介面': 'Interface',
+        '传输接口': 'Interface',
+        '記憶體': 'Memory',
+        '内存': 'Memory',
+        '重量': 'Weight',
+        '體積': 'Dimensions',
+        '尺寸': 'Dimensions',
+        '電源': 'Power Supply',
+        '电源': 'Power Supply',
+        '工作溫度': 'Operating Temperature',
+        '儲存溫度': 'Storage Temperature',
+        '相對濕度': 'Humidity',
         '公司簡介': '',
         '關於立象': '',
         '關於我們': '',
         '聯絡我們': '',
+        '最新消息': 'Latest News',
+        '技術支援': 'Support',
+        '下載專區': 'Downloads',
     }
+
+    # Clean description JS inline code and format paragraphs
+    if description:
+        description = re.sub(r'<script.*?>.*?</script>', '', description, flags=re.DOTALL | re.IGNORECASE)
+        description = re.sub(r'<style.*?>.*?</style>', '', description, flags=re.DOTALL | re.IGNORECASE)
+        description = re.sub(r'function\s+\w+\s*\(.*?\)\s*\{[\s\S]*?\}', '', description)
+        description = re.sub(r'\$\.ajax\s*\([\s\S]*?\);?', '', description)
+        description = re.sub(r'if\s*\([^)]*\)\s*\{[\s\S]*?\}', '', description)
+        description = re.sub(r'\$\([\'"].*?[\'"]\)\.[a-zA-Z0-9_]+\([\s\S]*?\);?', '', description)
+
+        lines = [line.strip() for line in description.split('\n') if line.strip()]
+        clean_lines = []
+        for line in lines:
+            if any(js_kw in line for js_kw in ('addInquiry', 'InquiryQuantity', 'sideLinkBox', 'CompareQuantity', 'del_car_fun')):
+                continue
+            if len(line) < 3:
+                continue
+            # Translate Chinese sub-terms
+            for zh, en in ZH_EN_MAP.items():
+                if zh in line:
+                    line = line.replace(zh, en)
+            clean_lines.append(f"<p>{line.strip()}</p>")
+        description = "\n".join(clean_lines) if clean_lines else description.strip()
 
     def clean_field(val):
         if not val:

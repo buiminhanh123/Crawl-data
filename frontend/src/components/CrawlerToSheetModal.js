@@ -209,6 +209,212 @@ export default function CrawlerToSheetModal({
         }));
     };
 
+    // ══════════════════════════════════════════════════════════════════
+    //  DATA CONVERSION HELPERS (HTML SPECS, PARAGRAPHS, PDF LINKS, ZH TRANSLATION)
+    // ══════════════════════════════════════════════════════════════════
+
+    const ZH_EN_MAP = {
+        '產品介紹': 'Products Overview',
+        '產品': 'Products',
+        '产品': 'Products',
+        '條碼印表機': 'Barcode Printers',
+        '条码打印机': 'Barcode Printers',
+        '桌面型印表機': 'Desktop Printers',
+        '桌面型打印机': 'Desktop Printers',
+        '工業型印表機': 'Industrial Printers',
+        '工业型打印机': 'Industrial Printers',
+        '攜帶型印表機': 'Mobile Printers',
+        '便携式打印机': 'Mobile Printers',
+        '條碼掃瞄器': 'Barcode Scanners',
+        '条码扫描器': 'Barcode Scanners',
+        '輕工業型掃瞄器': 'Light Industrial Scanners',
+        '通用型1D掃瞄器': 'General 1D Scanners',
+        '通用型2D掃瞄器': 'General 2D Scanners',
+        '桌上型掃瞄器': 'Desktop Scanners',
+        '手持式掃瞄器': 'Handheld Scanners',
+        '固定式掃瞄器': 'Fixed Mount Scanners',
+        '感熱式/熱轉印': 'Thermal / Thermal Transfer',
+        '熱轉印': 'Thermal Transfer',
+        '熱感應': 'Direct Thermal',
+        '印表機': 'Printers',
+        '打印机': 'Printers',
+        '掃瞄器': 'Scanners',
+        '扫描器': 'Scanners',
+        '系列': 'Series',
+        '解析度': 'Resolution',
+        '分辨率': 'Resolution',
+        '列印速度': 'Print Speed',
+        '打印速度': 'Print Speed',
+        '列印寬度': 'Print Width',
+        '打印宽度': 'Print Width',
+        '列印長度': 'Print Length',
+        '打印长度': 'Print Length',
+        '傳輸介面': 'Interface',
+        '传输接口': 'Interface',
+        '記憶體': 'Memory',
+        '内存': 'Memory',
+        '重量': 'Weight',
+        '體積': 'Dimensions',
+        '尺寸': 'Dimensions',
+        '電源': 'Power Supply',
+        '电源': 'Power Supply',
+        '工作溫度': 'Operating Temperature',
+        '儲存溫度': 'Storage Temperature',
+        '相對濕度': 'Humidity',
+        '公司簡介': '',
+        '關於立象': '',
+        '關於我們': '',
+        '聯絡我們': '',
+        '最新消息': 'Latest News',
+        '技術支援': 'Support',
+        '下載專區': 'Downloads',
+    };
+
+    const translateZhToEn = (text) => {
+        if (!text || typeof text !== 'string') return text || '';
+        let result = text;
+        for (const [zh, en] of Object.entries(ZH_EN_MAP)) {
+            if (result.includes(zh)) {
+                result = result.replaceAll(zh, en);
+            }
+        }
+        return result.trim();
+    };
+
+    const formatDescriptionToParagraphs = (rawDesc) => {
+        if (!rawDesc) return '';
+        let text = String(rawDesc);
+
+        // 1. Remove JS code scripts, functions, jquery calls, inline handlers
+        text = text.replace(/<script[\s\S]*?<\/script>/gi, '');
+        text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
+        text = text.replace(/function\s+\w+\s*\([\s\S]*?\)\s*\{[\s\S]*?\}/gi, '');
+        text = text.replace(/\$\.ajax\s*\([\s\S]*?\);?/gi, '');
+        text = text.replace(/if\s*\([^)]*\)\s*\{[\s\S]*?\}/gi, '');
+        text = text.replace(/\$\([\'"].*?[\'"]\)\.[a-zA-Z0-9_]+\([\s\S]*?\);?/gi, '');
+        text = text.replace(/del_car_fun\(.*?\);?/gi, '');
+        text = text.replace(/addInquiry\(.*?\);?/gi, '');
+
+        // Translate Chinese
+        text = translateZhToEn(text);
+
+        // Strip raw HTML tags if any (keep text content)
+        text = text.replace(/<[^>]+>/g, ' ');
+
+        // Split into sentences / paragraphs
+        const rawLines = text.split(/[\r\n•|]+/).map(l => l.trim()).filter(Boolean);
+        const cleanLines = rawLines.filter(line => {
+            if (line.length < 3) return false;
+            if (line.includes('addInquiry') || line.includes('InquiryQuantity') || line.includes('sideLinkBox') || line.includes('CompareQuantity')) return false;
+            return true;
+        });
+
+        if (cleanLines.length === 0) return '';
+
+        return cleanLines.map(line => `<p>${line}</p>`).join('\n');
+    };
+
+    const convertSpecsToHtmlTable = (specsInput) => {
+        if (!specsInput) return '';
+
+        let specsObj = null;
+
+        if (typeof specsInput === 'string') {
+            const trimmed = specsInput.trim();
+
+            if (trimmed.toLowerCase().includes('<table')) {
+                let html = translateZhToEn(trimmed);
+                if (!html.toLowerCase().includes('<h2>')) {
+                    html = `<h2>Thông số kỹ thuật</h2>\n` + html;
+                }
+                if (!html.includes('Table_Products_Style')) {
+                    html = html.replace(/<table[^>]*>/i, '<table class="Table_Products_Style">');
+                }
+                return html;
+            }
+
+            try {
+                specsObj = JSON.parse(trimmed);
+            } catch (e) {
+                const lines = trimmed.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
+                if (lines.length > 0) {
+                    specsObj = {};
+                    lines.forEach(line => {
+                        const parts = line.split(/[:：]/);
+                        if (parts.length >= 2) {
+                            const k = parts[0].trim();
+                            const v = parts.slice(1).join(':').trim();
+                            if (k) specsObj[k] = v;
+                        } else {
+                            specsObj[line] = '';
+                        }
+                    });
+                }
+            }
+        } else if (typeof specsInput === 'object' && specsInput !== null) {
+            specsObj = specsInput;
+        }
+
+        if (!specsObj || typeof specsObj !== 'object') {
+            return translateZhToEn(String(specsInput || ''));
+        }
+
+        let rowsHtml = '';
+
+        if (Array.isArray(specsObj)) {
+            specsObj.forEach(item => {
+                const rawKey = item.key || item.name || item.label || item[0] || '';
+                const rawVal = item.value || item.val || item[1] || '';
+                const key = translateZhToEn(String(rawKey));
+                const val = translateZhToEn(String(rawVal));
+                if (key || val) {
+                    rowsHtml += `  <tr><td>${key}</td><td>${val}</td></tr>\n`;
+                }
+            });
+        } else {
+            Object.entries(specsObj).forEach(([rawKey, rawVal]) => {
+                const key = translateZhToEn(String(rawKey));
+                const displayVal = typeof rawVal === 'object' ? JSON.stringify(rawVal) : translateZhToEn(String(rawVal ?? ''));
+                rowsHtml += `  <tr><td>${key}</td><td>${displayVal}</td></tr>\n`;
+            });
+        }
+
+        if (!rowsHtml) return translateZhToEn(String(specsInput || ''));
+
+        return `<h2>Thông số kỹ thuật</h2>\n<table class="Table_Products_Style">\n  <tr><th>Thông số</th><th>Giá trị</th></tr>\n${rowsHtml}</table>`;
+    };
+
+    const formatDocumentLinks = (docInput) => {
+        if (!docInput) return '';
+
+        let urls = [];
+
+        if (Array.isArray(docInput)) {
+            urls = docInput;
+        } else if (typeof docInput === 'string') {
+            const trimmed = docInput.trim();
+            if (!trimmed) return '';
+
+            if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+                try {
+                    urls = JSON.parse(trimmed);
+                } catch (e) {}
+            }
+
+            if (urls.length === 0) {
+                urls = trimmed.split(/[\r\n,;]+/).map(u => u.trim()).filter(Boolean);
+            }
+        }
+
+        urls = urls
+            .map(u => typeof u === 'object' ? (u.url || u.link || u.href || '') : String(u || '').trim())
+            .filter(u => u && !u.match(/\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i));
+
+        if (urls.length === 0) return '';
+
+        return urls.map((url, idx) => `tài liệu ${idx + 1}: ${url}`).join('\n');
+    };
+
     // Helper: Convert product object to row array according to column mapping
     const mapProductToRow = (product) => {
         return columns.map(col => {
@@ -217,24 +423,35 @@ export default function CrawlerToSheetModal({
             // Handle field mappings
             let val = product[col.field];
 
-            // Fallback for brand / vendor
+            // Brand fallback + translation
             if (col.field === 'brand') {
                 val = val || product.brand_name || product.brand || product.vendor || (product.profile_slug ? product.profile_slug.replace(/^profile-?/i, '').toUpperCase() : (profileSlug ? profileSlug.replace(/^profile-?/i, '').toUpperCase() : ''));
+                val = translateZhToEn(String(val || ''));
             }
+
+            // Category / Series / Name translation
+            if (col.field === 'category' || col.field === 'main_category' || col.field === 'series' || col.field === 'name') {
+                val = translateZhToEn(String(val || ''));
+            }
+
             // Fallback for model / sku
             if (col.field === 'model' && !val) {
                 val = product.sku || product.product_code || '';
             }
-            // Fallback for document_url
-            if (col.field === 'document_url' && !val) {
-                val = product.pdf_url || product.datasheet_url || '';
+
+            // Document / PDF links formatting
+            if (col.field === 'document_url') {
+                val = formatDocumentLinks(val || product.pdf_url || product.datasheet_url || product.download_links || product.documents);
             }
-            // Fallback for specs_json
+
+            // Description paragraph formatting
+            if (col.field === 'description') {
+                val = formatDescriptionToParagraphs(val || product.description_raw || product.summary || '');
+            }
+
+            // Specs HTML Table formatting
             if (col.field === 'specs_json') {
-                val = product.specs_json || product.specs_html || product.specifications || product.specs || product.technical_specs || '';
-                if (typeof val === 'object') {
-                    try { val = JSON.stringify(val); } catch (e) {}
-                }
+                val = convertSpecsToHtmlTable(val || product.specs_json || product.specs_html || product.specifications || product.specs || product.technical_specs);
             }
 
             return val !== undefined && val !== null ? String(val) : '';
