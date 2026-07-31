@@ -1,3 +1,4 @@
+from bs4 import BeautifulSoup
 import asyncio
 import xml.etree.ElementTree as ET
 import sqlite3
@@ -28,6 +29,84 @@ try:
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 except Exception:
     pass
+
+# Optional HTML parsing with native fallback if bs4 is missing
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    from html.parser import HTMLParser
+
+    class MiniElement:
+        def __init__(self, tag, attrs=None):
+            self.tag = tag
+            self.attrs = attrs or {}
+            self.children = []
+            self.text_content = []
+
+        @property
+        def text(self):
+            return "".join(self.text_content).strip()
+
+        def get(self, attr, default=None):
+            return self.attrs.get(attr, default)
+
+        def find_all(self, name=None, **kwargs):
+            results = []
+            names = [name] if isinstance(name, str) else (list(name) if isinstance(name, (list, tuple, set)) else [])
+            class_re = kwargs.get('class_')
+            
+            def search(el):
+                if isinstance(el, MiniElement):
+                    match = True
+                    if names and el.tag not in names:
+                        match = False
+                    if match and class_re:
+                        el_cls = el.attrs.get('class', '')
+                        if hasattr(class_re, 'search'):
+                            if not class_re.search(el_cls): match = False
+                        elif class_re not in el_cls:
+                            match = False
+                    if match and kwargs.get('href') and 'href' not in el.attrs:
+                        match = False
+                    if match and el != self:
+                        results.append(el)
+                    for child in el.children:
+                        search(child)
+
+            search(self)
+            return results
+
+        def find(self, name=None, **kwargs):
+            res = self.find_all(name, **kwargs)
+            return res[0] if res else None
+
+    class MiniParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.root = MiniElement('root')
+            self.stack = [self.root]
+
+        def handle_starttag(self, tag, attrs):
+            attr_dict = dict(attrs)
+            el = MiniElement(tag, attr_dict)
+            self.stack[-1].children.append(el)
+            if tag not in ('img', 'br', 'hr', 'input', 'meta', 'link'):
+                self.stack.append(el)
+
+        def handle_endtag(self, tag):
+            if len(self.stack) > 1 and self.stack[-1].tag == tag:
+                self.stack.pop()
+
+        def handle_data(self, data):
+            if data and self.stack:
+                self.stack[-1].text_content.append(data)
+                for ancestor in self.stack[:-1]:
+                    ancestor.text_content.append(data)
+
+    def BeautifulSoup(html, parser="html.parser"):
+        p = MiniParser()
+        p.feed(html or "")
+        return p.root
 
 # Optional high-performance async HTTP library
 try:
