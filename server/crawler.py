@@ -16,7 +16,6 @@ try:
 except Exception:
     pass
 
-# Auto-install missing critical Python dependencies if pip is available
 def ensure_dependencies():
     missing = []
     try:
@@ -30,35 +29,34 @@ def ensure_dependencies():
 
     if missing:
         print(f"Installing missing Python packages: {missing}...", file=sys.stderr)
+        cmd_base = [sys.executable, "-m", "pip", "install"]
+        flags = ["--break-system-packages"] if sys.platform != 'win32' else []
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+            subprocess.check_call(cmd_base + flags + missing)
             print("Successfully installed missing packages!", file=sys.stderr)
-        except Exception as e:
-            print(f"Failed to auto-install packages: {e}", file=sys.stderr)
+        except Exception as e1:
+            try:
+                subprocess.check_call(cmd_base + ["--user"] + missing)
+                print("Successfully installed missing packages with --user!", file=sys.stderr)
+            except Exception as e2:
+                print(f"Warning: Failed to auto-install packages ({e1} | {e2})", file=sys.stderr)
 
-ensure_dependencies()
-
-# Fix Windows console & redirected stdio encoding
 try:
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-    else:
-        import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-except Exception:
-    pass
+    ensure_dependencies()
+except Exception as e:
+    print(f"Warning in ensure_dependencies: {e}", file=sys.stderr)
 
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
 
 try:
     import aiohttp
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
-    print("ERROR: aiohttp is required. Install with: pip install aiohttp", file=sys.stderr)
-    sys.exit(1)
+    print("WARNING: aiohttp is missing. Falling back to urllib.", file=sys.stderr)
 
 CAMOUFOX_AVAILABLE = False
 AsyncCamoufox = None
@@ -277,10 +275,35 @@ def get_all_products_from_db(only_missing_downloads=False):
 
 async def fetch_page_http(session, url):
     """
-    Primary method: lightweight aiohttp HTTP request.
-    Returns (html, 'http') on success, or (None, reason) on failure.
-    No browser process needed — handles 30-50+ concurrent easily.
+    Primary method: lightweight aiohttp HTTP request (or urllib fallback).
     """
+    if not session or not AIOHTTP_AVAILABLE:
+        try:
+            loop = asyncio.get_event_loop()
+            def sync_fetch():
+                req = urllib.request.Request(url, headers=HTTP_HEADERS)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    status = getattr(resp, 'status', 200)
+                    if status == 200:
+                        data = resp.read()
+                        if resp.headers.get('Content-Encoding') == 'gzip':
+                            import gzip
+                            data = gzip.decompress(data)
+                        text = data.decode('utf-8', errors='replace')
+                        if len(text) > 5000:
+                            return text, 'http'
+                        return None, 'response_too_short'
+                    elif status == 404:
+                        return None, '404'
+                    return None, f'status_{status}'
+            return await loop.run_in_executor(None, sync_fetch)
+        except urllib.error.HTTPError as he:
+            if he.code == 404:
+                return None, '404'
+            return None, f'blocked_{he.code}'
+        except Exception as u_err:
+            return None, f'http_error:{str(u_err)[:60]}'
+
     try:
         async with session.get(
             url,
@@ -290,14 +313,13 @@ async def fetch_page_http(session, url):
         ) as resp:
             if resp.status == 200:
                 html = await resp.text(errors='replace')
-                # Sanity check: real product pages are >5 KB
                 if len(html) > 5000:
                     return html, 'http'
                 return None, 'response_too_short'
             elif resp.status == 404:
-                return None, '404'           # Permanent — don't retry via browser
+                return None, '404'
             elif resp.status == 429:
-                return None, 'rate_limited'  # Too many requests
+                return None, 'rate_limited'
             elif resp.status in (403, 503, 502):
                 return None, f'blocked_{resp.status}'
             else:
@@ -1057,7 +1079,8 @@ async def main():
     )
 
     try:
-        async with aiohttp.ClientSession(connector=connector) as session:
+        session = aiohttp.ClientSession(connector=connector) if AIOHTTP_AVAILABLE else None
+        try:
             queue = asyncio.Queue()
             for i, url_info in enumerate(product_urls, start=1):
                 await queue.put((i, url_info))
