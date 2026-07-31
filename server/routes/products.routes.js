@@ -612,10 +612,10 @@ router.get('/crawler/status', async (req, res) => {
         let status = await productQueries.getCrawlerStatus();
         const failed_items = await productQueries.getFailedCount();
 
-        if (status && (status.status === 'Completed' || status.status === 'Stopped' || status.status === 'Error')) {
+        if (status && status.status === 'Completed') {
             const updatedAt = status.updated_at ? new Date(status.updated_at).getTime() : 0;
             const now = Date.now();
-            // Auto-reset to Idle if completed/stopped over 15 seconds ago
+            // Auto-reset to Idle if completed over 15 seconds ago
             if (updatedAt > 0 && (now - updatedAt) > 15000) {
                 await productQueries.updateCrawlerStatus('Idle', 0, 0, 0, 'Ready', '');
                 status = {

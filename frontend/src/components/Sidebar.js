@@ -55,8 +55,8 @@ export default function Sidebar() {
                 if (s) {
                     setCrawlerStatus(s);
 
-                    // If Completed, Stopped, or Error, schedule auto-reset after 15 seconds
-                    if (s.status === 'Completed' || s.status === 'Stopped' || s.status === 'Error') {
+                    // If Completed, schedule auto-reset after 15 seconds
+                    if (s.status === 'Completed') {
                         if (!completedTimerRef.current) {
                             completedTimerRef.current = setTimeout(async () => {
                                 try {

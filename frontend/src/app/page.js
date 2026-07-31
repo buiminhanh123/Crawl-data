@@ -131,8 +131,8 @@ export default function DashboardPage() {
                         if (statsData) setStats(statsData);
                     }
                     fetchLogs();
-                    // Refresh failed list after crawler finishes and schedule 15s auto-reset
-                    if (statusData.status === 'Completed' || statusData.status === 'Error' || statusData.status === 'Stopped') {
+                    // Refresh failed list after crawler finishes and schedule 15s auto-reset for Completed status
+                    if (statusData.status === 'Completed') {
                         fetchFailed();
                         if (!completedTimerRef.current) {
                             completedTimerRef.current = setTimeout(async () => {
@@ -154,6 +154,9 @@ export default function DashboardPage() {
                         if (completedTimerRef.current) {
                             clearTimeout(completedTimerRef.current);
                             completedTimerRef.current = null;
+                        }
+                        if (statusData.status === 'Error' || statusData.status === 'Stopped' || statusData.status === 'Paused') {
+                            fetchFailed();
                         }
                     }
                 }
