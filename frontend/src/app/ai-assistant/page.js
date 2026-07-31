@@ -10,6 +10,7 @@ import {
     Pause, Sliders, Layers, ArrowRight, Bookmark, Filter, ShieldCheck
 } from 'lucide-react';
 import { getGlobalAiRunner } from '@/lib/globalAiRunner';
+import ExportExcelModal from '@/components/ExportExcelModal';
 
 // ══════════════════════════════════════════════════════
 //  CONSTANTS & DEFAULT PRESETS
@@ -344,6 +345,7 @@ export default function AIAssistantPage() {
 
     // API Connection Test State
     const [apiTestState, setApiTestState] = useState({ testing: false, result: null });
+    const [showExportModal, setShowExportModal] = useState(false);
 
     const handleTestApiConnection = async () => {
         setApiTestState({ testing: true, result: null });
@@ -758,6 +760,20 @@ export default function AIAssistantPage() {
                         <CheckCircle2 size={16} /> 📟 Terminal Log Live
                     </button>
                 </div>
+
+                <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setShowExportModal(true)}
+                    style={{
+                        display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5,
+                        padding: '8px 18px', fontWeight: 700, background: 'linear-gradient(135deg, #10b981, #059669)',
+                        color: '#ffffff', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)'
+                    }}
+                >
+                    <FileSpreadsheet size={18} /> 📥 Xuất File Excel (.xlsx)
+                </button>
             </div>
 
             {/* ═════════════════════════════════════════════════════════════════ */}
@@ -1353,6 +1369,13 @@ export default function AIAssistantPage() {
                     </div>
                 </div>
             )}
+            {/* Modal Export Excel */}
+            <ExportExcelModal
+                isOpen={showExportModal}
+                onClose={() => setShowExportModal(false)}
+                defaultProfileSlug={selectedProfileSlug}
+                profiles={profiles}
+            />
         </div>
     );
 }

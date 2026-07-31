@@ -7,6 +7,7 @@ import { fetchApi } from '@/lib/api';
 import ImportSheetModal from '@/components/ImportSheetModal';
 import AiAssistantModal from '@/components/AiAssistantModal';
 import CrawlerToSheetModal from '@/components/CrawlerToSheetModal';
+import ExportExcelModal from '@/components/ExportExcelModal';
 import { 
     Search, 
     Download, 
@@ -609,6 +610,7 @@ function ProductsContent() {
 
     // AI Assistant modal & background task state
     const [showAiModal, setShowAiModal] = useState(false);
+    const [showExportModal, setShowExportModal] = useState(false);
     const [aiTaskState, setAiTaskState] = useState({
         isRunning: false,
         tabName: '',
@@ -1822,6 +1824,23 @@ function ProductsContent() {
                     {harReportLoading && (
                         <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>...</span>
                     )}
+                </button>
+
+                {/* Export Excel Button */}
+                <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setShowExportModal(true)}
+                    style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        fontSize: 13.5, padding: '8px 18px', fontWeight: 700,
+                        background: 'linear-gradient(135deg, #10b981, #059669)', color: '#ffffff',
+                        border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                        marginLeft: 'auto', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)'
+                    }}
+                >
+                    <Download size={16} />
+                    <span>Xuất File Excel (.xlsx)</span>
                 </button>
             </div>
 
@@ -4250,6 +4269,14 @@ function ProductsContent() {
                     </div>
                 </div>
             )}
+
+            {/* Modal Export Excel (.xlsx) */}
+            <ExportExcelModal
+                isOpen={showExportModal}
+                onClose={() => setShowExportModal(false)}
+                defaultProfileSlug={profileSlug}
+                profiles={profilesList}
+            />
 
         </div>
     );

@@ -363,7 +363,138 @@ router.post('/profile-sheet', (req, res) => {
         res.json({ message: 'Lưu dữ liệu Sheet thành công!' });
     } catch (err) {
         console.error('Failed to save profile sheet:', err);
-        res.status(500).json({ error: 'Failed to save sheet data.' });
+// POST /api/products/export-excel — Exports processed sheet data to XLSX matching mau-them-san-pham-17-07-2026.xlsx
+const TEMPLATE_HEADERS = [
+    "ma_san_pham", "ten_san_pham", "ten_san_pham_en", "url", "url_en",
+    "tieu_de_trang", "tieu_de_trang_en", "mo_ta", "mo_ta_en", "gia",
+    "khuyen_mai", "anh_dai_dien", "anh_1", "anh_2", "anh_3", "anh_4",
+    "nhan", "danh_muc_id", "thuong_hieu_id", "noi_dung", "noi_dung_en",
+    "tl_hdsd_tieu_de", "tl_hdsd_link", "tl_cad_tieu_de", "tl_cad_link",
+    "tl_chungchi_tieu_de", "tl_chungchi_link", "tl_phanmem_tieu_de", "tl_phanmem_link",
+    "tl_tailieu_tieu_de", "tl_tailieu_link"
+];
+
+const ALIAS_MAP = {
+    ma_san_pham: ['ma_san_pham', 'mã sản phẩm', 'mã sp', 'ma sp', 'sku', 'model', 'cột a'],
+    ten_san_pham: ['ten_san_pham', 'tên sản phẩm', 'tên sp', 'ten sp', 'tiêu đề', 'title', 'name', 'cột b'],
+    ten_san_pham_en: ['ten_san_pham_en', 'tên tiếng anh', 'tên sp (en)', 'title (en)'],
+    url: ['url', 'link', 'nguồn', 'cột d', 'url nguồn'],
+    url_en: ['url_en', 'link (en)'],
+    tieu_de_trang: ['tieu_de_trang', 'tiêu đề trang', 'meta title', 'cột f'],
+    tieu_de_trang_en: ['tieu_de_trang_en', 'tiêu đề trang (en)', 'meta title (en)'],
+    mo_ta: ['mo_ta', 'mô tả', 'mô tả ngắn', 'sapo', 'cột h'],
+    mo_ta_en: ['mo_ta_en', 'mô tả (en)', 'sapo (en)'],
+    gia: ['gia', 'giá', 'giá bán', 'price', 'cột j'],
+    khuyen_mai: ['khuyen_mai', 'khuyến mãi', 'giá km', 'sale price', 'cột k'],
+    anh_dai_dien: ['anh_dai_dien', 'ảnh đại diện', 'hình đại diện', 'main image', 'thumbnail', 'cột l'],
+    anh_1: ['anh_1', 'ảnh 1', 'image 1', 'cột m'],
+    anh_2: ['anh_2', 'ảnh 2', 'image 2', 'cột n'],
+    anh_3: ['anh_3', 'ảnh 3', 'image 3', 'cột o'],
+    anh_4: ['anh_4', 'ảnh 4', 'image 4', 'cột p'],
+    nhan: ['nhan', 'nhãn', 'trạng thái', 'tag', 'label', 'cột q'],
+    danh_muc_id: ['danh_muc_id', 'danh mục id', 'category id', 'cột r'],
+    thuong_hieu_id: ['thuong_hieu_id', 'thương hiệu id', 'brand id', 'cột s'],
+    noi_dung: ['noi_dung', 'nội dung', 'nội dung sản phẩm', 'thông số', 'bảng thông số', 'specs', 'content', 'cột c', 'cột t'],
+    noi_dung_en: ['noi_dung_en', 'nội dung (en)', 'specs (en)'],
+    tl_hdsd_tieu_de: ['tl_hdsd_tieu_de', 'hdsd tiêu đề', 'datasheet title', 'cột v'],
+    tl_hdsd_link: ['tl_hdsd_link', 'hdsd link', 'datasheet link', 'datasheet', 'cột w'],
+    tl_cad_tieu_de: ['tl_cad_tieu_de', 'cad tiêu đề', 'cột x'],
+    tl_cad_link: ['tl_cad_link', 'cad link', 'cột y'],
+    tl_chungchi_tieu_de: ['tl_chungchi_tieu_de', 'chứng chỉ tiêu đề', 'cột z'],
+    tl_chungchi_link: ['tl_chungchi_link', 'chứng chỉ link', 'cột aa'],
+    tl_phanmem_tieu_de: ['tl_phanmem_tieu_de', 'phần mềm tiêu đề', 'cột ab'],
+    tl_phanmem_link: ['tl_phanmem_link', 'phần mềm link', 'cột ac'],
+    tl_tailieu_tieu_de: ['tl_tailieu_tieu_de', 'tài liệu tiêu đề', 'cột ad'],
+    tl_tailieu_link: ['tl_tailieu_link', 'tài liệu link', 'cột ae']
+};
+
+router.post('/export-excel', (req, res) => {
+    try {
+        const { profile = 'newland', sheetNames = [], mode = 'template' } = req.body;
+        const sheets = profileSheetQueries.getBySlug(profile);
+
+        if (!sheets || sheets.length === 0) {
+            return res.status(404).json({ error: 'Không tìm thấy dữ liệu Sheet cho Profile này.' });
+        }
+
+        const sheetsToExport = sheets.filter(s => sheetNames.length === 0 || sheetNames.includes(s.name));
+
+        if (sheetsToExport.length === 0) {
+            return res.status(400).json({ error: 'Vui lòng chọn ít nhất 1 Tab Sheet để xuất.' });
+        }
+
+        const wb = XLSX.utils.book_new();
+
+        if (mode === 'raw') {
+            sheetsToExport.forEach(s => {
+                const ws = XLSX.utils.aoa_to_sheet(s.data || []);
+                const safeName = (s.name || 'Sheet').replace(/[\/*?:\[\]]/g, '').slice(0, 31);
+                XLSX.utils.book_append_sheet(wb, ws, safeName);
+            });
+        } else {
+            const templateRows = [TEMPLATE_HEADERS];
+
+            sheetsToExport.forEach(sheetObj => {
+                const rawRows = sheetObj.data || [];
+                if (rawRows.length === 0) return;
+
+                const headerRow = rawRows[0] || [];
+                const colIndexMap = {};
+
+                TEMPLATE_HEADERS.forEach(tmplCol => {
+                    const aliases = ALIAS_MAP[tmplCol] || [tmplCol];
+                    let foundIdx = -1;
+
+                    headerRow.forEach((cellVal, cIdx) => {
+                        if (foundIdx !== -1) return;
+                        const str = String(cellVal || '').toLowerCase().trim();
+                        if (aliases.some(a => str === a || str.includes(a))) {
+                            foundIdx = cIdx;
+                        }
+                    });
+
+                    if (foundIdx === -1) {
+                        if (tmplCol === 'ma_san_pham') foundIdx = 0;
+                        else if (tmplCol === 'ten_san_pham') foundIdx = 1;
+                        else if (tmplCol === 'url') foundIdx = 3;
+                        else if (tmplCol === 'noi_dung') foundIdx = 2;
+                    }
+
+                    colIndexMap[tmplCol] = foundIdx;
+                });
+
+                for (let r = 1; r < rawRows.length; r++) {
+                    const rData = rawRows[r] || [];
+                    if (rData.every(c => c === undefined || c === null || String(c).trim() === '')) {
+                        continue;
+                    }
+
+                    const formattedRow = TEMPLATE_HEADERS.map(tmplCol => {
+                        const idx = colIndexMap[tmplCol];
+                        if (idx !== -1 && idx < rData.length) {
+                            const val = rData[idx];
+                            return val !== undefined && val !== null ? String(val) : '';
+                        }
+                        return '';
+                    });
+
+                    templateRows.push(formattedRow);
+                }
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(templateRows);
+            XLSX.utils.book_append_sheet(wb, ws, "Danh Sách Sản Phẩm");
+        }
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="Export_${profile}_${Date.now()}.xlsx"`);
+        res.send(buf);
+
+    } catch (err) {
+        console.error('Export excel error:', err);
+        res.status(500).json({ error: 'Lỗi khi tạo file Excel: ' + err.message });
     }
 });
 
