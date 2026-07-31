@@ -971,15 +971,19 @@ def extract_product_data(soup, slug, url=""):
         if re.match(r'^\s*\}\)?;?\s*$', l): return True
         if re.match(r'^\s*\}\s*else\s*\{?\s*$', l): return True
         if re.match(r'^\s*if\s*\(', l, re.I): return True
+        if re.match(r'^\s*(return|break|continue)\s*;?\s*$', l, re.I): return True
         if re.search(r'\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b', l, re.I): return True
         if re.search(r'\b(return\s+false|return\s+true|typeof|void\(0\))\b', l, re.I): return True
         if re.search(r'==|===|!=|!==|&&|\|\||=>|\$\(', l): return True
         if re.search(r'\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b', l, re.I): return True
         if re.search(r'\$\.[a-zA-Z0-9_]+', l): return True
+        if re.match(r'^\s*(url|type|data|cache|dataType|contentType|success|error|headers|async)\s*:', l, re.I): return True
+        if re.match(r'^\s*[a-zA-Z0-9_$]+\s*:\s*[\'"]?.*?[\'"]?,?\s*$', l, re.I) and ' ' not in l and 'http' not in l: return True
+        if re.search(r'btn_buy_type|index_id|inquiry/act|act=\d+', l, re.I): return True
         if '商品比較' in l or '提出詢問' in l or l.lower() in ('compare', 'inquire'): return True
         return False
 
-    # Clean description JS inline code and format paragraphs
+    # Clean description JS inline code into PLAIN TEXT lines (no <p> tags!)
     if description:
         description = re.sub(r'</(p|div|li|h[1-6])>', '\n', description, flags=re.I)
         description = re.sub(r'<br\s*/?>', '\n', description, flags=re.I)
@@ -1000,7 +1004,7 @@ def extract_product_data(soup, slug, url=""):
                 continue
             if len(line) < 3:
                 continue
-            clean_lines.append(f"<p>{line}</p>")
+            clean_lines.append(line)
         description = "\n".join(clean_lines) if clean_lines else ""
 
     def clean_field(val):

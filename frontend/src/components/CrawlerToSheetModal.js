@@ -300,17 +300,24 @@ export default function CrawlerToSheetModal({
         if (/^\s*\}\)?;?\s*$/.test(l)) return true;
         if (/^\s*\}\s*else\s*\{?\s*$/.test(l)) return true;
         if (/^\s*if\s*\(/i.test(l)) return true;
+        if (/^\s*(return|break|continue)\s*;?\s*$/i.test(l)) return true;
         if (/\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b/i.test(l)) return true;
         if (/\b(return\s+false|return\s+true|typeof|void\(0\))\b/i.test(l)) return true;
         if (/==|===|!=|!==|&&|\|\||=>|\$\(/i.test(l)) return true;
         if (/\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b/i.test(l)) return true;
         if (/\$\.[a-zA-Z0-9_]+/i.test(l)) return true;
+
+        // AJAX config & object properties
+        if (/^\s*(url|type|data|cache|dataType|contentType|success|error|headers|async)\s*:/i.test(l)) return true;
+        if (/^\s*[a-zA-Z0-9_$]+\s*:\s*['"]?.*?['"]?,?\s*$/i.test(l) && !l.includes(' ') && !l.includes('http')) return true;
+        if (/btn_buy_type|index_id|inquiry\/act|act=\d+/i.test(l)) return true;
+
         if (l.includes('商品比較') || l.includes('提出詢問') || l.toLowerCase() === 'compare' || l.toLowerCase() === 'inquire') return true;
 
         return false;
     };
 
-    const formatDescriptionToParagraphs = (rawDesc) => {
+    const formatDescriptionToPlainText = (rawDesc) => {
         if (!rawDesc) return '';
         let text = String(rawDesc);
 
@@ -344,7 +351,8 @@ export default function CrawlerToSheetModal({
 
         if (cleanLines.length === 0) return '';
 
-        return cleanLines.map(line => `<p>${line}</p>`).join('\n');
+        // Plain text lines separated by \n (NO <p> tags!)
+        return cleanLines.join('\n');
     };
 
     const convertSpecsToHtmlTable = (specsInput) => {
@@ -477,9 +485,9 @@ export default function CrawlerToSheetModal({
                 val = formatDocumentLinks(val || product.pdf_url || product.datasheet_url || product.download_links || product.documents);
             }
 
-            // Description paragraph formatting
+            // Description plain text formatting (NO <p> tags!)
             if (col.field === 'description') {
-                val = formatDescriptionToParagraphs(val || product.description_raw || product.summary || '');
+                val = formatDescriptionToPlainText(val || product.description_raw || product.summary || '');
             }
 
             // Specs HTML Table formatting
