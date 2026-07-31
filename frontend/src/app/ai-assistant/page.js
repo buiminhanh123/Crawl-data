@@ -9,6 +9,7 @@ import {
     Info, User, AlertCircle, RotateCcw, Bell, CheckCircle2,
     Pause, Sliders, Layers, ArrowRight, Bookmark, Filter, ShieldCheck
 } from 'lucide-react';
+import { getGlobalAiRunner } from '@/lib/globalAiRunner';
 
 // ══════════════════════════════════════════════════════
 //  CONSTANTS & DEFAULT PRESETS
@@ -416,8 +417,17 @@ export default function AIAssistantPage() {
         setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
     };
 
-    // Load initial profiles & saved prompt presets from localStorage
+    // Sync with Global AI Runner State & Load Profiles
     useEffect(() => {
+        const syncState = () => {
+            try {
+                const runner = getGlobalAiRunner();
+                setRunnerStateInternal(runner.state);
+            } catch (e) {}
+        };
+        syncState();
+        window.addEventListener('ai_runner_update', syncState);
+
         const loadInitialData = async () => {
             try {
                 const profData = await fetchApi('/api/products/profiles');
@@ -428,7 +438,6 @@ export default function AIAssistantPage() {
                     fetchProfileSheets(defaultSlug);
                 }
 
-                // Load saved prompt presets from localStorage
                 const saved = localStorage.getItem('ai_prompt_saved_profiles');
                 if (saved) {
                     try {
@@ -441,6 +450,8 @@ export default function AIAssistantPage() {
             }
         };
         loadInitialData();
+
+        return () => window.removeEventListener('ai_runner_update', syncState);
     }, []);
 
     // Fetch Sheets for selected profile
@@ -643,7 +654,7 @@ export default function AIAssistantPage() {
     };
 
     // ══════════════════════════════════════════════════════
-    //  BATCH RUNNER ENGINE (Supports 10 Threads & Retry)
+    //  BATCH RUNNER ENGINE (Persistent Background Execution)
     // ══════════════════════════════════════════════════════
     const runBatchEngine = async (onlyRetryFailed = false) => {
         if (!selectedProfileSlug) {
@@ -655,326 +666,25 @@ export default function AIAssistantPage() {
             return;
         }
 
-        const activeProfileObj = profiles.find(p => p.slug === selectedProfileSlug);
-        const profileDisplayName = activeProfileObj ? (activeProfileObj.name.startsWith('Profile') ? activeProfileObj.name : `Profile ${activeProfileObj.name}`) : selectedProfileSlug;
-
-        const sheetsToProcess = profileSheetsData.filter(s => selectedSheetNames.includes(s.name));
-
-        let grandTotalRows = 0;
-        sheetsToProcess.forEach(s => {
-            const sStart = Math.max(1, parseInt(startRow) || 1) - 1;
-            const sEnd = endRow ? Math.min(s.data.length, parseInt(endRow)) : s.data.length;
-            const rowCount = Math.max(0, sEnd - sStart);
-            grandTotalRows += rowCount;
+        const runner = getGlobalAiRunner();
+        runner.startJob({
+            selectedProfileSlug,
+            profiles,
+            selectedSheetNames,
+            profileSheetsData,
+            startRow,
+            endRow,
+            taskName,
+            taskPrompt,
+            variables,
+            targetCol,
+            concurrency,
+            skipExisting,
+            autoClean,
+            onlyRetryFailed
         });
-
-        if (grandTotalRows === 0) {
-            showToast('Không tìm thấy dòng dữ liệu nào hợp lệ trong khoảng đã chọn!', 'danger');
-            return;
-        }
-
-        abortRef.current = false;
-        pauseRef.current = false;
-
-        const initialFailed = onlyRetryFailed ? runnerState.failedItems : [];
-
-        setRunnerState(prev => ({
-            ...prev,
-            isRunning: true,
-            isPaused: false,
-            activeProfileName: profileDisplayName,
-            activeTabName: sheetsToProcess[0]?.name || 'Sheet1',
-            activeTaskName: taskName || 'Xử lý dữ liệu AI',
-            totalRows: grandTotalRows,
-            completedCount: onlyRetryFailed ? prev.completedCount : 0,
-            pendingCount: onlyRetryFailed ? initialFailed.length : grandTotalRows,
-            errorCount: 0,
-            skipCount: onlyRetryFailed ? prev.skipCount : 0,
-            failedItems: [],
-            logs: [`[${new Date().toLocaleTimeString()}] ${onlyRetryFailed ? '🔄 Bắt đầu THỬ LẠI các hàng bị lỗi...' : `Bắt đầu tiến trình AI Runner (${concurrency} luồng) cho ${profileDisplayName}...`}`],
-            currentProgressPercent: 0
-        }));
-
         setViewMode('monitor');
-
-        let updatedSheetsData = JSON.parse(JSON.stringify(profileSheetsData));
-        let globalCompleted = onlyRetryFailed ? runnerState.completedCount : 0;
-        let globalErrors = 0;
-        let globalSkips = onlyRetryFailed ? runnerState.skipCount : 0;
-        let currentFailedList = [];
-
-        const targetColIdx = colToIdx(targetCol);
-
-        try {
-            for (let sIdx = 0; sIdx < sheetsToProcess.length; sIdx++) {
-            if (abortRef.current) break;
-
-            const sheetObj = sheetsToProcess[sIdx];
-            const currentSheetName = sheetObj.name;
-
-            setRunnerState(prev => ({
-                ...prev,
-                activeTabName: currentSheetName,
-                logs: [`[${new Date().toLocaleTimeString()}] Đang xử lý Tab: ${currentSheetName}`, ...prev.logs.slice(0, 150)]
-            }));
-
-            const sheetDataRef = updatedSheetsData.find(s => s.name === currentSheetName);
-            if (!sheetDataRef || !Array.isArray(sheetDataRef.data)) continue;
-
-            const rStart = Math.max(1, parseInt(startRow) || 1) - 1;
-            const rEnd = endRow ? Math.min(sheetDataRef.data.length, parseInt(endRow)) : sheetDataRef.data.length;
-
-            const rowsToProcess = [];
-            for (let r = rStart; r < rEnd; r++) {
-                // If only retrying failed rows, filter out non-failed ones
-                if (onlyRetryFailed) {
-                    const wasFailed = initialFailed.some(f => f.sheetName === currentSheetName && f.rowIndex === r);
-                    if (!wasFailed) continue;
-                }
-
-                rowsToProcess.push({
-                    sheetName: currentSheetName,
-                    rowIndex: r,
-                    rowData: sheetDataRef.data[r] || []
-                });
-            }
-
-            // ── Dynamic Concurrency Queue (Worker Pool) ──
-            // Keeps N worker threads active continuously. As soon as any worker completes 1 item,
-            // it immediately grabs the next available item from queue without waiting for other threads.
-            let taskQueueIndex = 0;
-            const activeWorkers = Math.max(1, parseInt(concurrency) || 2);
-
-            const workerTask = async (workerId) => {
-                while (taskQueueIndex < rowsToProcess.length && !abortRef.current) {
-                    while (pauseRef.current && !abortRef.current) {
-                        await new Promise(res => setTimeout(res, 500));
-                    }
-                    if (abortRef.current) break;
-
-                    const itemIdx = taskQueueIndex++;
-                    if (itemIdx >= rowsToProcess.length) break;
-
-                    const item = rowsToProcess[itemIdx];
-                    const rowIdx = item.rowIndex;
-                    const currentRow = item.rowData;
-
-                    if (skipExisting && !onlyRetryFailed) {
-                        const existingVal = currentRow[targetColIdx];
-                        if (existingVal !== undefined && existingVal !== null && String(existingVal).trim() !== '') {
-                            globalSkips++;
-                            setRunnerState(prev => {
-                                const completedTotal = globalCompleted + globalSkips + globalErrors;
-                                const percent = Math.min(100, Math.round((completedTotal / grandTotalRows) * 100));
-                                return {
-                                    ...prev,
-                                    skipCount: globalSkips,
-                                    pendingCount: Math.max(0, grandTotalRows - completedTotal),
-                                    currentProgressPercent: percent
-                                };
-                            });
-                            continue;
-                        }
-                    }
-
-                    const builtPrompt = substituteRowVariables(taskPrompt, currentRow);
-
-                    const CHUNK_THRESHOLD = 3000;
-                    const CHUNK_SIZE      = 2500;
-
-                    const callAIWithChunking = async (prompt) => {
-                        let longestVarCol = -1;
-                        let longestVal = '';
-                        variables.forEach(v => {
-                            const idx = colToIdx(v.col);
-                            const val = currentRow[idx] !== undefined ? String(currentRow[idx]) : '';
-                            if (val.length > CHUNK_THRESHOLD && val.length > longestVal.length) {
-                                longestVal = val;
-                                longestVarCol = idx;
-                            }
-                        });
-
-                        if (longestVarCol === -1 || longestVal.length <= CHUNK_THRESHOLD) {
-                            const res = await fetchApi('/api/ai/chat', {
-                                method: 'POST',
-                                body: JSON.stringify({ message: prompt, history: [] })
-                            });
-                            return res.content || '';
-                        }
-
-                        const chunkedVar = variables.find(v => colToIdx(v.col) === longestVarCol);
-                        if (!chunkedVar) {
-                            const res = await fetchApi('/api/ai/chat', {
-                                method: 'POST',
-                                body: JSON.stringify({ message: prompt, history: [] })
-                            });
-                            return res.content || '';
-                        }
-
-                        const chunks = [];
-                        let pos = 0;
-                        while (pos < longestVal.length) {
-                            let end = Math.min(pos + CHUNK_SIZE, longestVal.length);
-                            if (end < longestVal.length) {
-                                const lastNL = longestVal.lastIndexOf('\n', end);
-                                if (lastNL > pos + CHUNK_SIZE * 0.5) end = lastNL + 1;
-                            }
-                            chunks.push(longestVal.slice(pos, end));
-                            pos = end;
-                        }
-
-                        const chunkResults = [];
-                        for (let ci = 0; ci < chunks.length; ci++) {
-                            const fakeRow = [...currentRow];
-                            fakeRow[longestVarCol] = chunks[ci];
-                            const chunkPrompt = substituteRowVariables(taskPrompt, fakeRow);
-                            const chunkRes = await fetchApi('/api/ai/chat', {
-                                method: 'POST',
-                                body: JSON.stringify({
-                                    message: chunkPrompt + (chunks.length > 1 ? `\n\n(Phần ${ci + 1}/${chunks.length} — tiếp tục dịch, không thêm lời chào hay tóm tắt)` : ''),
-                                    history: []
-                                })
-                            });
-                            chunkResults.push(chunkRes.content || '');
-                        }
-                        return chunkResults.join('\n');
-                    };
-
-                    try {
-                        const isTableTask = /bảng|table|dịch|thông số|giao diện|html|spec/i.test(taskPrompt || builtPrompt || '');
-                        let rowAttempts = 0;
-                        const maxRowAttempts = 3;
-                        let aiContent = '';
-                        let rowError = null;
-
-                    while (rowAttempts < maxRowAttempts && !abortRef.current) {
-                        rowAttempts++;
-                        try {
-                            let rawContent = await callAIWithChunking(builtPrompt);
-                            let cleaned = autoClean ? cleanAiOutput(rawContent) : rawContent.trim();
-
-                            if (!cleaned && !abortRef.current) {
-                                throw new Error('Kết quả AI trả về rỗng');
-                            }
-
-                            // Table Structure Validation & Auto-Rerun
-                            if (isTableTask) {
-                                const isValid = isValidHtmlTableStructure(cleaned);
-                                if (!isValid) {
-                                    if (rowAttempts < maxRowAttempts) {
-                                        const retryLog = '[Thử lại] [' + currentSheetName + '] Hàng ' + (rowIdx + 1) + ': Bảng HTML lỗi cấu trúc, đang tự động dịch lại (' + rowAttempts + '/' + maxRowAttempts + ')...';
-                                        setRunnerState(prev => ({
-                                            ...prev,
-                                            logs: [retryLog, ...prev.logs.slice(0, 150)]
-                                        }));
-                                        await new Promise(r => setTimeout(r, 1200));
-                                        continue; // Rerun current row translation!
-                                    } else {
-                                        // Final fallback: auto convert Markdown/mixed table to standard HTML table
-                                        cleaned = convertMarkdownTableToHtml(cleaned);
-                                    }
-                                }
-                            }
-
-                            aiContent = cleaned;
-                            rowError = null;
-                            break;
-                        } catch (err) {
-                            rowError = err;
-                            if (rowAttempts < maxRowAttempts) {
-                                await new Promise(r => setTimeout(r, 1000));
-                            }
-                        }
-                    }
-
-                    if (rowError && !aiContent) {
-                        throw rowError;
-                    }
-
-                        if (!updatedSheetsData[sIdx].data[rowIdx]) {
-                            updatedSheetsData[sIdx].data[rowIdx] = [];
-                        }
-                        updatedSheetsData[sIdx].data[rowIdx][targetColIdx] = aiContent;
-
-                        globalCompleted++;
-
-                        const shortLog = '[OK] [' + currentSheetName + '] Hàng ' + (rowIdx + 1) + ': ' + aiContent.slice(0, 40) + '...';
-                        setRunnerState(prev => {
-                            const completedTotal = globalCompleted + globalSkips + globalErrors;
-                            const percent = Math.min(100, Math.round((completedTotal / grandTotalRows) * 100));
-                            return {
-                                ...prev,
-                                completedCount: globalCompleted,
-                                pendingCount: Math.max(0, grandTotalRows - completedTotal),
-                                currentProgressPercent: percent,
-                                logs: [shortLog, ...prev.logs.slice(0, 150)]
-                            };
-                        });
-                    } catch (err) {
-                        globalErrors++;
-                        currentFailedList.push({ sheetName: currentSheetName, rowIndex: rowIdx, error: err.message });
-                        const errLog = '[Lỗi] [' + currentSheetName + '] Hàng ' + (rowIdx + 1) + ': ' + err.message;
-                        setRunnerState(prev => {
-                            const completedTotal = globalCompleted + globalSkips + globalErrors;
-                            const percent = Math.min(100, Math.round((completedTotal / grandTotalRows) * 100));
-                            return {
-                                ...prev,
-                                errorCount: globalErrors,
-                                failedItems: [...currentFailedList],
-                                pendingCount: Math.max(0, grandTotalRows - completedTotal),
-                                currentProgressPercent: percent,
-                                logs: [errLog, ...prev.logs.slice(0, 150)]
-                            };
-                        });
-                    }
-
-                    try {
-                        await fetchApi('/api/products/profile-sheet', {
-                            method: 'POST',
-                            body: JSON.stringify({ profile: selectedProfileSlug, sheets: updatedSheetsData })
-                        });
-                    } catch (e) {
-                        console.warn('Auto-save progress error:', e);
-                    }
-
-                    if (delayMs > 0 && !abortRef.current) {
-                        await new Promise(r => setTimeout(r, parseInt(delayMs) || 1000));
-                    }
-                }
-            };
-
-            const poolWorkers = Array.from({ length: activeWorkers }, (_, i) => workerTask(i + 1));
-            await Promise.all(poolWorkers);
-        }
-
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-            Notification.requestPermission();
-        }
-    } catch (e) {
-        console.error('Runner engine error:', e);
-    } finally {
-        const isAborted = abortRef.current;
-        setRunnerState(prev => ({
-            ...prev,
-            isRunning: false,
-            isPaused: false,
-            currentProgressPercent: isAborted ? prev.currentProgressPercent : 100,
-            failedItems: currentFailedList,
-            logs: [`[${new Date().toLocaleTimeString()}] ${isAborted ? '⏹️ ĐÃ DỪNG TIẾN TRÌNH CHẠY AI!' : '🎉 ĐÃ HOÀN THÀNH TIẾN TRÌNH CHẠY AI!'}`, ...prev.logs.slice(0, 150)]
-        }));
-
-        if (!isAborted) {
-            playCompletionSound();
-            sendDesktopNotification(
-                '🎉 AI Assistant — Hoàn Thành!',
-                `Đã hoàn thành ${grandTotalRows} hàng (${globalCompleted} thành công, ${globalErrors} lỗi).`
-            );
-            showToast('🎉 Đã hoàn thành tiến trình AI!', 'success');
-        } else {
-            showToast('⏹️ Đã dừng tiến trình AI', 'info');
-        }
-    }
-};
+    };
 
     const handleStartRunner = () => runBatchEngine(false);
     const handleRetryFailedRows = () => runBatchEngine(true);
