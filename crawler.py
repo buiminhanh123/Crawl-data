@@ -1,4 +1,3 @@
-from bs4 import BeautifulSoup
 import asyncio
 import xml.etree.ElementTree as ET
 import sqlite3
