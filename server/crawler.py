@@ -46,6 +46,14 @@ except ImportError:
         def text(self):
             return "".join(self.text_content).strip()
 
+        @property
+        def string(self):
+            return self.text
+
+        def get_text(self, strip=True, separator=""):
+            txt = separator.join(self.text_content)
+            return txt.strip() if strip else txt
+
         def get(self, attr, default=None):
             return self.attrs.get(attr, default)
 
@@ -83,6 +91,12 @@ except ImportError:
 
         def __contains__(self, item):
             return item in self.attrs
+
+        def select(self, selector):
+            return self.find_all(selector)
+
+        def select_one(self, selector):
+            return self.find(selector)
 
         def find(self, name=None, **kwargs):
             res = self.find_all(name, **kwargs)
