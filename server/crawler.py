@@ -752,18 +752,26 @@ def extract_product_data(soup, slug, url=""):
     category = ""
     series = ""
 
+    INVALID_NAV_KEYWORDS = {
+        'about us', 'about', 'company', 'contact us', 'contact', 'news', 'solutions',
+        'privacy', 'terms', 'support', 'downloads', 'investors', 'careers', 'home',
+        'trang chủ', 'main', 'index', '公司簡介', '關於立象', '關於我們', '聯絡我們',
+        '新聞', '解決方案', '首頁', '企業簡介', 'about-us', 'company-info'
+    }
+
     # Check Argox model lookup table first for known brand families
     ARGOX_PATTERNS = [
-        (r'\b(cx[-_]?2040|cx[-_]?2140|cx[-_]?3040|cx[-_]?3140|cp[-_]?2140)\b', "Barcode Printers", "Desktop Printers", "CP / CX Series"),
-        (r'\b(os[-_]?214|os[-_]?2130|os[-_]?200)\b', "Barcode Printers", "Desktop Printers", "OS Series"),
+        (r'\b(cx[-_]?2040|cx[-_]?2140|cx[-_]?3040|cx[-_]?3140|cp[-_]?2140|cp[-_]?2140ex)\b', "Barcode Printers", "Desktop Printers", "CP / CX Series"),
+        (r'\b(os[-_]?214|os[-_]?2130|os[-_]?200|os[-_]?214ex|os[-_]?2130d)\b', "Barcode Printers", "Desktop Printers", "OS Series"),
         (r'\b(o4[-_]?250|o4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "O4 Series"),
         (r'\b(p4[-_]?250|p4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "P4 Series"),
-        (r'\b(d4[-_]?250|d4[-_]?350)\b', "Barcode Printers", "Desktop Printers", "D4 Series"),
+        (r'\b(d4[-_]?250|d4[-_]?350|d4[-_]?280|d4[-_]?280plus)\b', "Barcode Printers", "Desktop Printers", "D4 Series"),
         (r'\b(d2[-_]?250|d2[-_]?350)\b', "Barcode Printers", "Desktop Printers", "D2 Series"),
         (r'\b(mp[-_]?2140)\b', "Barcode Printers", "Desktop Printers", "MP Series"),
         (r'\b(ix4[-_]?250|ix4[-_]?350)\b', "Barcode Printers", "Industrial Printers", "iX4 Series"),
         (r'\b(ix6[-_]?250|ix6[-_]?350)\b', "Barcode Printers", "Industrial Printers", "iX6 Series"),
         (r'\b(xm4[-_]?250)\b', "Barcode Printers", "Industrial Printers", "XM4 Series"),
+        (r'\b(as[-_]?8000|as[-_]?8060|as[-_]?8050|as[-_]?9400|as[-_]?9400dc|ai[-_]?6800|ai[-_]?6820|ar[-_]?3201)\b', "Barcode Scanners", "Handheld Scanners", "AS / AI Series"),
     ]
     
     text_for_argox = f"{name} {slug} {url}"
@@ -776,7 +784,7 @@ def extract_product_data(soup, slug, url=""):
 
     # Strategy A: Breadcrumbs HTML parsing if not resolved
     if not category or not main_category:
-        bc_elements = soup.find_all(class_=re.compile(r'breadcrumb|crumbs|nav-path|location|site-map|header-path', re.I))
+        bc_elements = soup.find_all(class_=re.compile(r'breadcrumb|crumbs|nav-path|location|site-map', re.I))
         if not bc_elements:
             bc_elements = soup.find_all(['nav', 'div', 'ul', 'ol'], attrs={"aria-label": re.compile(r'breadcrumb', re.I)})
         if not bc_elements:
@@ -788,7 +796,8 @@ def extract_product_data(soup, slug, url=""):
                 items = bc_el.find_all(["a", "li", "span"])
                 for item in items:
                     t = item.text.strip()
-                    if t and t not in crumbs and not any(x in t.lower() for x in ('home', 'trang chủ', 'main', 'index', '>', '/')):
+                    t_lower = t.lower()
+                    if t and t not in crumbs and not any(k in t_lower for k in INVALID_NAV_KEYWORDS) and not any(x in t for x in ('>', '/')):
                         crumbs.append(t)
                 if len(crumbs) >= 1:
                     break
@@ -803,6 +812,12 @@ def extract_product_data(soup, slug, url=""):
             if not category: category = clean_crumbs[1]
         elif len(clean_crumbs) == 1:
             if not category: category = clean_crumbs[0]
+
+    # Clean up any leftover invalid nav items in category or series
+    if any(k in (category or '').lower() for k in INVALID_NAV_KEYWORDS):
+        category = ""
+    if any(k in (series or '').lower() for k in INVALID_NAV_KEYWORDS):
+        series = ""
 
     # Strategy B: Prettified URL Path parsing
     GENERIC_SEGMENTS = {
