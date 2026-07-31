@@ -363,6 +363,10 @@ router.post('/profile-sheet', (req, res) => {
         res.json({ message: 'Lưu dữ liệu Sheet thành công!' });
     } catch (err) {
         console.error('Failed to save profile sheet:', err);
+        res.status(500).json({ error: 'Failed to save sheet data.' });
+    }
+});
+
 // POST /api/products/export-excel — Exports processed sheet data to XLSX matching mau-them-san-pham-17-07-2026.xlsx
 const TEMPLATE_HEADERS = [
     "ma_san_pham", "ten_san_pham", "ten_san_pham_en", "url", "url_en",
