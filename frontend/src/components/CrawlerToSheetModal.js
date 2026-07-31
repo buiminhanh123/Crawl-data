@@ -214,6 +214,9 @@ export default function CrawlerToSheetModal({
     // ══════════════════════════════════════════════════════════════════
 
     const ZH_EN_MAP = {
+        '標籤': 'Label',
+        '商品比較': 'Product Comparison',
+        '提出詢問': 'Submit Inquiry',
         '產品介紹': 'Products Overview',
         '產品': 'Products',
         '产品': 'Products',
@@ -241,6 +244,12 @@ export default function CrawlerToSheetModal({
         '掃瞄器': 'Scanners',
         '扫描器': 'Scanners',
         '系列': 'Series',
+        '碳帶長度': 'Ribbon Length',
+        '碳帶': 'Ribbon',
+        '長度': 'Length',
+        '寬度': 'Width',
+        '高度': 'Height',
+        '厚度': 'Thickness',
         '解析度': 'Resolution',
         '分辨率': 'Resolution',
         '列印速度': 'Print Speed',
@@ -261,6 +270,8 @@ export default function CrawlerToSheetModal({
         '工作溫度': 'Operating Temperature',
         '儲存溫度': 'Storage Temperature',
         '相對濕度': 'Humidity',
+        '公尺': 'm',
+        '吋': 'inch',
         '公司簡介': '',
         '關於立象': '',
         '關於我們': '',
@@ -281,33 +292,55 @@ export default function CrawlerToSheetModal({
         return result.trim();
     };
 
+    const isJsOrUiNoise = (line) => {
+        if (!line || typeof line !== 'string') return true;
+        const l = line.trim();
+        if (l.length < 2) return true;
+
+        if (/^\s*\}\)?;?\s*$/.test(l)) return true;
+        if (/^\s*\}\s*else\s*\{?\s*$/.test(l)) return true;
+        if (/^\s*if\s*\(/i.test(l)) return true;
+        if (/\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b/i.test(l)) return true;
+        if (/\b(return\s+false|return\s+true|typeof|void\(0\))\b/i.test(l)) return true;
+        if (/==|===|!=|!==|&&|\|\||=>|\$\(/i.test(l)) return true;
+        if (/\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b/i.test(l)) return true;
+        if (/\$\.[a-zA-Z0-9_]+/i.test(l)) return true;
+        if (l.includes('商品比較') || l.includes('提出詢問') || l.toLowerCase() === 'compare' || l.toLowerCase() === 'inquire') return true;
+
+        return false;
+    };
+
     const formatDescriptionToParagraphs = (rawDesc) => {
         if (!rawDesc) return '';
         let text = String(rawDesc);
 
-        // 1. Remove JS code scripts, functions, jquery calls, inline handlers
+        // Convert HTML line breaks / paragraphs to newlines first
+        text = text.replace(/<\/(p|div|li|h[1-6])>/gi, '\n');
+        text = text.replace(/<br\s*\/?>/gi, '\n');
+
+        // Remove script and style tags
         text = text.replace(/<script[\s\S]*?<\/script>/gi, '');
         text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
-        text = text.replace(/function\s+\w+\s*\([\s\S]*?\)\s*\{[\s\S]*?\}/gi, '');
-        text = text.replace(/\$\.ajax\s*\([\s\S]*?\);?/gi, '');
-        text = text.replace(/if\s*\([^)]*\)\s*\{[\s\S]*?\}/gi, '');
-        text = text.replace(/\$\([\'"].*?[\'"]\)\.[a-zA-Z0-9_]+\([\s\S]*?\);?/gi, '');
-        text = text.replace(/del_car_fun\(.*?\);?/gi, '');
-        text = text.replace(/addInquiry\(.*?\);?/gi, '');
 
-        // Translate Chinese
-        text = translateZhToEn(text);
-
-        // Strip raw HTML tags if any (keep text content)
+        // Strip remaining HTML tags
         text = text.replace(/<[^>]+>/g, ' ');
 
-        // Split into sentences / paragraphs
+        // Split by lines
         const rawLines = text.split(/[\r\n•|]+/).map(l => l.trim()).filter(Boolean);
-        const cleanLines = rawLines.filter(line => {
-            if (line.length < 3) return false;
-            if (line.includes('addInquiry') || line.includes('InquiryQuantity') || line.includes('sideLinkBox') || line.includes('CompareQuantity')) return false;
-            return true;
-        });
+        const cleanLines = [];
+
+        for (let line of rawLines) {
+            if (isJsOrUiNoise(line)) continue;
+
+            // Translate Chinese
+            line = translateZhToEn(line);
+
+            // Clean dangling colons or labels with no values
+            if (line.endsWith(':') || line === 'Label' || line === 'Tags') continue;
+            if (line.length < 3) continue;
+
+            cleanLines.push(line);
+        }
 
         if (cleanLines.length === 0) return '';
 

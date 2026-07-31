@@ -897,6 +897,9 @@ def extract_product_data(soup, slug, url=""):
         image_url = urllib.parse.urljoin(url, image_url)
 
     ZH_EN_MAP = {
+        '標籤': 'Label',
+        '商品比較': 'Product Comparison',
+        '提出詢問': 'Submit Inquiry',
         '產品介紹': 'Products Overview',
         '產品': 'Products',
         '产品': 'Products',
@@ -924,6 +927,12 @@ def extract_product_data(soup, slug, url=""):
         '掃瞄器': 'Scanners',
         '扫描器': 'Scanners',
         '系列': 'Series',
+        '碳帶長度': 'Ribbon Length',
+        '碳帶': 'Ribbon',
+        '長度': 'Length',
+        '寬度': 'Width',
+        '高度': 'Height',
+        '厚度': 'Thickness',
         '解析度': 'Resolution',
         '分辨率': 'Resolution',
         '列印速度': 'Print Speed',
@@ -944,6 +953,8 @@ def extract_product_data(soup, slug, url=""):
         '工作溫度': 'Operating Temperature',
         '儲存溫度': 'Storage Temperature',
         '相對濕度': 'Humidity',
+        '公尺': 'm',
+        '吋': 'inch',
         '公司簡介': '',
         '關於立象': '',
         '關於我們': '',
@@ -953,28 +964,44 @@ def extract_product_data(soup, slug, url=""):
         '下載專區': 'Downloads',
     }
 
+    def is_js_or_ui_noise(line):
+        if not line or not isinstance(line, str): return True
+        l = line.strip()
+        if len(l) < 2: return True
+        if re.match(r'^\s*\}\)?;?\s*$', l): return True
+        if re.match(r'^\s*\}\s*else\s*\{?\s*$', l): return True
+        if re.match(r'^\s*if\s*\(', l, re.I): return True
+        if re.search(r'\b(parseInt|parseFloat|console\.log|document\.|window\.|location\.|history\.)\b', l, re.I): return True
+        if re.search(r'\b(return\s+false|return\s+true|typeof|void\(0\))\b', l, re.I): return True
+        if re.search(r'==|===|!=|!==|&&|\|\||=>|\$\(', l): return True
+        if re.search(r'\b(function|var|let|const|addInquiry|del_car_fun|InquiryQuantity|sideLinkBox|CompareQuantity)\b', l, re.I): return True
+        if re.search(r'\$\.[a-zA-Z0-9_]+', l): return True
+        if '商品比較' in l or '提出詢問' in l or l.lower() in ('compare', 'inquire'): return True
+        return False
+
     # Clean description JS inline code and format paragraphs
     if description:
-        description = re.sub(r'<script.*?>.*?</script>', '', description, flags=re.DOTALL | re.IGNORECASE)
-        description = re.sub(r'<style.*?>.*?</style>', '', description, flags=re.DOTALL | re.IGNORECASE)
-        description = re.sub(r'function\s+\w+\s*\(.*?\)\s*\{[\s\S]*?\}', '', description)
-        description = re.sub(r'\$\.ajax\s*\([\s\S]*?\);?', '', description)
-        description = re.sub(r'if\s*\([^)]*\)\s*\{[\s\S]*?\}', '', description)
-        description = re.sub(r'\$\([\'"].*?[\'"]\)\.[a-zA-Z0-9_]+\([\s\S]*?\);?', '', description)
+        description = re.sub(r'</(p|div|li|h[1-6])>', '\n', description, flags=re.I)
+        description = re.sub(r'<br\s*/?>', '\n', description, flags=re.I)
+        description = re.sub(r'<script.*?>.*?</script>', '', description, flags=re.DOTALL | re.I)
+        description = re.sub(r'<style.*?>.*?</style>', '', description, flags=re.DOTALL | re.I)
+        description = re.sub(r'<[^>]+>', ' ', description)
 
         lines = [line.strip() for line in description.split('\n') if line.strip()]
         clean_lines = []
         for line in lines:
-            if any(js_kw in line for js_kw in ('addInquiry', 'InquiryQuantity', 'sideLinkBox', 'CompareQuantity', 'del_car_fun')):
+            if is_js_or_ui_noise(line):
                 continue
-            if len(line) < 3:
-                continue
-            # Translate Chinese sub-terms
             for zh, en in ZH_EN_MAP.items():
                 if zh in line:
                     line = line.replace(zh, en)
-            clean_lines.append(f"<p>{line.strip()}</p>")
-        description = "\n".join(clean_lines) if clean_lines else description.strip()
+            line = line.strip()
+            if line.endswith(':') or line in ('Label', 'Tags'):
+                continue
+            if len(line) < 3:
+                continue
+            clean_lines.append(f"<p>{line}</p>")
+        description = "\n".join(clean_lines) if clean_lines else ""
 
     def clean_field(val):
         if not val:
