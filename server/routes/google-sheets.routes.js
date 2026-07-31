@@ -385,6 +385,14 @@ router.post('/parse-url', async (req, res) => {
         const match = trimmedUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
         const spreadsheetId = match ? match[1] : trimmedUrl;
 
+        const withTimeout = (promise, ms = 5000) => {
+            let timer;
+            const timeoutPromise = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('Google API request timeout')), ms);
+            });
+            return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+        };
+
         // 1. Try Google Sheets API with credentials.json if available
         if (fs.existsSync(CREDENTIALS_PATH)) {
             try {
@@ -395,16 +403,16 @@ router.post('/parse-url', async (req, res) => {
                 });
                 const sheetsApi = google.sheets({ version: 'v4', auth });
                 
-                const metadata = await sheetsApi.spreadsheets.get({ spreadsheetId });
+                const metadata = await withTimeout(sheetsApi.spreadsheets.get({ spreadsheetId }), 5000);
                 const tabNames = (metadata.data?.sheets || []).map(s => s.properties.title);
 
                 if (tabNames.length > 0) {
                     const sheetPromises = tabNames.map(async (sheetName) => {
                         try {
-                            const rangeRes = await sheetsApi.spreadsheets.values.get({
+                            const rangeRes = await withTimeout(sheetsApi.spreadsheets.values.get({
                                 spreadsheetId,
                                 range: `${sheetName}`,
-                            });
+                            }), 5000);
                             return {
                                 name: sheetName,
                                 data: rangeRes.data.values || []
