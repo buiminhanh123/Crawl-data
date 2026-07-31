@@ -84,6 +84,14 @@ async function start() {
     }
 }
 
+process.on('uncaughtException', (err) => {
+    console.error('CRITICAL: Uncaught Exception caught to prevent crash:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('CRITICAL: Unhandled Rejection caught to prevent crash:', reason);
+});
+
 start();
 
 module.exports = app;
