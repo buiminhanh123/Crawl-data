@@ -11,12 +11,12 @@ const ROOT_DIR = path.resolve(__dirname, '../..');
 const SERVER_DIR = path.resolve(__dirname, '..');
 
 const getCrawlerConfig = () => {
-    const rootCrawler = path.resolve(ROOT_DIR, 'crawler.py');
     const serverCrawler = path.resolve(SERVER_DIR, 'crawler.py');
-    if (fs.existsSync(rootCrawler)) {
-        return { scriptPath: rootCrawler, cwd: ROOT_DIR };
+    const rootCrawler = path.resolve(ROOT_DIR, 'crawler.py');
+    if (fs.existsSync(serverCrawler)) {
+        return { scriptPath: serverCrawler, cwd: SERVER_DIR };
     }
-    return { scriptPath: serverCrawler, cwd: SERVER_DIR };
+    return { scriptPath: rootCrawler, cwd: ROOT_DIR };
 };
 
 const getPythonCmd = () => {
