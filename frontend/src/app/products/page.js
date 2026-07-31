@@ -51,6 +51,7 @@ function ProductsContent() {
     const searchParams = useSearchParams();
     const profileSlug = searchParams?.get('profile') || 'newland';
     const [currentProfile, setCurrentProfile] = useState(null);
+    const [profilesList, setProfilesList] = useState([]);
     const [showImportModal, setShowImportModal] = useState(false);
 
     // Crawler to Sheet conversion state
@@ -272,6 +273,7 @@ function ProductsContent() {
         try {
             const res = await fetchApi('/api/products/profiles');
             if (res?.profiles) {
+                setProfilesList(res.profiles);
                 const found = res.profiles.find(p => p.slug === slug);
                 if (found) setCurrentProfile(found);
             }
@@ -1480,6 +1482,7 @@ function ProductsContent() {
             try {
                 const data = await fetchApi('/api/products/profiles');
                 if (data?.profiles) {
+                    setProfilesList(data.profiles);
                     const match = data.profiles.find(p => p.slug === profileSlug);
                     if (match) setCurrentProfile(match);
                     else setCurrentProfile({ name: profileSlug.charAt(0).toUpperCase() + profileSlug.slice(1), slug: profileSlug });
