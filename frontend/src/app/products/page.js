@@ -961,6 +961,7 @@ function ProductsContent() {
 
     // Drag Selection Handlers for Rows & Columns (Optimized for 60fps)
     const handleRowMouseDown = (rIdx, e) => {
+        if (e && e.button !== 0) return;
         e.preventDefault();
         lastHoveredRowRef.current = rIdx;
         if (e.shiftKey && dragStartRowIndex !== null) {
@@ -992,6 +993,7 @@ function ProductsContent() {
     };
 
     const handleColMouseDown = (cIdx, e) => {
+        if (e && e.button !== 0) return;
         e.preventDefault();
         lastHoveredColRef.current = cIdx;
         if (e.shiftKey && dragStartColIndex !== null) {
@@ -2033,21 +2035,24 @@ function ProductsContent() {
                                                               <th 
                                                                   key={cIdx} 
                                                                   onMouseDown={(e) => {
+                                                                      if (e.button !== 0) return;
                                                                       if (e.target.closest('.sheet-filter-btn') || e.target.closest('.sheet-filter-popover')) return;
                                                                       handleColMouseDown(cIdx, e);
                                                                   }}
                                                                   onMouseEnter={() => handleColMouseEnter(cIdx)}
                                                                   onContextMenu={(e) => {
-                                                                      e.preventDefault();
-                                                                      e.stopPropagation();
-                                                                      setPageColHeaderContextMenu({
-                                                                          x: e.clientX,
-                                                                          y: e.clientY,
-                                                                          cIdx: cIdx,
-                                                                          currentTitle: displayTitle
-                                                                      });
-                                                                  }}
-                                                                  title={`Chuột phải để Đổi tên, Chèn hoặc Xóa Cột ${displayTitle}`}
+                                                                       e.preventDefault();
+                                                                       e.stopPropagation();
+                                                                       setRenameColTarget({ cIdx: cIdx, currentTitle: displayTitle });
+                                                                       setRenameColInput(displayTitle);
+                                                                   }}
+                                                                   onDoubleClick={(e) => {
+                                                                       e.preventDefault();
+                                                                       e.stopPropagation();
+                                                                       setRenameColTarget({ cIdx: cIdx, currentTitle: displayTitle });
+                                                                       setRenameColInput(displayTitle);
+                                                                   }}
+                                                                  title={`Chuột phải hoặc nhấp đúp để Đổi tên Cột ${displayTitle}`}
                                                                   style={{ 
                                                                       position: 'relative',
                                                                       userSelect: 'none',
