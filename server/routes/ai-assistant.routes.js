@@ -166,9 +166,10 @@ router.post('/chat', async (req, res) => {
 
     } catch (err) {
         const status = err.status || 502;
-        const msg = err.message || 'Lỗi kết nối Server AI. Vui lòng thử lại sau.';
-        return res.status(status).json({
+        const msg = err.message || 'Lỗi kết nối Server AI (aidesign.io.vn). Vui lòng thử lại sau.';
+        return res.json({
             error: msg,
+            success: false,
             status
         });
     }
@@ -249,11 +250,11 @@ router.post('/test-connection', async (req, res) => {
         const rawText = await response.text();
 
         if (!response.ok) {
-            return res.status(response.status).json({
+            return res.json({
                 ok: false,
                 status: response.status,
                 latencyMs,
-                message: `Server AI trả về lỗi HTTP ${response.status}`,
+                message: `Server AI (aidesign.io.vn) phản hồi mã lỗi HTTP ${response.status}`,
                 details: rawText.slice(0, 200)
             });
         }
@@ -276,11 +277,11 @@ router.post('/test-connection', async (req, res) => {
         });
     } catch (err) {
         const latencyMs = Date.now() - startTime;
-        res.status(504).json({
+        res.json({
             ok: false,
             status: 504,
             latencyMs,
-            message: `❌ Không thể kết nối tới Server AI: ${err.message}`,
+            message: `❌ Không thể kết nối tới Server AI (aidesign.io.vn): ${err.message}`,
             error: err.message
         });
     }
