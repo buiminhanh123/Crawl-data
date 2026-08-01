@@ -440,12 +440,50 @@ export default function AIAssistantPage() {
                     fetchProfileSheets(defaultSlug);
                 }
 
-                const saved = localStorage.getItem('ai_prompt_saved_profiles');
-                if (saved) {
-                    try {
-                        const parsed = JSON.parse(saved);
-                        if (Array.isArray(parsed)) setSavedPromptProfiles(parsed);
-                    } catch (e) {}
+                // Fetch AI prompt profiles from Server DB
+                try {
+                    const res = await fetchApi('/api/ai/prompt-profiles');
+                    if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+                        const parsedProfiles = res.data.map(item => {
+                            let config = {};
+                            try {
+                                config = JSON.parse(item.prompt);
+                            } catch (e) {
+                                config = { prompt: item.prompt };
+                            }
+                            return {
+                                id: item.id,
+                                name: item.name,
+                                ...config
+                            };
+                        });
+                        setSavedPromptProfiles(parsedProfiles);
+                    } else {
+                        // Auto-migrate legacy profiles from localStorage if server DB is empty
+                        const legacy = localStorage.getItem('ai_prompt_saved_profiles') || localStorage.getItem('ai_prompt_command_profiles');
+                        if (legacy) {
+                            try {
+                                const parsed = JSON.parse(legacy);
+                                if (Array.isArray(parsed) && parsed.length > 0) {
+                                    const formatted = parsed.map(p => ({
+                                        name: p.name || 'Cấu hình Prompt',
+                                        prompt: JSON.stringify(p)
+                                    }));
+                                    const syncRes = await fetchApi('/api/ai/prompt-profiles', {
+                                        method: 'POST',
+                                        body: JSON.stringify({ profiles: formatted })
+                                    });
+                                    if (syncRes?.success && Array.isArray(syncRes.data)) {
+                                        setSavedPromptProfiles(parsed);
+                                        localStorage.removeItem('ai_prompt_saved_profiles');
+                                        localStorage.removeItem('ai_prompt_command_profiles');
+                                    }
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch AI prompt profiles from server:', e);
                 }
             } catch (err) {
                 console.error('Failed to load profiles:', err);
@@ -550,13 +588,12 @@ export default function AIAssistantPage() {
     };
 
     // Save current configuration as a new Saved Prompt Profile
-    const handleSavePromptProfile = () => {
+    const handleSavePromptProfile = async () => {
         if (!newPresetNameInput.trim()) {
             showToast('Vui lòng nhập tên Cấu hình Prompt!', 'danger');
             return;
         }
-        const newPreset = {
-            id: 'saved_' + Date.now(),
+        const newPresetData = {
             name: newPresetNameInput.trim(),
             prompt: taskPrompt,
             targetCol,
@@ -567,32 +604,56 @@ export default function AIAssistantPage() {
             delayMs
         };
 
-        const updated = [newPreset, ...savedPromptProfiles.filter(p => p.name !== newPreset.name)];
-        setSavedPromptProfiles(updated);
-        localStorage.setItem('ai_prompt_saved_profiles', JSON.stringify(updated));
-        setSelectedPresetId(newPreset.id);
-        setShowSavePresetModal(false);
-        setNewPresetNameInput('');
-        showToast('Đã lưu Cấu hình Prompt thành công!', 'success');
+        try {
+            const res = await fetchApi('/api/ai/prompt-profiles', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: newPresetData.name,
+                    prompt: JSON.stringify(newPresetData)
+                })
+            });
+
+            if (res && res.success && res.data) {
+                const savedObj = {
+                    id: res.data.id,
+                    ...newPresetData
+                };
+                const updated = [savedObj, ...savedPromptProfiles.filter(p => p.name !== savedObj.name)];
+                setSavedPromptProfiles(updated);
+                setSelectedPresetId(savedObj.id);
+                setShowSavePresetModal(false);
+                setNewPresetNameInput('');
+                showToast('🎉 Đã lưu Cấu hình Prompt vào Server Database!', 'success');
+            }
+        } catch (err) {
+            console.error('Error saving prompt profile:', err);
+            showToast('❌ Lỗi khi lưu Cấu hình Prompt!', 'danger');
+        }
     };
 
     // Delete a saved prompt profile
-    const handleDeleteSavedPreset = () => {
+    const handleDeleteSavedPreset = async () => {
         if (!selectedPresetId) return;
-        const updated = savedPromptProfiles.filter(p => p.id !== selectedPresetId);
-        setSavedPromptProfiles(updated);
-        localStorage.setItem('ai_prompt_saved_profiles', JSON.stringify(updated));
-        setSelectedPresetId('');
-        showToast('Đã xóa Cấu hình Prompt!', 'info');
+        try {
+            await fetchApi(`/api/ai/prompt-profiles/${selectedPresetId}`, {
+                method: 'DELETE'
+            });
+            const updated = savedPromptProfiles.filter(p => p.id !== selectedPresetId);
+            setSavedPromptProfiles(updated);
+            setSelectedPresetId('');
+            showToast('🗑️ Đã xóa Cấu hình Prompt khỏi Server!', 'info');
+        } catch (err) {
+            console.error('Error deleting prompt profile:', err);
+            showToast('❌ Lỗi khi xóa Cấu hình Prompt!', 'danger');
+        }
     };
 
     // Update an existing saved prompt profile
-    const handleUpdateExistingPreset = () => {
+    const handleUpdateExistingPreset = async () => {
         if (!selectedPresetId) return;
-        const index = savedPromptProfiles.findIndex(p => p.id === selectedPresetId);
-        if (index === -1) return;
+        const currentPreset = savedPromptProfiles.find(p => p.id === selectedPresetId);
+        if (!currentPreset) return;
 
-        const currentPreset = savedPromptProfiles[index];
         const updatedPreset = {
             ...currentPreset,
             name: taskName || currentPreset.name,
@@ -605,12 +666,24 @@ export default function AIAssistantPage() {
             delayMs
         };
 
-        const updatedList = [...savedPromptProfiles];
-        updatedList[index] = updatedPreset;
+        try {
+            const res = await fetchApi(`/api/ai/prompt-profiles/${selectedPresetId}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    name: updatedPreset.name,
+                    prompt: JSON.stringify(updatedPreset)
+                })
+            });
 
-        setSavedPromptProfiles(updatedList);
-        localStorage.setItem('ai_prompt_saved_profiles', JSON.stringify(updatedList));
-        showToast(`Đã cập nhật Cấu hình: "${updatedPreset.name}"`, 'success');
+            if (res && res.success) {
+                const updatedList = savedPromptProfiles.map(p => p.id === selectedPresetId ? updatedPreset : p);
+                setSavedPromptProfiles(updatedList);
+                showToast(`✅ Đã cập nhật Cấu hình trên Server: "${updatedPreset.name}"`, 'success');
+            }
+        } catch (err) {
+            console.error('Error updating prompt profile:', err);
+            showToast('❌ Lỗi khi cập nhật Cấu hình Prompt!', 'danger');
+        }
     };
 
     // Toggle sheet selection

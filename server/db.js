@@ -189,6 +189,19 @@ async function initDatabase() {
     try {
         db.run('ALTER TABLE profile_sheet_data ADD COLUMN profile_slug TEXT DEFAULT NULL');
     } catch (e) {}
+
+    // ──────────────────────────────────────────────────────────
+    // SCHEMA: AI Prompt Profiles
+    // ──────────────────────────────────────────────────────────
+    db.run(`
+        CREATE TABLE IF NOT EXISTS ai_prompt_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
     // ──────────────────────────────────────────────────────────
 
     // Seed default admin user if none exists
@@ -945,6 +958,63 @@ const profileSheetQueries = {
     }
 };
 
+const aiPromptProfileQueries = {
+    getAll: () => {
+        const results = db.exec('SELECT id, name, prompt, created_at, updated_at FROM ai_prompt_profiles ORDER BY id ASC');
+        if (!results[0]?.values) return [];
+        const cols = results[0].columns;
+        return results[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+    },
+
+    getById: (id) => {
+        const results = db.exec('SELECT id, name, prompt, created_at, updated_at FROM ai_prompt_profiles WHERE id = ?', [id]);
+        if (!results[0]?.values[0]) return null;
+        const cols = results[0].columns;
+        const vals = results[0].values[0];
+        return Object.fromEntries(cols.map((c, i) => [c, vals[i]]));
+    },
+
+    create: (name, prompt) => {
+        db.run(
+            'INSERT INTO ai_prompt_profiles (name, prompt, created_at, updated_at) VALUES (?, ?, datetime("now"), datetime("now"))',
+            [String(name || '').trim(), String(prompt || '').trim()]
+        );
+        const res = db.exec('SELECT MAX(id) as id FROM ai_prompt_profiles');
+        const newId = res[0]?.values[0]?.[0];
+        saveDatabase();
+        return aiPromptProfileQueries.getById(newId);
+    },
+
+    update: (id, name, prompt) => {
+        db.run(
+            'UPDATE ai_prompt_profiles SET name = ?, prompt = ?, updated_at = datetime("now") WHERE id = ?',
+            [String(name || '').trim(), String(prompt || '').trim(), id]
+        );
+        saveDatabase();
+        return aiPromptProfileQueries.getById(id);
+    },
+
+    delete: (id) => {
+        db.run('DELETE FROM ai_prompt_profiles WHERE id = ?', [id]);
+        saveDatabase();
+        return true;
+    },
+
+    bulkSave: (profiles) => {
+        if (!Array.isArray(profiles)) return [];
+        db.run('DELETE FROM ai_prompt_profiles');
+        profiles.forEach(p => {
+            if (p && p.name && p.prompt) {
+                db.run(
+                    'INSERT INTO ai_prompt_profiles (name, prompt, created_at, updated_at) VALUES (?, ?, datetime("now"), datetime("now"))',
+                    [String(p.name).trim(), String(p.prompt).trim()]
+                );
+            }
+        });
+        saveDatabase();
+        return aiPromptProfileQueries.getAll();
+    }
+};
 
 module.exports = {
     initDatabase,
@@ -956,5 +1026,6 @@ module.exports = {
     openProductsDb,
     localSheetQueries,
     profileQueries,
-    profileSheetQueries
+    profileSheetQueries,
+    aiPromptProfileQueries
 };

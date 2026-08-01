@@ -286,4 +286,77 @@ router.post('/test-connection', async (req, res) => {
     }
 });
 
+const { aiPromptProfileQueries } = require('../db');
+
+// ──────────────────────────────────────────────────────────────
+// GET /api/ai/prompt-profiles
+// Fetch all stored AI prompt profiles from SQLite database
+// ──────────────────────────────────────────────────────────────
+router.get('/prompt-profiles', (req, res) => {
+    try {
+        const profiles = aiPromptProfileQueries.getAll();
+        res.json({ success: true, data: profiles });
+    } catch (err) {
+        console.error('Failed to fetch prompt profiles:', err);
+        res.status(500).json({ success: false, error: 'Failed to fetch prompt profiles.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/ai/prompt-profiles
+// Create a single profile OR bulk save/sync profiles
+// Body: { name, prompt } OR { profiles: [...] }
+// ──────────────────────────────────────────────────────────────
+router.post('/prompt-profiles', (req, res) => {
+    try {
+        const { name, prompt, profiles } = req.body;
+        if (Array.isArray(profiles)) {
+            const synced = aiPromptProfileQueries.bulkSave(profiles);
+            return res.json({ success: true, data: synced });
+        }
+        if (!name || !prompt) {
+            return res.status(400).json({ success: false, error: 'Tên và nội dung prompt không được để trống.' });
+        }
+        const created = aiPromptProfileQueries.create(name, prompt);
+        res.json({ success: true, data: created });
+    } catch (err) {
+        console.error('Failed to create prompt profile:', err);
+        res.status(500).json({ success: false, error: 'Failed to create prompt profile.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// PUT /api/ai/prompt-profiles/:id
+// Update an existing prompt profile
+// ──────────────────────────────────────────────────────────────
+router.put('/prompt-profiles/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, prompt } = req.body;
+        if (!name || !prompt) {
+            return res.status(400).json({ success: false, error: 'Tên và nội dung prompt không được để trống.' });
+        }
+        const updated = aiPromptProfileQueries.update(Number(id), name, prompt);
+        res.json({ success: true, data: updated });
+    } catch (err) {
+        console.error('Failed to update prompt profile:', err);
+        res.status(500).json({ success: false, error: 'Failed to update prompt profile.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// DELETE /api/ai/prompt-profiles/:id
+// Delete a prompt profile
+// ──────────────────────────────────────────────────────────────
+router.delete('/prompt-profiles/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        aiPromptProfileQueries.delete(Number(id));
+        res.json({ success: true, message: 'Deleted successfully.' });
+    } catch (err) {
+        console.error('Failed to delete prompt profile:', err);
+        res.status(500).json({ success: false, error: 'Failed to delete prompt profile.' });
+    }
+});
+
 module.exports = router;

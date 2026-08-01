@@ -328,27 +328,59 @@ export default function AiAssistantModal({
     const [savedProfiles, setSavedProfiles] = useState([]);
     const [selectedSavedProfileId, setSelectedSavedProfileId] = useState('');
 
-    // Load saved command profiles from localStorage on mount
+    // Load saved command profiles from Server DB on mount
     useEffect(() => {
-        try {
-            const stored = localStorage.getItem('ai_prompt_command_profiles');
-            if (stored) {
-                setSavedProfiles(JSON.parse(stored));
+        const fetchProfiles = async () => {
+            try {
+                const res = await fetchApi('/api/ai/prompt-profiles');
+                if (res && res.success && Array.isArray(res.data) && res.data.length > 0) {
+                    const parsed = res.data.map(item => {
+                        let config = {};
+                        try {
+                            config = JSON.parse(item.prompt);
+                        } catch (e) {
+                            config = { promptText: item.prompt };
+                        }
+                        return {
+                            id: item.id,
+                            name: item.name,
+                            ...config
+                        };
+                    });
+                    setSavedProfiles(parsed);
+                } else {
+                    const stored = localStorage.getItem('ai_prompt_command_profiles');
+                    if (stored) {
+                        try {
+                            const parsed = JSON.parse(stored);
+                            if (Array.isArray(parsed) && parsed.length > 0) {
+                                setSavedProfiles(parsed);
+                                fetchApi('/api/ai/prompt-profiles', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        profiles: parsed.map(p => ({ name: p.name || 'Profile Lệnh', prompt: JSON.stringify(p) }))
+                                    })
+                                }).catch(() => {});
+                            }
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {
+                console.error('[Prompt Profiles Load Error]:', e);
             }
-        } catch (e) {
-            console.error('[Prompt Profiles Load Error]:', e);
-        }
+        };
+        fetchProfiles();
     }, []);
 
     // Select and load a saved command profile
     const handleSelectSavedProfile = (profileId) => {
         setSelectedSavedProfileId(profileId);
         if (!profileId) return;
-        const p = savedProfiles.find(item => item.id === profileId);
+        const p = savedProfiles.find(item => item.id === profileId || String(item.id) === String(profileId));
         if (!p) return;
 
         if (p.presetType) setPresetType(p.presetType);
-        if (p.promptText) setPromptText(p.promptText);
+        if (p.promptText || p.prompt) setPromptText(p.promptText || p.prompt);
         if (Array.isArray(p.variables)) setVariables(p.variables);
         if (p.targetColIdx !== undefined) setTargetColIdx(p.targetColIdx);
         if (p.startRow !== undefined) setStartRow(p.startRow);
@@ -358,15 +390,13 @@ export default function AiAssistantModal({
     };
 
     // Save current configuration as a named profile preset
-    const handleSaveCurrentProfile = () => {
+    const handleSaveCurrentProfile = async () => {
         const defaultName = `Profile Lệnh - Cột ${getColLetter(targetColIdx)}`;
         const profileNameInput = prompt('Nhập tên để lưu Cấu Hình Lệnh AI này (ví dụ: Sapo Tiếng Việt - Cột D):', defaultName);
         if (!profileNameInput || !profileNameInput.trim()) return;
 
-        const newProfile = {
-            id: Date.now().toString(),
+        const newProfileData = {
             name: profileNameInput.trim(),
-            createdAt: new Date().toISOString(),
             presetType,
             promptText,
             variables,
@@ -377,30 +407,42 @@ export default function AiAssistantModal({
             skipExisting
         };
 
-        const updated = [newProfile, ...savedProfiles.filter(p => p.name !== newProfile.name)];
-        setSavedProfiles(updated);
-        setSelectedSavedProfileId(newProfile.id);
         try {
-            localStorage.setItem('ai_prompt_command_profiles', JSON.stringify(updated));
-            alert(`✅ Đã lưu Cấu Hình Lệnh "${newProfile.name}" thành công! Lần sau bạn có thể chọn và chạy ngay.`);
+            const res = await fetchApi('/api/ai/prompt-profiles', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: newProfileData.name,
+                    prompt: JSON.stringify(newProfileData)
+                })
+            });
+
+            if (res && res.success && res.data) {
+                const savedObj = { id: res.data.id, ...newProfileData };
+                const updated = [savedObj, ...savedProfiles.filter(p => p.name !== savedObj.name)];
+                setSavedProfiles(updated);
+                setSelectedSavedProfileId(savedObj.id);
+                alert(`✅ Đã lưu Cấu Hình Lệnh "${savedObj.name}" vào Database Server thành công!`);
+            }
         } catch (e) {
-            console.error(e);
+            console.error('Error saving profile:', e);
+            alert('❌ Không thể lưu Cấu Hình Lệnh vào Server Database.');
         }
     };
 
     // Delete selected saved command profile
-    const handleDeleteSavedProfile = () => {
+    const handleDeleteSavedProfile = async () => {
         if (!selectedSavedProfileId) return;
-        const p = savedProfiles.find(item => item.id === selectedSavedProfileId);
+        const p = savedProfiles.find(item => item.id === selectedSavedProfileId || String(item.id) === String(selectedSavedProfileId));
         if (!p) return;
-        if (confirm(`Bạn có chắc chắn muốn xóa Profile Lệnh "${p.name}"?`)) {
-            const updated = savedProfiles.filter(item => item.id !== selectedSavedProfileId);
-            setSavedProfiles(updated);
-            setSelectedSavedProfileId('');
+        if (confirm(`Bạn có chắc chắn muốn xóa Profile Lệnh "${p.name}" khỏi Database Server?`)) {
             try {
-                localStorage.setItem('ai_prompt_command_profiles', JSON.stringify(updated));
+                await fetchApi(`/api/ai/prompt-profiles/${selectedSavedProfileId}`, { method: 'DELETE' });
+                const updated = savedProfiles.filter(item => item.id !== selectedSavedProfileId && String(item.id) !== String(selectedSavedProfileId));
+                setSavedProfiles(updated);
+                setSelectedSavedProfileId('');
             } catch (e) {
                 console.error(e);
+                alert('❌ Không thể xóa Profile Lệnh khỏi Server Database.');
             }
         }
     };
