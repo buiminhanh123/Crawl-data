@@ -367,6 +367,13 @@ export default function AiAssistantModal({
                 }
             } catch (e) {
                 console.error('[Prompt Profiles Load Error]:', e);
+                try {
+                    const stored = localStorage.getItem('ai_prompt_command_profiles');
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        if (Array.isArray(parsed)) setSavedProfiles(parsed);
+                    }
+                } catch (err) {}
             }
         };
         fetchProfiles();

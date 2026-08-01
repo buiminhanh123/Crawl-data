@@ -484,6 +484,13 @@ export default function AIAssistantPage() {
                     }
                 } catch (e) {
                     console.error('Failed to fetch AI prompt profiles from server:', e);
+                    try {
+                        const legacy = localStorage.getItem('ai_prompt_saved_profiles') || localStorage.getItem('ai_prompt_command_profiles');
+                        if (legacy) {
+                            const parsed = JSON.parse(legacy);
+                            if (Array.isArray(parsed)) setSavedPromptProfiles(parsed);
+                        }
+                    } catch (err) {}
                 }
             } catch (err) {
                 console.error('Failed to load profiles:', err);
