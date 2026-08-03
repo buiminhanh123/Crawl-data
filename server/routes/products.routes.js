@@ -34,14 +34,14 @@ const harUpload = multer({
 //  HAR ANALYSIS — Pure JS logic
 // ============================================================
 
-// Field patterns to detect in JSON responses
+// Field patterns to detect in JSON responses & HTML pages
 const FIELD_PATTERNS = {
     detail_url:   { keys: ['url', 'link', 'href', 'product_url', 'detail_url', 'page_url', 'product_link', 'canonical'], label: '🌐 Link Sản Phẩm', icon: '🌐' },
     name:         { keys: ['name', 'title', 'product_name', 'item_name', 'productName', 'displayName', 'product_title'], label: '📝 Tên Sản Phẩm', icon: '📝' },
-    model:        { keys: ['model', 'sku', 'part_number', 'partNumber', 'model_number', 'code', 'item_code', 'product_code', 'part_no', 'modelNumber'], label: '🔢 Model / Mã SP', icon: '🔢' },
-    category:     { keys: ['category', 'categories', 'type', 'productType', 'product_type', 'group', 'department', 'classification', 'taxonomy'], label: '📂 Danh Mục', icon: '📂' },
-    brand:        { keys: ['brand', 'manufacturer', 'vendor', 'make', 'brand_name', 'brandName', 'supplier'], label: '🏷️ Hãng / Thương Hiệu', icon: '🏷️' },
-    series:       { keys: ['series', 'family', 'line', 'product_family', 'product_line', 'productFamily'], label: '📌 Series / Dòng SP', icon: '📌' },
+    model:        { keys: ['model', 'sku', 'part_number', 'partNumber', 'model_number', 'code', 'item_code', 'product_code', 'part_no', 'modelNumber', 'mpn'], label: '🔢 Model / Mã SP', icon: '🔢' },
+    category:     { keys: ['category', 'categories', 'type', 'productType', 'product_type', 'group', 'department', 'classification', 'taxonomy', 'catalog'], label: '📂 Danh Mục', icon: '📂' },
+    series:       { keys: ['series', 'family', 'line', 'product_family', 'product_line', 'productFamily', 'series_name'], label: '📌 Series / Dòng SP', icon: '📌' },
+    brand:        { keys: ['brand', 'manufacturer', 'vendor', 'make', 'brand_name', 'brandName', 'supplier', 'company'], label: '🏷️ Hãng / Thương Hiệu', icon: '🏷️' },
     image_url:    { keys: ['image', 'img', 'image_url', 'imageUrl', 'thumbnail', 'photo', 'picture', 'main_image', 'cover_image', 'primary_image'], label: '🖼️ Link Hình Ảnh', icon: '🖼️' },
     description:  { keys: ['description', 'desc', 'short_description', 'summary', 'overview', 'intro', 'excerpt', 'content'], label: '📖 Mô Tả SP', icon: '📖' },
     specs_json:   { keys: ['specs', 'specifications', 'technical_specs', 'attributes', 'features', 'parameters', 'properties', 'technicalSpecs', 'techspecs'], label: '📊 Thông Số Kỹ Thuật', icon: '📊' },
@@ -95,20 +95,162 @@ function scanObjectForFields(obj, depth = 0, pathPrefix = '', results = {}) {
 }
 
 /**
- * Main HAR analysis function
+ * Foreign language / non-main locale patterns to filter out
  */
+const FOREIGN_LOCALES = [
+    '/cn/', '/zh/', '/zh-cn/', '/zh-tw/', '/ja/', '/jp/', '/de/', '/fr/', '/es/', '/kr/', '/ru/', '/it/', '/pt/', '/tw/'
+];
 
 /**
- * Scan HTML response text for product fields (links, images, titles, models, categories)
+ * Scan HTML response text for product fields (JSON-LD, meta tags, breadcrumbs, headings, links, images)
  */
 function scanHtmlForFields(html, reqUrl, results = {}) {
     if (!html || typeof html !== 'string') return results;
 
-    // 1. Detail URLs vs Category URLs
+    const pushResult = (fieldKey, path, val) => {
+        if (!val || typeof val !== 'string') return;
+        const clean = val.trim();
+        if (!clean || clean.length < 2) return;
+        // Ignore JS code snippets and template placeholders
+        if (clean.includes('+') || clean.includes('${') || clean.includes('function(') || clean.includes('var ') || clean.includes('items[')) return;
+        if (!results[fieldKey]) results[fieldKey] = [];
+        if (!results[fieldKey].some(r => r.sampleValue === clean)) {
+            results[fieldKey].push({ path, sampleValue: clean });
+        }
+    };
+
+    // ------------------------------------------------------------
+    // 1. JSON-LD Structured Data (<script type="application/ld+json">)
+    // ------------------------------------------------------------
+    const ldJsonMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+    for (const block of ldJsonMatches) {
+        try {
+            const jsonText = block.replace(/^<script[^>]*>/i, '').replace(/<\/script>$/i, '').trim();
+            if (!jsonText) continue;
+            const data = JSON.parse(jsonText);
+            const items = Array.isArray(data) ? data : [data];
+
+            for (const item of items) {
+                const type = (item['@type'] || '').toLowerCase();
+                if (type === 'product') {
+                    if (item.name) pushResult('name', 'JSON-LD Product Name', item.name);
+                    if (item.model) pushResult('model', 'JSON-LD Product Model', typeof item.model === 'string' ? item.model : item.model.name);
+                    if (item.mpn || item.sku) pushResult('model', 'JSON-LD MPN/SKU', item.mpn || item.sku);
+                    if (item.brand) pushResult('brand', 'JSON-LD Brand', typeof item.brand === 'string' ? item.brand : item.brand.name);
+                    if (item.category) pushResult('category', 'JSON-LD Category', item.category);
+                    if (item.description) pushResult('description', 'JSON-LD Description', item.description.slice(0, 150));
+                    if (item.image) {
+                        const imgUrl = Array.isArray(item.image) ? item.image[0] : (typeof item.image === 'string' ? item.image : item.image.url);
+                        if (imgUrl) pushResult('image_url', 'JSON-LD Image', imgUrl);
+                    }
+                } else if (type === 'breadcrumblist' && Array.isArray(item.itemListElement)) {
+                    const crumbs = item.itemListElement
+                        .map(c => (c.item?.name || c.name || '').trim())
+                        .filter(Boolean);
+                    if (crumbs.length >= 2) {
+                        pushResult('category', 'JSON-LD Breadcrumb Category', crumbs[1]);
+                    }
+                    if (crumbs.length >= 3) {
+                        pushResult('series', 'JSON-LD Breadcrumb Series', crumbs[2]);
+                    }
+                } else if (type === 'organization' && item.name) {
+                    pushResult('brand', 'JSON-LD Organization Brand', item.name);
+                }
+            }
+        } catch (e) {}
+    }
+
+    // ------------------------------------------------------------
+    // 2. Meta Tags (OpenGraph & Meta Description / Brand)
+    // ------------------------------------------------------------
+    const metaBrandMatch = html.match(/<meta[^>]*property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i)
+        || html.match(/<meta[^>]*name=["']author["'][^>]*content=["']([^"']+)["']/i);
+    if (metaBrandMatch && metaBrandMatch[1]) {
+        pushResult('brand', 'HTML Meta Brand (og:site_name)', metaBrandMatch[1]);
+    }
+
+    const metaDescMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)
+        || html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
+    if (metaDescMatch && metaDescMatch[1]) {
+        pushResult('description', 'HTML Meta Description', metaDescMatch[1].slice(0, 150));
+    }
+
+    const ogTitleMatch = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+    if (ogTitleMatch && ogTitleMatch[1]) {
+        pushResult('name', 'HTML Meta og:title', ogTitleMatch[1]);
+    }
+
+    // ------------------------------------------------------------
+    // 3. Breadcrumbs DOM Extraction (Category & Series)
+    // ------------------------------------------------------------
+    const breadcrumbMatches = html.match(/<(?:nav|div|ul)[^>]*class=["'][^"']*(?:breadcrumb|path|location|nav-trail)[^"']*["'][^>]*>([\s\S]*?)<\/(?:nav|div|ul)>/gi) || [];
+    for (const bBlock of breadcrumbMatches) {
+        const textItems = bBlock.replace(/<[^>]+>/g, '\n')
+            .split('\n')
+            .map(s => s.trim())
+            .filter(s => s && s !== '>' && s !== '/' && s !== '»' && s.toLowerCase() !== 'home' && s.toLowerCase() !== 'trang chủ');
+        
+        if (textItems.length >= 1) {
+            pushResult('category', 'HTML Breadcrumb Category', textItems[0]);
+        }
+        if (textItems.length >= 2) {
+            pushResult('series', 'HTML Breadcrumb Series', textItems[1]);
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 4. Page Title & Heading Extraction
+    // ------------------------------------------------------------
+    const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
+    if (titleMatch && titleMatch[1]) {
+        const titleText = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+        if (titleText) {
+            pushResult('name', 'HTML <title>', titleText);
+
+            // Check if title mentions series
+            if (/\b(?:series|line|family)\b/i.test(titleText)) {
+                const seriesPart = titleText.split(/[-|]/)[0].trim();
+                if (seriesPart) pushResult('series', 'HTML Title Series', seriesPart);
+            }
+        }
+    }
+
+    const h1Match = html.match(/<h1[^>]*>(.*?)<\/h1>/i);
+    if (h1Match && h1Match[1]) {
+        const h1Text = h1Match[1].replace(/<[^>]+>/g, '').trim();
+        if (h1Text && h1Text.length < 100) {
+            pushResult('name', 'HTML <h1> Title', h1Text);
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 5. Product Headings & Model Names (H2, H3, Alt text)
+    // ------------------------------------------------------------
+    const h2Matches = html.match(/<h[23][^>]*>(.*?)<\/h[23]>/gi) || [];
+    for (const hMatch of h2Matches) {
+        const hText = hMatch.replace(/<[^>]+>/g, '').trim();
+        if (hText && hText.length > 2 && hText.length < 80) {
+            // If looks like a model code or product title
+            if (/[A-Z0-9]{2,}[-_/][A-Z0-9]+/i.test(hText) || /\b(?:pro|plus|series|printer|scanner)\b/i.test(hText)) {
+                pushResult('model', 'HTML Product Heading Model', hText);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 6. Detail URLs vs Category URLs (with Locale & Junk filtering)
+    // ------------------------------------------------------------
     const linkMatches = html.match(/href=["']([^"']*(?:products-detail|product-detail|products|detail|product)[^"']*)["']/gi) || [];
     const rawLinks = Array.from(new Set(linkMatches.map(m => m.replace(/^href=["']/i, '').replace(/["']$/, ''))))
         .filter(l => !l.match(/\.(css|js|png|jpg|jpeg|svg|gif|woff|woff2)(\?.*)?$/i))
-        .filter(l => !l.includes('products-compare') && !l.includes('products-search') && !l.includes('discontinued=') && !l.includes('index_tag_id='));
+        .filter(l => !l.includes('products-compare') && !l.includes('products-search') && !l.includes('discontinued=') && !l.includes('index_tag_id='))
+        // Filter foreign language locales unless current reqUrl is on that locale
+        .filter(l => {
+            const lowerL = l.toLowerCase();
+            const hasForeignLocale = FOREIGN_LOCALES.some(loc => lowerL.includes(loc));
+            if (!hasForeignLocale) return true;
+            return FOREIGN_LOCALES.some(loc => reqUrl.toLowerCase().includes(loc));
+        });
 
     const detailLinks = [];
     const catLinks = [];
@@ -129,61 +271,48 @@ function scanHtmlForFields(html, reqUrl, results = {}) {
     });
 
     const sortedLinks = Array.from(new Set([...detailLinks, ...catLinks]));
+    sortedLinks.forEach(l => {
+        const isDetail = l.includes('products-detail') || l.includes('product-detail') || l.includes('/detail/') || l.includes('/item/');
+        pushResult('detail_url', isDetail ? 'HTML Product Detail Link' : 'HTML Category Link', l);
 
-    if (sortedLinks.length > 0) {
-        if (!results['detail_url']) results['detail_url'] = [];
-        sortedLinks.forEach(l => {
-            const isDetail = l.includes('products-detail') || l.includes('product-detail') || l.includes('/detail/') || l.includes('/item/');
-            results['detail_url'].push({ 
-                path: isDetail ? 'HTML Product Detail Link' : 'HTML Category Link', 
-                sampleValue: l 
-            });
-        });
-    }
-
-    // 2. Image URLs
-    const imgMatches = html.match(/(?:src|data-src|href)=["']([^"']*(?:upload|catalog|product)[^"']*\.(?:jpg|jpeg|png|webp|gif))["']/gi) || [];
-    const uniqueImgs = Array.from(new Set(imgMatches.map(m => m.replace(/^(?:src|data-src|href)=["']/i, '').replace(/["']$/, ''))));
-    if (uniqueImgs.length > 0) {
-        if (!results['image_url']) results['image_url'] = [];
-        uniqueImgs.forEach(img => {
-            try {
-                const fullUrl = img.startsWith('http') ? img : new URL(img, reqUrl).href;
-                results['image_url'].push({ path: 'HTML <img src>', sampleValue: fullUrl });
-            } catch (e) {}
-        });
-    }
-
-    // 3. Name & Category
-    const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i) || html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
-    if (titleMatch && titleMatch[1]) {
-        const titleText = titleMatch[1].replace(/<[^>]+>/g, '').trim();
-        if (titleText) {
-            if (!results['name']) results['name'] = [];
-            results['name'].push({ path: 'HTML <title>', sampleValue: titleText });
-
-            if (titleText.includes('-')) {
-                const parts = titleText.split('-').map(s => s.trim());
-                if (parts.length >= 1 && parts[0]) {
-                    if (!results['category']) results['category'] = [];
-                    results['category'].push({ path: 'HTML Title Category', sampleValue: parts[0] });
+        // Also check URL path for Category vs Series
+        try {
+            const pathSegs = new URL(l).pathname.split('/').filter(Boolean);
+            if (pathSegs.length >= 2 && (pathSegs[0] === 'products' || pathSegs[0] === 'product')) {
+                const catSlug = pathSegs[1].replace(/[-_]/g, ' ');
+                pushResult('category', 'HTML Link Category Path', catSlug.charAt(0).toUpperCase() + catSlug.slice(1));
+            }
+            if (pathSegs.length >= 3) {
+                const seriesSlug = pathSegs[2].replace(/[-_]/g, ' ');
+                if (!seriesSlug.includes('detail')) {
+                    pushResult('series', 'HTML Link Series Path', seriesSlug.charAt(0).toUpperCase() + seriesSlug.slice(1));
                 }
             }
-        }
-    }
+        } catch (e) {}
+    });
 
-    // 4. Model extraction from detail link slugs
-    const modelDetailLinks = sortedLinks.filter(l => l.includes('products-detail') || l.includes('/detail/'));
-    if (modelDetailLinks.length > 0) {
-        if (!results['model']) results['model'] = [];
-        modelDetailLinks.forEach(l => {
-            const segs = l.split('/').filter(Boolean);
-            const last = segs[segs.length - 1];
-            if (last && last !== 'products-detail') {
-                const cleanModel = last.replace(/[-_]/g, ' ').toUpperCase();
-                results['model'].push({ path: 'HTML Product Link Slug', sampleValue: cleanModel });
+    // ------------------------------------------------------------
+    // 7. Image URLs & Alt Text
+    // ------------------------------------------------------------
+    const imgMatches = html.match(/<img[^>]+>/gi) || [];
+    for (const imgTag of imgMatches) {
+        const srcMatch = imgTag.match(/(?:src|data-src)=["']([^"']+)["']/i);
+        const altMatch = imgTag.match(/alt=["']([^"']+)["']/i);
+        if (srcMatch && srcMatch[1]) {
+            const src = srcMatch[1];
+            if (/\.(?:jpg|jpeg|png|webp|gif)/i.test(src) && /(?:upload|catalog|product|pic)/i.test(src)) {
+                try {
+                    const fullUrl = src.startsWith('http') ? src : new URL(src, reqUrl).href;
+                    pushResult('image_url', 'HTML <img src>', fullUrl);
+                } catch (e) {}
             }
-        });
+        }
+        if (altMatch && altMatch[1]) {
+            const altText = altMatch[1].trim();
+            if (altText && altText.length > 3 && altText.length < 80 && !altText.toLowerCase().includes('logo') && !altText.toLowerCase().includes('banner')) {
+                pushResult('model', 'HTML Image Alt Text Model', altText);
+            }
+        }
     }
 
     return results;
@@ -1412,6 +1541,255 @@ router.post('/crawler/batch-stop', async (req, res) => {
     } catch (err) {
         console.error('Failed to stop batch crawl:', err);
         res.status(500).json({ error: err.message || 'Lỗi khi dừng batch crawl.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// GET /api/products/profiles/:slug/check-config
+// Get publication check configuration
+// ──────────────────────────────────────────────────────────────
+router.get('/profiles/:slug/check-config', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const config = profileQueries.getCheckConfig(slug);
+        res.json({ success: true, data: config });
+    } catch (err) {
+        console.error('Failed to get check config:', err);
+        res.status(500).json({ success: false, error: 'Failed to retrieve check configuration.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/products/profiles/:slug/check-config
+// Save publication check configuration
+// ──────────────────────────────────────────────────────────────
+router.post('/profiles/:slug/check-config', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { mode = 'sitemap', sitemapUrl = '', apiUrl = '', consumerKey = '', consumerSecret = '' } = req.body;
+        const configObj = {
+            mode,
+            sitemapUrl: (sitemapUrl || '').trim(),
+            apiUrl: (apiUrl || '').trim(),
+            consumerKey: (consumerKey || '').trim(),
+            consumerSecret: (consumerSecret || '').trim()
+        };
+        profileQueries.saveCheckConfig(slug, configObj);
+        res.json({ success: true, message: 'Lưu cấu hình kiểm tra đăng bài thành công!', data: configObj });
+    } catch (err) {
+        console.error('Failed to save check config:', err);
+        res.status(500).json({ success: false, error: 'Không thể lưu cấu hình kiểm tra.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/products/profiles/:slug/check-publication-status
+// Run publication status check (Sitemap vs. CMS API)
+// ──────────────────────────────────────────────────────────────
+router.post('/profiles/:slug/check-publication-status', async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const config = profileQueries.getCheckConfig(slug);
+        const mode = req.body?.mode || config?.mode || 'sitemap';
+
+        const sheets = profileSheetQueries.getBySlug(slug);
+        if (!sheets || sheets.length === 0) {
+            return res.status(400).json({ success: false, error: 'Không tìm thấy dữ liệu Sheet cho Profile này.' });
+        }
+
+        let productItems = [];
+        sheets.forEach(sheet => {
+            const rows = sheet.data || [];
+            if (rows.length < 2) return;
+            const headers = rows[0].map(h => String(h || '').trim().toLowerCase());
+            let modelColIdx = headers.findIndex(h => h.includes('model') || h.includes('mã') || h.includes('sku') || h.includes('part number'));
+            if (modelColIdx === -1) modelColIdx = 0;
+
+            let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
+            if (nameColIdx === -1) nameColIdx = 1;
+
+            for (let r = 1; r < rows.length; r++) {
+                const row = rows[r];
+                if (!Array.isArray(row)) continue;
+                const model = String(row[modelColIdx] || '').trim();
+                const name = String(row[nameColIdx] || '').trim();
+                if (model || name) {
+                    productItems.push({
+                        sheetName: sheet.name,
+                        rowIdx: r,
+                        model: model || name,
+                        name: name || model
+                    });
+                }
+            }
+        });
+
+        if (productItems.length === 0) {
+            return res.json({ success: true, message: 'Chưa có sản phẩm nào trong trang tính.', logs: [] });
+        }
+
+        let logs = [];
+
+        if (mode === 'sitemap') {
+            let targetSitemapUrl = req.body?.sitemapUrl || config?.sitemapUrl || config?.targetUrl;
+            if (targetSitemapUrl && !targetSitemapUrl.endsWith('.xml') && !targetSitemapUrl.includes('sitemap')) {
+                targetSitemapUrl = targetSitemapUrl.replace(/\/$/, '') + '/sitemap.xml';
+            }
+            if (!targetSitemapUrl) {
+                return res.status(400).json({ success: false, error: 'Chưa cấu hình URL Sitemap cho Website.' });
+            }
+
+            let xmlText = '';
+            try {
+                const response = await fetch(targetSitemapUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
+                    signal: AbortSignal.timeout(20000)
+                });
+                xmlText = await response.text();
+            } catch (e) {
+                return res.status(500).json({ success: false, error: `Không thể tải Sitemap từ '${targetSitemapUrl}': ${e.message}` });
+            }
+
+            const locMatches = xmlText.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
+            const foundUrls = locMatches.map(m => m.replace(/<\/?loc>/gi, '').trim());
+            const urlSlugsSet = new Set(foundUrls.map(u => {
+                const parts = u.split('/').filter(Boolean);
+                return (parts[parts.length - 1] || '').toLowerCase();
+            }));
+            const fullUrlsLower = new Set(foundUrls.map(u => u.toLowerCase()));
+
+            logs = productItems.map(p => {
+                const modelSlug = p.model.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                const isFound = urlSlugsSet.has(modelSlug) || Array.from(fullUrlsLower).some(u => u.includes(modelSlug));
+                const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                return {
+                    id: `log_${p.rowIdx}_${Date.now()}`,
+                    posted_at: isFound ? nowStr : `Dự kiến: ${nowStr}`,
+                    model: p.model,
+                    name: p.name,
+                    platform: 'Website (Sitemap)',
+                    status: isFound ? 'posted' : 'pending'
+                };
+            });
+
+        } else if (mode === 'cms_api') {
+            const apiUrl = req.body?.apiUrl || config?.apiUrl;
+            const consumerKey = req.body?.consumerKey || config?.consumerKey;
+            const consumerSecret = req.body?.consumerSecret || config?.consumerSecret;
+            const apiToken = req.body?.apiToken || config?.apiToken;
+            const jsonContent = req.body?.jsonContent || config?.jsonContent;
+
+            let cmsProducts = [];
+
+            if (jsonContent) {
+                // Parse directly from uploaded/pasted API JSON file
+                try {
+                    const parsedJson = JSON.parse(jsonContent);
+                    if (Array.isArray(parsedJson)) {
+                        cmsProducts = parsedJson;
+                    } else if (parsedJson.products && Array.isArray(parsedJson.products)) {
+                        cmsProducts = parsedJson.products;
+                    } else if (parsedJson.data && Array.isArray(parsedJson.data)) {
+                        cmsProducts = parsedJson.data;
+                    } else if (typeof parsedJson === 'object') {
+                        cmsProducts = [parsedJson];
+                    }
+                } catch (e) {
+                    console.error('Failed to parse jsonContent:', e);
+                }
+            }
+
+            if (cmsProducts.length === 0 && apiUrl) {
+                let wcUrl = apiUrl.replace(/\/$/, '');
+                if (!wcUrl.includes('/wp-json/wc/') && !wcUrl.includes('api')) {
+                    wcUrl = wcUrl + '/wp-json/wc/v3/products';
+                }
+                const headers = { 'Content-Type': 'application/json' };
+                if (apiToken) {
+                    headers['Authorization'] = apiToken.startsWith('Bearer ') ? apiToken : `Bearer ${apiToken}`;
+                }
+
+                const authParams = (consumerKey && consumerSecret)
+                    ? `?consumer_key=${encodeURIComponent(consumerKey)}&consumer_secret=${encodeURIComponent(consumerSecret)}&per_page=100`
+                    : '?per_page=100';
+
+                try {
+                    const response = await fetch(`${wcUrl}${wcUrl.includes('?') ? '&' : authParams}`, {
+                        headers,
+                        signal: AbortSignal.timeout(20000)
+                    });
+                    if (response.ok) {
+                        const jsonRes = await response.json();
+                        cmsProducts = Array.isArray(jsonRes) ? jsonRes : (jsonRes.products || jsonRes.data || []);
+                    } else {
+                        const errText = await response.text();
+                        return res.status(response.status).json({ success: false, error: `CMS API Lỗi HTTP ${response.status}: ${errText.slice(0, 150)}` });
+                    }
+                } catch (e) {
+                    return res.status(500).json({ success: false, error: `Không thể kết nối tới CMS API '${wcUrl}': ${e.message}` });
+                }
+            }
+
+            const cmsSkuMap = new Map();
+            if (Array.isArray(cmsProducts)) {
+                cmsProducts.forEach(prod => {
+                    const sku = String(prod.sku || prod.model || prod.slug || prod.name || prod.product_name || prod.id || '').trim().toLowerCase();
+                    if (sku) cmsSkuMap.set(sku, prod.status || 'publish');
+                });
+            }
+
+            logs = productItems.map(p => {
+                const modelKey = p.model.trim().toLowerCase();
+                const cmsStatus = cmsSkuMap.get(modelKey);
+                const isPosted = cmsStatus === 'publish' || cmsStatus === 'active' || cmsStatus === 'posted' || cmsStatus === 1 || cmsStatus === true;
+                const isDraft = cmsStatus === 'draft' || cmsStatus === 'pending';
+                const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+
+                return {
+                    id: `log_${p.rowIdx}_${Date.now()}`,
+                    posted_at: isPosted ? nowStr : (isDraft ? `Nháp: ${nowStr}` : `Dự kiến: ${nowStr}`),
+                    model: p.model,
+                    name: p.name,
+                    platform: isDraft ? 'Bản nháp (CMS API)' : 'Website (CMS API)',
+                    status: isPosted ? 'posted' : 'pending'
+                };
+            });
+        }
+
+        const postedCount = logs.filter(l => l.status === 'posted').length;
+        const pendingCount = logs.filter(l => l.status === 'pending').length;
+
+        res.json({
+            success: true,
+            mode,
+            message: `🎉 Kiểm tra xong! Đã đăng: ${postedCount} sản phẩm, Chưa đăng: ${pendingCount} sản phẩm.`,
+            summary: {
+                total: productItems.length,
+                posted: postedCount,
+                pending: pendingCount,
+                error: 0
+            },
+            logs
+        });
+
+    } catch (err) {
+        console.error('Failed to check publication status:', err);
+        res.status(500).json({ success: false, error: `Lỗi khi kiểm tra đăng bài: ${err.message}` });
+    }
+});
+
+router.get('/proxy-sitemap', async (req, res) => {
+    const sitemapUrl = req.query.url;
+    if (!sitemapUrl) return res.status(400).json({ success: false, error: 'Missing url parameter' });
+    try {
+        const response = await fetch(sitemapUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
+            signal: AbortSignal.timeout(15000)
+        });
+        const xmlText = await response.text();
+        return res.json({ success: true, xmlText });
+    } catch (e) {
+        return res.json({ success: false, error: e.message, xmlText: '' });
     }
 });
 

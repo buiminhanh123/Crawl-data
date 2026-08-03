@@ -366,7 +366,6 @@ export default function AiAssistantModal({
                     }
                 }
             } catch (e) {
-                console.error('[Prompt Profiles Load Error]:', e);
                 try {
                     const stored = localStorage.getItem('ai_prompt_command_profiles');
                     if (stored) {
@@ -495,18 +494,61 @@ export default function AiAssistantModal({
         return letter;
     };
 
-    // Auto-map variables from Row 1 header manually
+    const isTechnicalSelector = (str) => {
+        if (!str || typeof str !== 'string') return false;
+        const s = str.trim();
+        if (!s) return false;
+        if (s.includes('nth-child') || s.includes('nth-of-type') || s.startsWith('//') || s.startsWith('/html') || s.startsWith('/body')) return true;
+        if (s.startsWith('#') || s.startsWith('.') || s.startsWith('a.') || s.startsWith('div.') || s.startsWith('span.') || s.startsWith('p.')) return true;
+        if (s.includes(' > ') || s.includes(' + ') || s.includes('~')) return true;
+        if (s.startsWith('<') && s.endsWith('>')) return true;
+        if (/^\d+$/.test(s) && (s === '246' || s === '245' || s === '247')) return true;
+        return false;
+    };
+
+    const getCleanHeaderRowIndex = (rows) => {
+        if (!Array.isArray(rows) || rows.length === 0) return 0;
+        for (let r = 0; r < Math.min(rows.length, 5); r++) {
+            const row = rows[r];
+            if (!Array.isArray(row)) continue;
+            const vals = row.map(v => v !== null && v !== undefined ? String(v).trim() : '').filter(Boolean);
+            if (vals.length === 0) continue;
+            const hasSelector = vals.some(v => isTechnicalSelector(v));
+            if (!hasSelector) return r;
+        }
+        return 0;
+    };
+
+    const getHeaderTitleForCol = (cIdx) => {
+        if (sheetData && sheetData.length > 0) {
+            const hIdx = getCleanHeaderRowIndex(sheetData);
+            const headerRow = sheetData[hIdx];
+            if (Array.isArray(headerRow)) {
+                const val = headerRow[cIdx];
+                if (val && String(val).trim()) {
+                    const str = String(val).trim();
+                    if (isTechnicalSelector(str)) return '';
+                    return str.length > 25 ? str.slice(0, 22) + '...' : str;
+                }
+            }
+        }
+        return '';
+    };
+
+    // Auto-map variables from Header row manually
     const handleAutoMapFromHeader = () => {
-        if (!sheetData.length || !sheetData[0]) {
+        if (!sheetData.length) {
             alert('Tab này chưa có dữ liệu để ánh xạ từ Header.');
             return;
         }
-        const headerRow = sheetData[0];
+        const hIdx = getCleanHeaderRowIndex(sheetData);
+        const headerRow = sheetData[hIdx] || [];
         const newVars = [];
         headerRow.forEach((cellVal, idx) => {
             if (!cellVal || String(cellVal).trim() === '') return;
             const colLetter = getColLetter(idx);
             const labelText = String(cellVal).trim();
+            if (isTechnicalSelector(labelText)) return;
             const slugName = cleanHeaderToSlug(labelText, colLetter);
             newVars.push({
                 id: Date.now() + idx,
@@ -518,7 +560,7 @@ export default function AiAssistantModal({
         if (newVars.length > 0) {
             setVariables(newVars);
         } else {
-            alert('Hàng 1 chưa có tiêu đề cột để tự động ánh xạ.');
+            alert('Chưa có tiêu đề cột hợp lệ để tự động ánh xạ.');
         }
     };
 
@@ -1096,11 +1138,15 @@ export default function AiAssistantModal({
                                 onChange={e => setTargetColIdx(parseInt(e.target.value))}
                                 style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                             >
-                                {Array.from({ length: Math.max(maxCols, 1) }).map((_, cIdx) => (
-                                    <option key={cIdx} value={cIdx}>
-                                        Cột {getColLetter(cIdx)}
-                                    </option>
-                                ))}
+                                {Array.from({ length: Math.max(maxCols, 1) }).map((_, cIdx) => {
+                                    const letter = getColLetter(cIdx);
+                                    const headerTitle = getHeaderTitleForCol(cIdx);
+                                    return (
+                                        <option key={cIdx} value={cIdx}>
+                                            Cột {letter} {headerTitle ? `— [${headerTitle}]` : ''}
+                                        </option>
+                                    );
+                                })}
                             </select>
                         </div>
 
@@ -1152,16 +1198,16 @@ export default function AiAssistantModal({
                         {/* Variables List Table Matching Image 2 */}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {/* Table Header */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 80px 1fr 34px', gap: 10, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', padding: '0 4px 6px 4px', borderBottom: '1px solid var(--border-color)' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 130px 1fr 34px', gap: 10, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', padding: '0 4px 6px 4px', borderBottom: '1px solid var(--border-color)' }}>
                                 <div>TÊN BIẾN</div>
-                                <div>CỘT</div>
+                                <div>CỘT THAM CHIẾU</div>
                                 <div>BIẾN INPUT</div>
                                 <div></div>
                             </div>
 
                             {/* Table Rows */}
                             {variables.map((v, idx) => (
-                                <div key={v.id ? `mvar-${v.id}-${idx}` : `mvar-idx-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1.2fr 80px 1fr 34px', gap: 10, alignItems: 'center' }}>
+                                <div key={v.id ? `mvar-${v.id}-${idx}` : `mvar-idx-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1.2fr 130px 1fr 34px', gap: 10, alignItems: 'center' }}>
                                     {/* TÊN BIẾN (Title / Header Label) */}
                                     <input
                                         type="text"
@@ -1175,15 +1221,30 @@ export default function AiAssistantModal({
                                         style={{ padding: '6px 10px', fontSize: 12.5, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
                                     />
 
-                                    {/* CỘT (Col letter dropdown) */}
+                                    {/* CỘT THAM CHIẾU (Col letter + Header title dropdown) */}
                                     <select
                                         value={v.col}
-                                        onChange={e => handleUpdateVariable(v.id, { col: e.target.value })}
-                                        style={{ padding: '6px 8px', fontSize: 12.5, fontWeight: 700, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', textAlign: 'center' }}
+                                        onChange={e => {
+                                            const newCol = e.target.value;
+                                            const cIdx = colToIdx(newCol);
+                                            const hTitle = getHeaderTitleForCol(cIdx);
+                                            const updates = { col: newCol };
+                                            if (hTitle && (!v.label || v.label === v.col)) {
+                                                updates.label = hTitle;
+                                                updates.name = cleanHeaderToSlug(hTitle, newCol);
+                                            }
+                                            handleUpdateVariable(v.id, updates);
+                                        }}
+                                        style={{ padding: '6px 8px', fontSize: 12, fontWeight: 700, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', textOverflow: 'ellipsis' }}
                                     >
                                         {Array.from({ length: Math.max(maxCols, 1) }).map((_, cIdx) => {
                                             const letter = getColLetter(cIdx);
-                                            return <option key={letter} value={letter}>{letter}</option>;
+                                            const headerTitle = getHeaderTitleForCol(cIdx);
+                                            return (
+                                                <option key={letter} value={letter}>
+                                                    {letter} {headerTitle ? `(${headerTitle})` : ''}
+                                                </option>
+                                            );
                                         })}
                                     </select>
 

@@ -140,17 +140,38 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
         }
     };
 
+    const isTechnicalSelector = (str) => {
+        if (!str || typeof str !== 'string') return false;
+        const s = str.trim();
+        if (!s) return false;
+        if (s.includes('nth-child') || s.includes('nth-of-type') || s.startsWith('//') || s.startsWith('/html') || s.startsWith('/body')) return true;
+        if (s.startsWith('#') || s.startsWith('.') || s.startsWith('a.') || s.startsWith('div.') || s.startsWith('span.') || s.startsWith('p.')) return true;
+        if (s.includes(' > ') || s.includes(' + ') || s.includes('~')) return true;
+        if (s.startsWith('<') && s.endsWith('>')) return true;
+        if (/^\d+$/.test(s) && (s === '246' || s === '245' || s === '247')) return true;
+        return false;
+    };
+
     const processSheetRows = (sheetsList, hRow, dStartRow) => {
-        const hIdx = Math.max(0, (parseInt(hRow) || 1) - 1);
-        const dStartIdx = Math.max(0, (parseInt(dStartRow) || 2) - 1);
+        const reqHIdx = Math.max(0, (parseInt(hRow) || 1) - 1);
+        const reqDStartIdx = Math.max(0, (parseInt(dStartRow) || 2) - 1);
 
         return sheetsList.map(s => {
-            const rawData = s.data || [];
+            let rawData = s.data || [];
             if (rawData.length === 0) return s;
 
+            // Strip leading technical selector rows if header not manually specified > 1
+            if (reqHIdx === 0 && rawData.length > 1) {
+                const firstRowVals = (rawData[0] || []).map(v => v !== null && v !== undefined ? String(v).trim() : '').filter(Boolean);
+                if (firstRowVals.some(v => isTechnicalSelector(v))) {
+                    rawData = rawData.slice(1);
+                }
+            }
+
             // Pick header row
-            const headerLine = rawData[hIdx] ? [...rawData[hIdx]] : (rawData[0] ? [...rawData[0]] : []);
-            // Pick data rows starting from dStartIdx
+            const headerLine = rawData[reqHIdx] ? [...rawData[reqHIdx]] : (rawData[0] ? [...rawData[0]] : []);
+            // Pick data rows starting from reqDStartIdx
+            const dStartIdx = Math.max(reqHIdx + 1, reqDStartIdx);
             const dataLines = rawData.slice(dStartIdx);
 
             return {

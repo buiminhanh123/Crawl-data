@@ -163,6 +163,9 @@ async function initDatabase() {
     } catch (e) {}
     try {
         db.run('ALTER TABLE product_profiles ADD COLUMN sitemap_url TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN check_config_json TEXT DEFAULT NULL');
     } catch (e) {} // Column may already exist
 
     try {
@@ -917,6 +920,33 @@ const profileQueries = {
         } catch (e) {
             return null;
         }
+    },
+
+    saveCheckConfig: (slug, configObj) => {
+        db.run(
+            'UPDATE product_profiles SET check_config_json = ?, updated_at = datetime("now") WHERE slug = ?',
+            [JSON.stringify(configObj), slug]
+        );
+        saveDatabase();
+    },
+
+    getCheckConfig: (slug) => {
+        const res = db.exec('SELECT check_config_json, target_url, sitemap_url FROM product_profiles WHERE slug = ?', [slug]);
+        if (!res[0]?.values[0]) return null;
+        let config = null;
+        if (res[0].values[0][0]) {
+            try {
+                config = JSON.parse(res[0].values[0][0]);
+            } catch (e) {}
+        }
+        return {
+            mode: config?.mode || 'sitemap',
+            sitemapUrl: config?.sitemapUrl || res[0].values[0][2] || '',
+            apiUrl: config?.apiUrl || '',
+            consumerKey: config?.consumerKey || '',
+            consumerSecret: config?.consumerSecret || '',
+            targetUrl: res[0].values[0][1] || ''
+        };
     }
 };
 

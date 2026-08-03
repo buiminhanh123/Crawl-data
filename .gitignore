@@ -56,8 +56,10 @@ yarn-error.log*
 *.tmp
 *.temp
 *.har
+*.xlsx
 crawler_test.log
 scratch/
+scratch*
 
 # ==========================================
 # 6. Python Cache & Virtual Environments

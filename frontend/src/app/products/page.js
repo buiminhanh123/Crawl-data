@@ -43,7 +43,9 @@ import {
     Send,
     Clock,
     XCircle,
-    AlertTriangle
+    AlertTriangle,
+    Settings,
+    RefreshCw
 } from 'lucide-react';
 
 function ProductsContent() {
@@ -112,6 +114,8 @@ function ProductsContent() {
     const [showPostingHistoryModal, setShowPostingHistoryModal] = useState(false);
     const [historySearchTerm, setHistorySearchTerm] = useState('');
     const [historyStatusFilter, setHistoryStatusFilter] = useState('all');
+    const [historyPage, setHistoryPage] = useState(1);
+    const [historyPageSize, setHistoryPageSize] = useState('200');
 
 
 
@@ -183,13 +187,19 @@ function ProductsContent() {
         return totalProducts || 0;
     }, [profileSheets, totalProducts]);
 
+    // Custom posting logs state
+    const [customPostingLogs, setCustomPostingLogs] = useState(null);
+
     // Posting logs & summary statistics (Posted - Pending - Error)
     const { postedCount, pendingCount, postingErrorCount, filteredHistoryLogs } = useMemo(() => {
-        let logs = [];
-        try {
-            const saved = localStorage.getItem(`posting_logs_${profileSlug}`);
-            if (saved) logs = JSON.parse(saved);
-        } catch (e) {}
+        let logs = customPostingLogs;
+        if (!logs) {
+            try {
+                const saved = localStorage.getItem(`posting_logs_${profileSlug}`);
+                if (saved) logs = JSON.parse(saved);
+            } catch (e) {}
+        }
+        if (!logs) logs = [];
 
         // Auto-generate realistic test history entries from active sheet if no logs saved yet
         if (logs.length === 0 && profileSheets && profileSheets.length > 0) {
@@ -243,6 +253,19 @@ function ProductsContent() {
             allPostingLogs: logs
         };
     }, [profileSlug, profileSheets, totalProductsCount, historySearchTerm, historyStatusFilter]);
+
+    const paginatedHistoryLogs = useMemo(() => {
+        if (historyPageSize === 'all') return filteredHistoryLogs;
+        const size = parseInt(historyPageSize) || 200;
+        const start = (historyPage - 1) * size;
+        return filteredHistoryLogs.slice(start, start + size);
+    }, [filteredHistoryLogs, historyPage, historyPageSize]);
+
+    const historyTotalPages = useMemo(() => {
+        if (historyPageSize === 'all' || !filteredHistoryLogs.length) return 1;
+        const size = parseInt(historyPageSize) || 200;
+        return Math.ceil(filteredHistoryLogs.length / size);
+    }, [filteredHistoryLogs, historyPageSize]);
 
     // HAR Analysis Report state
     const [harReport, setHarReport] = useState(null);
@@ -352,6 +375,188 @@ function ProductsContent() {
     const [pageColHeaderContextMenu, setPageColHeaderContextMenu] = useState(null); // { x, y, cIdx, currentTitle }
     const [renameColTarget, setRenameColTarget] = useState(null); // { cIdx, currentTitle }
     const [renameColInput, setRenameColInput] = useState('');
+
+    // Helper alias for showToast
+    const showToast = toast;
+
+    // Publication Status Check State
+    const [showCheckConfigModal, setShowCheckConfigModal] = useState(false);
+    const [checkConfig, setCheckConfig] = useState({ mode: 'sitemap', sitemapUrl: '', apiUrl: '', consumerKey: '', consumerSecret: '' });
+    const [isCheckingPublication, setIsCheckingPublication] = useState(false);
+
+    const handleLoadCheckConfig = async () => {
+        if (!profileSlug) return;
+        try {
+            const cached = localStorage.getItem(`check_config_${profileSlug}`);
+            if (cached) {
+                const parsed = JSON.parse(cached);
+                if (parsed) {
+                    setCheckConfig({
+                        mode: parsed.mode || 'sitemap',
+                        sitemapUrl: parsed.sitemapUrl || '',
+                        apiUrl: parsed.apiUrl || '',
+                        consumerKey: parsed.consumerKey || '',
+                        consumerSecret: parsed.consumerSecret || '',
+                        uploadedFileName: parsed.uploadedFileName || '',
+                        jsonContent: parsed.jsonContent || ''
+                    });
+                }
+            }
+        } catch (e) {}
+
+        try {
+            const res = await fetchApi(`/api/products/profiles/${profileSlug}/check-config`);
+            if (res?.success && res.data) {
+                setCheckConfig(prev => ({
+                    mode: res.data.mode || prev.mode || 'sitemap',
+                    sitemapUrl: res.data.sitemapUrl || prev.sitemapUrl || '',
+                    apiUrl: res.data.apiUrl || prev.apiUrl || '',
+                    consumerKey: res.data.consumerKey || prev.consumerKey || '',
+                    consumerSecret: res.data.consumerSecret || prev.consumerSecret || '',
+                    uploadedFileName: prev.uploadedFileName || '',
+                    jsonContent: prev.jsonContent || ''
+                }));
+            }
+        } catch (e) {}
+    };
+
+    const handleOpenCheckConfigModal = () => {
+        handleLoadCheckConfig();
+        setShowCheckConfigModal(true);
+    };
+
+    const handleSaveCheckConfig = async () => {
+        if (!profileSlug) return;
+        try {
+            localStorage.setItem(`check_config_${profileSlug}`, JSON.stringify(checkConfig));
+        } catch (e) {}
+
+        try {
+            await fetchApi(`/api/products/profiles/${profileSlug}/check-config`, {
+                method: 'POST',
+                body: JSON.stringify(checkConfig)
+            });
+        } catch (e) {}
+
+        toast('✅ Đã lưu Cấu Hình Kiểm Tra Đăng Bài!', 'success');
+        setShowCheckConfigModal(false);
+    };
+
+    const handleRunPublicationCheck = async () => {
+        if (!profileSlug) return;
+        setIsCheckingPublication(true);
+        try {
+            let res = null;
+            try {
+                res = await fetchApi(`/api/products/profiles/${profileSlug}/check-publication-status`, {
+                    method: 'POST',
+                    body: JSON.stringify(checkConfig)
+                });
+            } catch (err) {}
+
+            let scannedLogs = null;
+            if (res?.success && Array.isArray(res.logs) && res.logs.length > 0) {
+                scannedLogs = res.logs;
+            } else {
+                // Client-side scanning fallback
+                const sheets = profileSheets || [];
+                let productItems = [];
+                sheets.forEach(sheet => {
+                    const rows = sheet.data || [];
+                    if (rows.length < 2) return;
+                    const headers = (rows[0] || []).map(h => String(h || '').trim().toLowerCase());
+                    let modelColIdx = headers.findIndex(h => h.includes('model') || h.includes('mã') || h.includes('sku') || h.includes('part number'));
+                    if (modelColIdx === -1) modelColIdx = 0;
+
+                    let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
+                    if (nameColIdx === -1) nameColIdx = 1;
+
+                    for (let r = 1; r < rows.length; r++) {
+                        const row = rows[r];
+                        if (!Array.isArray(row)) continue;
+                        const model = String(row[modelColIdx] || row[0] || row[1] || '').trim();
+                        const name = String(row[nameColIdx] || row[1] || row[0] || '').trim();
+                        if (model || name) {
+                            productItems.push({ rowIdx: r, model: model || name, name: name || model });
+                        }
+                    }
+                });
+
+                if (checkConfig.mode === 'sitemap') {
+                    let xmlText = currentProfile?.sitemap_xml || '';
+                    let targetSitemapUrl = checkConfig.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || '';
+                    if (targetSitemapUrl && !targetSitemapUrl.endsWith('.xml') && !targetSitemapUrl.includes('sitemap')) {
+                        targetSitemapUrl = targetSitemapUrl.replace(/\/$/, '') + '/sitemap.xml';
+                    }
+                    if (targetSitemapUrl && !xmlText) {
+                        try {
+                            const proxyRes = await fetchApi(`/api/products/proxy-sitemap?url=${encodeURIComponent(targetSitemapUrl)}`);
+                            if (proxyRes?.success && proxyRes.xmlText) {
+                                xmlText = proxyRes.xmlText;
+                            }
+                        } catch (e) {
+                            xmlText = '';
+                        }
+                    }
+                    const locMatches = xmlText ? (xmlText.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || []) : [];
+                    const foundUrls = locMatches.map(m => m.replace(/<\/?loc>/gi, '').trim().toLowerCase());
+                    scannedLogs = productItems.map(p => {
+                        const modelSlug = p.model.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                        const isFound = foundUrls.length > 0 && (foundUrls.some(u => u.includes(modelSlug)) || foundUrls.some(u => u.includes(p.model.toLowerCase())));
+                        const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                        return {
+                            id: `log_${p.rowIdx}_${Date.now()}`,
+                            posted_at: isFound ? nowStr : `Dự kiến: ${nowStr}`,
+                            model: p.model,
+                            name: p.name,
+                            platform: 'Website (Sitemap)',
+                            status: isFound ? 'posted' : 'pending'
+                        };
+                    });
+                } else {
+                    let cmsSkuSet = new Set();
+                    if (checkConfig.jsonContent) {
+                        try {
+                            const parsed = JSON.parse(checkConfig.jsonContent);
+                            const list = Array.isArray(parsed) ? parsed : (parsed.products || parsed.data || [parsed]);
+                            list.forEach(item => {
+                                const sku = String(item.sku || item.model || item.slug || item.name || item.product_name || item.id || '').trim().toLowerCase();
+                                if (sku) cmsSkuSet.add(sku);
+                            });
+                        } catch (e) {}
+                    }
+                    scannedLogs = productItems.map(p => {
+                        const modelKey = p.model.trim().toLowerCase();
+                        const nameKey = p.name.trim().toLowerCase();
+                        const isFound = cmsSkuSet.has(modelKey) || cmsSkuSet.has(nameKey);
+                        const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                        return {
+                            id: `log_${p.rowIdx}_${Date.now()}`,
+                            posted_at: isFound ? nowStr : `Dự kiến: ${nowStr}`,
+                            model: p.model,
+                            name: p.name,
+                            platform: 'Website (CMS API)',
+                            status: isFound ? 'posted' : 'pending'
+                        };
+                    });
+                }
+            }
+
+            if (scannedLogs) {
+                setCustomPostingLogs(scannedLogs);
+                try {
+                    localStorage.setItem(`posting_logs_${profileSlug}`, JSON.stringify(scannedLogs));
+                } catch (e) {}
+                const postedCount = scannedLogs.filter(l => l.status === 'posted').length;
+                const pendingCount = scannedLogs.filter(l => l.status === 'pending').length;
+                toast(`🎉 Kiểm tra xong! Đã đăng: ${postedCount} sản phẩm, Chưa đăng: ${pendingCount} sản phẩm.`, 'success');
+            }
+        } catch (e) {
+            toast(e.message || '❌ Lỗi khi kết nối kiểm tra!', 'danger');
+        } finally {
+            setIsCheckingPublication(false);
+        }
+    };
 
 
     const handleRenameSheetColumn = async (cIdx, newTitle) => {
@@ -1608,7 +1813,7 @@ function ProductsContent() {
     return (
         <div className="page-content">
             {/* Inline Toasts */}
-            <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 100000000, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {toasts.map(t => (
                     <div key={t.id} className={`toast toast-${t.type}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 20px', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary)', boxShadow: 'var(--shadow-lg)', borderLeft: '4px solid' }}>
                         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{t.message}</span>
@@ -1630,30 +1835,6 @@ function ProductsContent() {
                     <button 
                         type="button"
                         className="btn"
-                        onClick={() => toast(`Sẵn sàng kích hoạt Crawl cho ${currentProfile?.name || 'Profile'}`, 'info')}
-                        style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: 8, 
-                            background: 'var(--bg-card)', 
-                            border: '1px solid var(--border-color)', 
-                            color: 'var(--text-primary)', 
-                            padding: '9px 14px', 
-                            borderRadius: 'var(--radius-md)', 
-                            fontWeight: 500, 
-                            fontSize: 13,
-                            cursor: 'pointer',
-                            boxShadow: 'var(--shadow-sm)'
-                        }}
-                    >
-                        <Play size={14} style={{ color: '#16a34a' }} /> Bắt đầu Crawl
-                    </button>
-
-
-
-                    <button 
-                        type="button"
-                        className="btn"
                         onClick={() => setShowPostingHistoryModal(true)}
                         style={{ 
                             display: 'flex', 
@@ -1671,49 +1852,6 @@ function ProductsContent() {
                         }}
                     >
                         <History size={15} style={{ color: 'var(--accent)' }} /> Xem Lịch Sử & Tiến Độ Đăng
-                    </button>
-
-                    <button 
-                        type="button"
-                        className="btn"
-                        onClick={() => setShowImportModal(true)}
-                        style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: 8, 
-                            background: 'var(--bg-card)', 
-                            border: '1px solid var(--border-color)', 
-                            color: 'var(--text-primary)', 
-                            padding: '9px 14px', 
-                            borderRadius: 'var(--radius-md)', 
-                            fontWeight: 500, 
-                            fontSize: 13,
-                            cursor: 'pointer',
-                            boxShadow: 'var(--shadow-sm)'
-                        }}
-                    >
-                        <FileSpreadsheet size={14} style={{ color: '#0284c7' }} /> Nhập file excel/link ggsheet
-                    </button>
-
-                    <button 
-                        className="btn btn-primary" 
-                        onClick={handleExport}
-                        disabled={products.length === 0}
-                        style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: 8,
-                            background: 'var(--gradient-primary)',
-                            border: 'none',
-                            color: 'white',
-                            padding: '9px 16px',
-                            borderRadius: 'var(--radius-md)',
-                            cursor: 'pointer',
-                            fontWeight: 500,
-                            fontSize: 13
-                        }}
-                    >
-                        <Download size={14} /> Export to Excel
                     </button>
                 </div>
             </div>
@@ -1871,7 +2009,7 @@ function ProductsContent() {
                                             type="text"
                                             value={sheetSearchQuery}
                                             onChange={e => setSheetSearchQuery(e.target.value)}
-                                            placeholder="🔍 Tìm nhanh..."
+                                            placeholder="Tìm nhanh..."
                                             style={{ padding: '4px 6px 4px 26px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border-color)', background: '#ffffff', color: 'var(--text-primary)', width: 150 }}
                                         />
                                         {sheetSearchQuery && (
@@ -1885,19 +2023,19 @@ function ProductsContent() {
                                     <button
                                         type="button"
                                         onClick={handleUndo}
-                                        style={{ padding: '4px 9px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                        style={{ padding: '5px 8px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                                         title="Hoàn tác (Ctrl+Z)"
                                     >
-                                        <Undo2 size={12} /> Hoàn tác
+                                        <Undo2 size={14} />
                                     </button>
 
                                     <button
                                         type="button"
                                         onClick={handleRedo}
-                                        style={{ padding: '4px 9px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                        style={{ padding: '5px 8px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                                         title="Khôi phục (Ctrl+Y)"
                                     >
-                                        <Redo2 size={12} /> Khôi phục
+                                        <Redo2 size={14} />
                                     </button>
 
                                      <button
@@ -2357,10 +2495,13 @@ function ProductsContent() {
                                                                 onMouseDown={(e) => handleRowMouseDown(rIdx, e)}
                                                                 onMouseEnter={() => handleRowMouseEnter(rIdx)}
                                                                 style={{ 
-                                                                    position: 'relative', 
+                                                                    position: 'sticky',
+                                                                    left: 0,
+                                                                    zIndex: isRowPinned ? 9 : 8,
+                                                                    background: isRowSelected ? '#dbeafe' : isRowPinned ? '#fef3c7' : '#f8fafc',
                                                                     userSelect: 'none', 
                                                                     cursor: 'pointer',
-                                                                    ...(isRowSelected ? { background: '#dbeafe', fontWeight: 700, color: '#1e40af', borderLeft: '3px solid #2563eb' } : isRowPinned ? { background: '#fef3c7', fontWeight: 700, color: '#b45309' } : {}) 
+                                                                    ...(isRowSelected ? { fontWeight: 700, color: '#1e40af', borderLeft: '3px solid #2563eb' } : isRowPinned ? { fontWeight: 700, color: '#b45309' } : {}) 
                                                                 }}
                                                             >
                                                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, width: '100%', padding: '0 2px' }}>
@@ -4217,54 +4358,129 @@ function ProductsContent() {
                                 </select>
                             </div>
 
-                            {/* History Table */}
-                            <div style={{ border: '1px solid var(--border-color)', borderRadius: 10, overflow: 'hidden' }}>
+                            {/* History Table Container with Scroll & Sticky Header */}
+                            <div style={{ border: '1px solid var(--border-color)', borderRadius: 10, overflowY: 'auto', maxHeight: '440px', position: 'relative' }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, textAlign: 'left' }}>
-                                    <thead>
+                                    <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-primary, #f1f5f9)', boxShadow: '0 1px 2px rgba(0,0,0,0.06)' }}>
                                         <tr style={{ background: 'var(--bg-primary, #f1f5f9)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 700 }}>
                                             <th style={{ padding: '10px 14px' }}>STT</th>
                                             <th style={{ padding: '10px 14px' }}>Ngày & Thời gian đăng</th>
                                             <th style={{ padding: '10px 14px' }}>Model / Mã SP</th>
                                             <th style={{ padding: '10px 14px' }}>Tên Sản Phẩm</th>
                                             <th style={{ padding: '10px 14px' }}>Kênh Đăng</th>
-                                            <th style={{ padding: '10px 14px' }}>Trạng Thái</th>
+                                            <th style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>Trạng Thái</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredHistoryLogs.length === 0 ? (
+                                        {paginatedHistoryLogs.length === 0 ? (
                                             <tr>
                                                 <td colSpan={6} style={{ padding: 30, textAlign: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                                                     Không tìm thấy nhật ký phù hợp.
                                                 </td>
                                             </tr>
                                         ) : (
-                                            filteredHistoryLogs.map((item, idx) => (
-                                                <tr key={item.id || idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                                                    <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{idx + 1}</td>
-                                                    <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{item.posted_at || '—'}</td>
-                                                    <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--accent)' }}>{item.model || '—'}</td>
-                                                    <td style={{ padding: '10px 14px', color: 'var(--text-primary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name || '—'}</td>
-                                                    <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>{item.platform || 'Website'}</td>
-                                                    <td style={{ padding: '10px 14px' }}>
-                                                        {item.status === 'posted' ? (
-                                                            <span style={{ padding: '3px 8px', borderRadius: 6, background: 'rgba(34, 197, 94, 0.1)', color: '#16a34a', fontWeight: 700, fontSize: 11, border: '1px solid rgba(34, 197, 94, 0.3)' }}>✅ Đã đăng</span>
-                                                        ) : item.status === 'error' ? (
-                                                            <span style={{ padding: '3px 8px', borderRadius: 6, background: 'rgba(239, 68, 68, 0.1)', color: '#dc2626', fontWeight: 700, fontSize: 11, border: '1px solid rgba(239, 68, 68, 0.3)' }}>🔴 Lỗi</span>
-                                                        ) : (
-                                                            <span style={{ padding: '3px 8px', borderRadius: 6, background: 'rgba(245, 158, 11, 0.1)', color: '#d97706', fontWeight: 700, fontSize: 11, border: '1px solid rgba(245, 158, 11, 0.3)' }}>⏳ Chưa đăng</span>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            ))
+                                            paginatedHistoryLogs.map((item, idx) => {
+                                                const globalIdx = historyPageSize === 'all' ? idx + 1 : (historyPage - 1) * parseInt(historyPageSize) + idx + 1;
+                                                return (
+                                                    <tr key={item.id || idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                        <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{globalIdx}</td>
+                                                        <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{item.posted_at || '—'}</td>
+                                                        <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--accent)' }}>{item.model || '—'}</td>
+                                                        <td style={{ padding: '10px 14px', color: 'var(--text-primary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name || '—'}</td>
+                                                        <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{item.platform || 'Website'}</td>
+                                                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                                                            {item.status === 'posted' ? (
+                                                                <span style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(34, 197, 94, 0.1)', color: '#15803d', fontWeight: 700, fontSize: 11.5, border: '1px solid rgba(34, 197, 94, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>✅ Đã đăng</span>
+                                                            ) : item.status === 'error' ? (
+                                                                <span style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(239, 68, 68, 0.1)', color: '#b91c1c', fontWeight: 700, fontSize: 11.5, border: '1px solid rgba(239, 68, 68, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>🔴 Lỗi</span>
+                                                            ) : (
+                                                                <span style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(245, 158, 11, 0.1)', color: '#b45309', fontWeight: 700, fontSize: 11.5, border: '1px solid rgba(245, 158, 11, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>⏳ Chưa đăng</span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
                                         )}
                                     </tbody>
                                 </table>
                             </div>
 
+                            {/* Modal Table Pagination Bar */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 4px', fontSize: 12.5, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', marginTop: 4 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    <span>Hiển thị:</span>
+                                    <select
+                                        value={historyPageSize}
+                                        onChange={(e) => {
+                                            setHistoryPageSize(e.target.value);
+                                            setHistoryPage(1);
+                                        }}
+                                        style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', fontSize: 12, color: 'var(--text-primary)', cursor: 'pointer', outline: 'none' }}
+                                    >
+                                        <option value="50">50 SP / Trang</option>
+                                        <option value="100">100 SP / Trang</option>
+                                        <option value="200">200 SP / Trang</option>
+                                        <option value="all">Tất cả ({filteredHistoryLogs.length} SP)</option>
+                                    </select>
+                                    <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                                        {historyPageSize === 'all'
+                                            ? `Hiển thị tất cả ${filteredHistoryLogs.length} sản phẩm`
+                                            : `SP ${filteredHistoryLogs.length === 0 ? 0 : (historyPage - 1) * parseInt(historyPageSize) + 1} - ${Math.min(historyPage * parseInt(historyPageSize), filteredHistoryLogs.length)} / Tổng ${filteredHistoryLogs.length} SP`
+                                        }
+                                    </span>
+                                </div>
+
+                                {historyPageSize !== 'all' && historyTotalPages > 1 && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <button
+                                            type="button"
+                                            disabled={historyPage <= 1}
+                                            onClick={() => setHistoryPage(prev => Math.max(1, prev - 1))}
+                                            style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', fontSize: 12, color: historyPage <= 1 ? 'var(--text-muted)' : 'var(--text-primary)', cursor: historyPage <= 1 ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                                        >
+                                            ◀ Trang trước
+                                        </button>
+                                        <span style={{ fontWeight: 700, fontSize: 12, padding: '0 4px', color: 'var(--text-primary)' }}>
+                                            Trang {historyPage} / {historyTotalPages}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            disabled={historyPage >= historyTotalPages}
+                                            onClick={() => setHistoryPage(prev => Math.min(historyTotalPages, prev + 1))}
+                                            style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', fontSize: 12, color: historyPage >= historyTotalPages ? 'var(--text-muted)' : 'var(--text-primary)', cursor: historyPage >= historyTotalPages ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                                        >
+                                            Trang sau ▶
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
                         </div>
 
                         {/* Modal Footer */}
-                        <div style={{ padding: '14px 24px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-primary)', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                        <div style={{ padding: '14px 24px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={handleOpenCheckConfigModal}
+                                    style={{ fontSize: 13, padding: '8px 16px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                                >
+                                    <Settings size={15} /> ⚙️ Cấu Hình Kiểm Tra
+                                </button>
+
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleRunPublicationCheck}
+                                    disabled={isCheckingPublication}
+                                    style={{ fontSize: 13, padding: '8px 18px', fontWeight: 700, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: 6, cursor: isCheckingPublication ? 'not-allowed' : 'pointer' }}
+                                >
+                                    {isCheckingPublication ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={15} />}
+                                    {isCheckingPublication ? 'Đang Kiểm Tra...' : '🔍 Kiểm Tra SP Đã Đăng Web'}
+                                </button>
+                            </div>
+
                             <button
                                 type="button"
                                 className="btn btn-secondary"
@@ -4273,6 +4489,195 @@ function ProductsContent() {
                             >
                                 Đóng
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal Cấu Hình Kiểm Tra Đăng Bài Web */}
+            {showCheckConfigModal && (
+                <div className="modal-backdrop" onClick={() => setShowCheckConfigModal(false)} style={{ position: 'fixed', inset: 0, zIndex: 9999999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 500, padding: 24, boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--border-color)', borderRadius: 16, background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <span style={{ fontWeight: 800, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
+                                <Settings size={18} style={{ color: 'var(--accent)' }} /> ⚙️ Cấu Hình Kiểm Tra Đăng Bài Web
+                            </span>
+                            <button onClick={() => setShowCheckConfigModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}><X size={18} /></button>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            <div>
+                                <label style={{ fontSize: 13, fontWeight: 700, display: 'block', marginBottom: 8, color: 'var(--text-secondary)' }}>
+                                    Chọn Chế Độ Quét:
+                                </label>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCheckConfig(prev => ({ ...prev, mode: 'sitemap' }))}
+                                        style={{
+                                            padding: '12px', borderRadius: 10, border: `2px solid ${checkConfig.mode === 'sitemap' ? 'var(--accent)' : 'var(--border-color)'}`,
+                                            background: checkConfig.mode === 'sitemap' ? 'rgba(99,102,241,0.1)' : 'var(--bg-secondary)',
+                                            color: checkConfig.mode === 'sitemap' ? 'var(--accent)' : 'var(--text-primary)',
+                                            fontWeight: 700, fontSize: 13, cursor: 'pointer', textAlign: 'left'
+                                        }}
+                                    >
+                                        ⚡ Quét Nhanh (Sitemap)
+                                        <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.8, marginTop: 4 }}>Tự nạp XML sitemap website</div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCheckConfig(prev => ({ ...prev, mode: 'cms_api' }))}
+                                        style={{
+                                            padding: '12px', borderRadius: 10, border: `2px solid ${checkConfig.mode === 'cms_api' ? 'var(--accent)' : 'var(--border-color)'}`,
+                                            background: checkConfig.mode === 'cms_api' ? 'rgba(99,102,241,0.1)' : 'var(--bg-secondary)',
+                                            color: checkConfig.mode === 'cms_api' ? 'var(--accent)' : 'var(--text-primary)',
+                                            fontWeight: 700, fontSize: 13, cursor: 'pointer', textAlign: 'left'
+                                        }}
+                                    >
+                                        🎯 Quét API Web (Custom / API JSON)
+                                        <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.8, marginTop: 4 }}>Dùng API JSON do Quản lý cấp hoặc REST API</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {checkConfig.mode === 'sitemap' ? (
+                                <div>
+                                    <label style={{ fontSize: 12.5, fontWeight: 600, display: 'block', marginBottom: 4, color: 'var(--text-secondary)' }}>
+                                        URL File Sitemap.xml Website:
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={checkConfig.sitemapUrl}
+                                        onChange={e => setCheckConfig(prev => ({ ...prev, sitemapUrl: e.target.value }))}
+                                        placeholder="https://dacoautomation.io.vn/sitemap.xml"
+                                        style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', fontSize: 13, color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                                    />
+                                    <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                                        💡 Chế độ Quét Nhanh bóc tách tự động từ sitemap.xml của website. Phù hợp cho cả Web tự code lẫn WordPress/CMS.
+                                    </p>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Upload / Dán File API JSON do quản lý cấp */}
+                                    <div style={{
+                                        background: checkConfig.uploadedFileName ? 'rgba(34, 197, 94, 0.08)' : 'var(--bg-primary)',
+                                        padding: '12px 14px',
+                                        borderRadius: 10,
+                                        border: `1.5px dashed ${checkConfig.uploadedFileName ? '#16a34a' : 'var(--accent)'}`
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                            <span style={{ fontSize: 12.5, fontWeight: 700, color: checkConfig.uploadedFileName ? '#15803d' : 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                {checkConfig.uploadedFileName ? '✅ Đã kích hoạt File API JSON Web Tự Code!' : '📁 Tải File API JSON do Quản lý cấp (Dành cho Web Tự Code):'}
+                                            </span>
+                                            <label style={{ cursor: 'pointer', padding: '4px 12px', background: checkConfig.uploadedFileName ? '#16a34a' : 'var(--accent)', color: 'white', borderRadius: 6, fontSize: 11.5, fontWeight: 700 }}>
+                                                {checkConfig.uploadedFileName ? 'Đổi File Khác' : 'Tải File JSON lên'}
+                                                <input
+                                                    type="file"
+                                                    accept=".json,application/json"
+                                                    style={{ display: 'none' }}
+                                                    onChange={e => {
+                                                        const file = e.target.files?.[0];
+                                                        if (!file) return;
+                                                        const reader = new FileReader();
+                                                        reader.onload = (evt) => {
+                                                            try {
+                                                                const content = evt.target?.result;
+                                                                const parsed = JSON.parse(content);
+                                                                setCheckConfig(prev => ({
+                                                                    ...prev,
+                                                                    mode: 'cms_api',
+                                                                    apiUrl: parsed.apiUrl || parsed.api_url || parsed.url || prev.apiUrl,
+                                                                    consumerKey: parsed.consumerKey || parsed.consumer_key || parsed.ck || prev.consumerKey,
+                                                                    consumerSecret: parsed.consumerSecret || parsed.consumer_secret || parsed.cs || prev.consumerSecret,
+                                                                    jsonContent: content,
+                                                                    uploadedFileName: file.name
+                                                                }));
+                                                                showToast(`✅ Nạp thành công file API JSON: ${file.name}`, 'success');
+                                                            } catch (err) {
+                                                                showToast('⚠️ File JSON không đúng định dạng!', 'warning');
+                                                            }
+                                                        };
+                                                        reader.readAsText(file);
+                                                    }}
+                                                />
+                                            </label>
+                                        </div>
+                                        {checkConfig.uploadedFileName ? (
+                                            <div style={{ fontSize: 12, fontWeight: 600, color: '#15803d', display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <span>📄 Tệp cấu hình: <strong>{checkConfig.uploadedFileName}</strong></span>
+                                                    <span style={{ fontSize: 11, fontWeight: 500, color: '#16a34a', background: 'rgba(34, 197, 94, 0.15)', padding: '2px 8px', borderRadius: 10 }}>Web Tự Code Ready</span>
+                                                </div>
+                                                <span style={{ fontSize: 11.5, color: '#166534', fontWeight: 500 }}>
+                                                    💡 Hệ thống sẽ ưu tiên sử dụng Endpoint & Mã API trong file JSON này để quét Web tự code của bạn.
+                                                </span>
+                                            </div>
+                                        ) : (
+                                            <p style={{ margin: 0, fontSize: 11, color: 'var(--text-secondary)' }}>
+                                                Vì website của bạn là <strong>Web Tự Code (Custom Website)</strong>, hãy bấm <strong>Tải File JSON lên</strong> để ứng dụng sử dụng cấu hình do Quản lý cấp!
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <label style={{ fontSize: 12.5, fontWeight: 600, display: 'block', marginBottom: 4, color: 'var(--text-secondary)' }}>
+                                            URL Trang Web / API Endpoint Website:
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={checkConfig.apiUrl}
+                                            onChange={e => setCheckConfig(prev => ({ ...prev, apiUrl: e.target.value }))}
+                                            placeholder="https://dacoautomation.io.vn (hoặc https://abc.com)"
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', fontSize: 13, color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                                        />
+                                        <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+                                            💡 <em>Mẹo:</em> Bạn có thể nhập nguyên URL website công ty (ví dụ: <code>https://abc.com</code>). Hệ thống sẽ tự ghép đường dẫn API thích hợp.
+                                        </p>
+                                    </div>
+
+                                    {!checkConfig.uploadedFileName && (
+                                        <>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                                <div>
+                                                    <label style={{ fontSize: 11.5, fontWeight: 600, display: 'block', marginBottom: 4, color: 'var(--text-secondary)' }}>
+                                                        API Key / Consumer Key:
+                                                    </label>
+                                                    <input
+                                                        type="text"
+                                                        value={checkConfig.consumerKey}
+                                                        onChange={e => setCheckConfig(prev => ({ ...prev, consumerKey: e.target.value }))}
+                                                        placeholder="Mã API Key (nếu có)"
+                                                        style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', fontSize: 12.5, color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: 11.5, fontWeight: 600, display: 'block', marginBottom: 4, color: 'var(--text-secondary)' }}>
+                                                        API Secret / Token:
+                                                    </label>
+                                                    <input
+                                                        type="password"
+                                                        value={checkConfig.consumerSecret}
+                                                        onChange={e => setCheckConfig(prev => ({ ...prev, consumerSecret: e.target.value }))}
+                                                        placeholder="Mã API Secret (nếu có)"
+                                                        style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', fontSize: 12.5, color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                                                💡 Phù hợp cho cả Web Tự Code (Custom API) và WordPress/WooCommerce/Shopify.
+                                            </p>
+                                        </>
+                                    )}
+                                </>
+                            )}
+
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+                                <button type="button" className="btn btn-ghost" onClick={() => setShowCheckConfigModal(false)}>Hủy</button>
+                                <button type="button" className="btn btn-primary" onClick={handleSaveCheckConfig} style={{ background: 'var(--gradient-primary)', color: 'white', border: 'none', padding: '8px 20px' }}>
+                                    Lưu Cấu Hình
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -7,7 +7,7 @@ import {
     PenLine, ChevronDown, Loader2, X, Plus, Play, Square,
     RefreshCw, Save, Check, Zap, FileSpreadsheet, Settings,
     Info, User, AlertCircle, RotateCcw, Bell, CheckCircle2,
-    Pause, Sliders, Layers, ArrowRight, Bookmark, Filter, ShieldCheck
+    Pause, Sliders, Layers, ArrowRight, Bookmark, Filter, ShieldCheck, Wand2
 } from 'lucide-react';
 import { getGlobalAiRunner } from '@/lib/globalAiRunner';
 import ExportExcelModal from '@/components/ExportExcelModal';
@@ -483,7 +483,6 @@ export default function AIAssistantPage() {
                         }
                     }
                 } catch (e) {
-                    console.error('Failed to fetch AI prompt profiles from server:', e);
                     try {
                         const legacy = localStorage.getItem('ai_prompt_saved_profiles') || localStorage.getItem('ai_prompt_command_profiles');
                         if (legacy) {
@@ -523,6 +522,102 @@ export default function AIAssistantPage() {
     const handleProfileChange = (slug) => {
         setSelectedProfileSlug(slug);
         fetchProfileSheets(slug);
+    };
+
+    const getColLetter = (colIndex) => {
+        let temp, letter = '';
+        while (colIndex >= 0) {
+            temp = colIndex % 26;
+            letter = String.fromCharCode(temp + 65) + letter;
+            colIndex = Math.floor(colIndex / 26) - 1;
+        }
+        return letter;
+    };
+
+    const colToIdx = (col) => {
+        if (!col) return 0;
+        const c = (col || '').toUpperCase().trim();
+        let r = 0;
+        for (let i = 0; i < c.length; i++) r = r * 26 + c.charCodeAt(i) - 64;
+        return r - 1;
+    };
+
+    const isTechnicalSelector = (str) => {
+        if (!str || typeof str !== 'string') return false;
+        const s = str.trim();
+        if (!s) return false;
+        if (s.includes('nth-child') || s.includes('nth-of-type') || s.startsWith('//') || s.startsWith('/html') || s.startsWith('/body')) return true;
+        if (s.startsWith('#') || s.startsWith('.') || s.startsWith('a.') || s.startsWith('div.') || s.startsWith('span.') || s.startsWith('p.')) return true;
+        if (s.includes(' > ') || s.includes(' + ') || s.includes('~')) return true;
+        if (s.startsWith('<') && s.endsWith('>')) return true;
+        if (/^\d+$/.test(s) && (s === '246' || s === '245' || s === '247')) return true;
+        return false;
+    };
+
+    const getCleanHeaderRowIndex = (rows) => {
+        if (!Array.isArray(rows) || rows.length === 0) return 0;
+        for (let r = 0; r < Math.min(rows.length, 5); r++) {
+            const row = rows[r];
+            if (!Array.isArray(row)) continue;
+            const vals = row.map(v => v !== null && v !== undefined ? String(v).trim() : '').filter(Boolean);
+            if (vals.length === 0) continue;
+            const hasSelector = vals.some(v => isTechnicalSelector(v));
+            if (!hasSelector) return r;
+        }
+        return 0;
+    };
+
+    const getHeaderTitleForCol = (colStr) => {
+        if (!colStr) return '';
+        const cIdx = typeof colStr === 'number' ? colStr : colToIdx(colStr);
+        if (profileSheetsData && profileSheetsData.length > 0) {
+            const activeSheet = profileSheetsData.find(s => selectedSheetNames.includes(s.name)) || profileSheetsData[0];
+            if (activeSheet && Array.isArray(activeSheet.data) && activeSheet.data.length > 0) {
+                const hIdx = getCleanHeaderRowIndex(activeSheet.data);
+                const headerRow = activeSheet.data[hIdx];
+                if (Array.isArray(headerRow) && headerRow[cIdx] !== undefined) {
+                    const title = String(headerRow[cIdx]).trim();
+                    if (title && !isTechnicalSelector(title)) {
+                        return title.length > 25 ? title.slice(0, 22) + '...' : title;
+                    }
+                }
+            }
+        }
+        return '';
+    };
+
+    const handleAutoMapFromHeader = () => {
+        if (!profileSheetsData || profileSheetsData.length === 0) {
+            showToast('Chưa có dữ liệu Sheet nào được nạp.', 'warning');
+            return;
+        }
+        const activeSheet = profileSheetsData.find(s => selectedSheetNames.includes(s.name)) || profileSheetsData[0];
+        if (!activeSheet || !Array.isArray(activeSheet.data) || activeSheet.data.length === 0) {
+            showToast('Tab Sheet này chưa có dữ liệu hàng tiêu đề.', 'warning');
+            return;
+        }
+        const hIdx = getCleanHeaderRowIndex(activeSheet.data);
+        const headerRow = activeSheet.data[hIdx] || [];
+        const newVars = [];
+        headerRow.forEach((cellVal, idx) => {
+            if (!cellVal || String(cellVal).trim() === '') return;
+            const colLetter = getColLetter(idx);
+            const labelText = String(cellVal).trim();
+            if (isTechnicalSelector(labelText)) return;
+            const slugName = toVarName(labelText) || `cot-${colLetter.toLowerCase()}`;
+            newVars.push({
+                id: `var_${Date.now()}_${idx}`,
+                label: labelText,
+                col: colLetter,
+                name: slugName
+            });
+        });
+        if (newVars.length > 0) {
+            setVariables(newVars);
+            showToast(`✅ Đã tự động tạo ${newVars.length} biến từ Header tiêu đề!`, 'success');
+        } else {
+            showToast('Chưa tìm thấy tiêu đề cột hợp lệ.', 'warning');
+        }
     };
 
     // Variable operations
@@ -1072,13 +1167,22 @@ export default function AIAssistantPage() {
                                     <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
                                         📌 Danh Sách Biến Nguồn (Gắn Tên Biến Với Cột Bảng Sheet):
                                     </label>
-                                    <button
-                                        type="button"
-                                        onClick={handleAddVariable}
-                                        style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontWeight: 600, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
-                                    >
-                                        <Plus size={13} /> Thêm Biến Mới
-                                    </button>
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <button
+                                            type="button"
+                                            onClick={handleAutoMapFromHeader}
+                                            style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)', border: '1px solid #ffedd5', borderRadius: 'var(--radius-sm)', fontWeight: 600, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                        >
+                                            <Wand2 size={13} /> ⚡ Tự động map từ Header (Hàng 1)
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddVariable}
+                                            style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                        >
+                                            <Plus size={13} /> Thêm Biến Mới
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1101,14 +1205,29 @@ export default function AIAssistantPage() {
                                             >
                                                 {v.name ? `{${v.name}}` : '{ }'}
                                             </span>
-                                            <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Cột:</span>
-                                            <input
-                                                type="text"
-                                                value={v.col || ''}
-                                                onChange={e => handleUpdateVariable(v.id, idx, 'col', e.target.value.toUpperCase())}
-                                                placeholder="A"
-                                                style={{ width: 44, padding: '5px 6px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', textAlign: 'center', fontWeight: 700, textTransform: 'uppercase' }}
-                                            />
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Cột Tham Chiếu:</span>
+                                            <select
+                                                value={v.col || 'A'}
+                                                onChange={e => {
+                                                    const newCol = e.target.value;
+                                                    handleUpdateVariable(v.id, idx, 'col', newCol);
+                                                    const hTitle = getHeaderTitleForCol(newCol);
+                                                    if (hTitle && (!v.label || v.label === v.col)) {
+                                                        handleLabelChange(v.id, idx, hTitle);
+                                                    }
+                                                }}
+                                                style={{ width: 150, padding: '5px 8px', fontSize: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', fontWeight: 700, textOverflow: 'ellipsis' }}
+                                            >
+                                                {Array.from({ length: 26 }).map((_, cIdx) => {
+                                                    const letter = getColLetter(cIdx);
+                                                    const hTitle = getHeaderTitleForCol(letter);
+                                                    return (
+                                                        <option key={letter} value={letter}>
+                                                            Cột {letter} {hTitle ? `(${hTitle})` : ''}
+                                                        </option>
+                                                    );
+                                                })}
+                                            </select>
                                             {variables.length > 1 && (
                                                 <button type="button" onClick={() => handleRemoveVariable(v.id, idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4, flexShrink: 0 }} title="Xóa biến này">
                                                     <Trash2 size={14} />

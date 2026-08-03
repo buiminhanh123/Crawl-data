@@ -847,6 +847,40 @@ ZH_EN_MAP = {
     '剝紙器': 'Peeler',
     '回捲器': 'Rewinder',
 
+    # Specifications Keys
+    '發光元件': 'Light Source',
+    '發光二極體': 'LED',
+    '紅光二極體': 'Red Light LED',
+    '可見紅光': 'Visible Red Light',
+    '掃描器種類': 'Scanner Type',
+    '景深': 'Depth of Field',
+    '解碼種類': 'Decode Capability',
+    '解碼': 'Decode',
+    '解析度': 'Resolution',
+    '使用介面': 'Interface',
+    '使用界面': 'Interface',
+    '擴充槽': 'Expansion Slot',
+    '擴展插槽': 'Expansion Slot',
+    '像素': 'Pixels',
+    '已停產': '(Discontinued)',
+    '產品說明': 'Product Description',
+    '型號列表': 'Model List',
+    '輕巧易於攜帶的機身': 'Compact Body',
+    '大容量': 'Large Capacity',
+    '微軟視窗': 'Microsoft Windows',
+    '微型': 'Micro',
+    '光學': 'Optical',
+    '對比度': 'Contrast Ratio',
+    '列印對比': 'Print Contrast',
+    '掃描速度': 'Scan Speed',
+    '掃描角度': 'Scan Angle',
+    '讀取角度': 'Reading Angle',
+    '靜電防護': 'ESD Protection',
+    '外殼材質': 'Housing Material',
+    '顏色': 'Color',
+    '線材': 'Cable',
+    '保固': 'Warranty',
+
     # Navigation / Meta
     '公司簡介': 'Company Profile',
     '關於立象': 'About Us',
@@ -1156,6 +1190,14 @@ def extract_download_links(soup):
 async def scrape_product(session, browser, browser_sem, url_info, index, total, mode='full', profile_slug='newland'):
 
     url, category, slug = url_info
+
+    # ── Foreign Locale Check ──────────────────────────────────────
+    FOREIGN_LOCALES = ['/cn/', '/zh/', '/zh-tw/', '/zh-cn/', '/tc/', '/sc/', '/tw/', '/zh_tw/', '/zh_cn/', '/ja/', '/de/', '/fr/', '/es/']
+    url_lower = url.lower()
+    if any(loc in url_lower for loc in FOREIGN_LOCALES) or re.search(r'[\u4e00-\u9fff]', url):
+        log_message(f"[{index}/{total}] Skipping foreign locale URL: {slug} ({url})")
+        update_status("Running", int(index / total * 100), total, index, f"Skipping foreign locale {slug}...", profile_slug)
+        return
 
     # ── Skip check ────────────────────────────────────────────────
     try:

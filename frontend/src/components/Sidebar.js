@@ -45,6 +45,41 @@ export default function Sidebar() {
     const [newTargetUrl, setNewTargetUrl] = useState('');
     const [creating, setCreating] = useState(false);
     const [activeProfileSlug, setActiveProfileSlug] = useState('');
+    const [showCrawlSideview, setShowCrawlSideview] = useState(false);
+    const [showAiSideview, setShowAiSideview] = useState(false);
+
+    const aiAccordionRef = useRef(null);
+    const crawlAccordionRef = useRef(null);
+
+    const toggleAiAccordion = () => {
+        const nextState = !showAiSideview;
+        setShowAiSideview(nextState);
+        if (nextState) {
+            setTimeout(() => {
+                if (showCrawlSideview) {
+                    // Crawl is open underneath -> scroll to bottom so BOTH AI Assit and Crawl are fully visible
+                    crawlAccordionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                } else {
+                    aiAccordionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }, 100);
+        }
+    };
+
+    const toggleCrawlAccordion = () => {
+        const nextState = !showCrawlSideview;
+        setShowCrawlSideview(nextState);
+        if (nextState) {
+            setTimeout(() => {
+                crawlAccordionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }, 100);
+        }
+    };
+
+    const formatCount = (num) => {
+        if (num === null || num === undefined || isNaN(num)) return '0';
+        return Number(num).toLocaleString('vi-VN');
+    };
 
     const completedTimerRef = useRef(null);
 
@@ -383,161 +418,6 @@ export default function Sidebar() {
                                 <span className="icon"><LayoutDashboard size={20} /></span>
                                 <span className="nav-label">Dashboard</span>
                             </Link>
-
-                            {/* ════════════════════════════════════════════════════════════ */}
-                            {/* CRAWLER PROCESS CARD ON LEFT SIDEBAR (TIẾN TRÌNH CRAWL)      */}
-                            {/* ════════════════════════════════════════════════════════════ */}
-                            {!isCollapsed && (
-                                <div style={{
-                                    margin: '10px 10px 14px 10px',
-                                    padding: '12px',
-                                    background: 'var(--bg-card, #ffffff)',
-                                    borderRadius: '12px',
-                                    border: '2px solid #f97316',
-                                    boxShadow: '0 4px 16px rgba(249, 115, 22, 0.08)',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '10px',
-                                    fontSize: '12px'
-                                }}>
-                                    {/* Title */}
-                                    <div style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--text-primary, #0f172a)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        🚀 Tiến trình Crawl
-                                    </div>
-
-                                    {/* Profile & Waiting Info */}
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '11.5px', color: 'var(--text-secondary, #475569)' }}>
-                                        <div>
-                                            <strong>Profile:</strong> <span style={{ color: '#f97316', fontWeight: 700 }}>{profiles.find(p => p.slug === crawlerStatus?.profile_slug)?.name || crawlerStatus?.profile_slug || 'Chưa chọn'}</span>
-                                        </div>
-                                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                            <strong>Waiting:</strong> <span style={{ color: 'var(--text-muted, #94a3b8)' }}>{profiles.filter(p => p.slug !== crawlerStatus?.profile_slug).map(p => p.name).join(', ') || 'Không có'}</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Status Box */}
-                                    <div style={{
-                                        padding: '6px 10px',
-                                        borderRadius: '8px',
-                                        textAlign: 'center',
-                                        fontWeight: 800,
-                                        fontSize: '13px',
-                                        border: '1px solid',
-                                        background: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'rgba(34, 197, 94, 0.1)' :
-                                                    crawlerStatus?.status === 'Paused' ? 'rgba(245, 158, 11, 0.1)' :
-                                                    crawlerStatus?.status === 'Error' ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-primary, #f8fafc)',
-                                        borderColor: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'rgba(34, 197, 94, 0.3)' :
-                                                     crawlerStatus?.status === 'Paused' ? 'rgba(245, 158, 11, 0.3)' :
-                                                     crawlerStatus?.status === 'Error' ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-color, #e2e8f0)',
-                                        color: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? '#16a34a' :
-                                               crawlerStatus?.status === 'Paused' ? '#d97706' :
-                                               crawlerStatus?.status === 'Error' ? '#dc2626' :
-                                               crawlerStatus?.status === 'Completed' ? '#059669' : 'var(--text-secondary, #64748b)'
-                                    }}>
-                                        {crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'Crawling' :
-                                         crawlerStatus?.status === 'Paused' ? 'Stop' :
-                                         crawlerStatus?.status === 'Error' ? 'Error' :
-                                         crawlerStatus?.status === 'Completed' ? 'Completed' : 'Idle'}
-                                    </div>
-
-                                    {/* Progress Bar & Text */}
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary, #475569)' }}>
-                                            <span>{crawlerStatus?.current_item || 0}/{crawlerStatus?.total_items || 0} hoàn thành</span>
-                                            <span style={{ color: '#f97316' }}>{crawlerStatus?.progress || 0}%</span>
-                                        </div>
-                                        <div style={{ width: '100%', height: '8px', background: 'var(--bg-primary, #f1f5f9)', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--border-color, #e2e8f0)' }}>
-                                            <div style={{
-                                                width: `${Math.min(100, Math.max(0, crawlerStatus?.progress || 0))}%`,
-                                                height: '100%',
-                                                background: crawlerStatus?.status === 'Paused' ? '#f59e0b' : crawlerStatus?.status === 'Completed' ? '#10b981' : '#f97316',
-                                                transition: 'width 0.4s ease'
-                                            }} />
-                                        </div>
-                                    </div>
-
-                                    {/* 4 Badges */}
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(34, 197, 94, 0.1)', color: '#15803d', border: '1px solid rgba(34, 197, 94, 0.2)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                            ✓ {crawlerStatus?.current_item || 0} Xong
-                                        </div>
-                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(148, 163, 184, 0.1)', color: 'var(--text-secondary, #475569)', border: '1px solid var(--border-color, #e2e8f0)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                            ⏳ {Math.max(0, (crawlerStatus?.total_items || 0) - (crawlerStatus?.current_item || 0))} Chờ
-                                        </div>
-                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.1)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.2)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                            ⚠ {crawlerStatus?.failed_items || 0} Lỗi
-                                        </div>
-                                        <div style={{ padding: '4px 6px', borderRadius: '6px', background: 'rgba(249, 115, 22, 0.1)', color: '#c2410c', border: '1px solid rgba(249, 115, 22, 0.2)', fontWeight: 700, fontSize: '11px', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                            ⏭️ {crawlerStatus?.skipped_items || 0} Skip
-                                        </div>
-                                    </div>
-
-                                    {/* Controls Row */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, borderTop: '1px solid var(--border-color, #e2e8f0)', paddingTop: '8px' }}>
-                                        <button
-                                            type="button"
-                                            title="Tạm dừng"
-                                            disabled={crawlerStatus?.status !== 'Running' && crawlerStatus?.status !== 'Starting'}
-                                            onClick={async () => {
-                                                try {
-                                                    await fetchApi('/api/products/crawler/pause', { method: 'POST' });
-                                                    const s = await fetchApi('/api/products/crawler/status');
-                                                    if (s) setCrawlerStatus(s);
-                                                } catch (e) {}
-                                            }}
-                                            style={{
-                                                flex: 1, height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                background: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? '#f59e0b' : 'var(--bg-primary, #f1f5f9)',
-                                                color: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'white' : 'var(--text-muted, #94a3b8)',
-                                                border: '1px solid var(--border-color, #cbd5e1)', borderRadius: '6px', cursor: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'pointer' : 'not-allowed'
-                                            }}
-                                        >
-                                            <Pause size={15} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            title="Tiếp tục"
-                                            disabled={crawlerStatus?.status !== 'Paused'}
-                                            onClick={async () => {
-                                                try {
-                                                    await fetchApi('/api/products/crawler/resume', { method: 'POST' });
-                                                    const s = await fetchApi('/api/products/crawler/status');
-                                                    if (s) setCrawlerStatus(s);
-                                                } catch (e) {}
-                                            }}
-                                            style={{
-                                                flex: 1, height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                background: crawlerStatus?.status === 'Paused' ? '#16a34a' : 'var(--bg-primary, #f1f5f9)',
-                                                color: crawlerStatus?.status === 'Paused' ? 'white' : 'var(--text-muted, #94a3b8)',
-                                                border: '1px solid var(--border-color, #cbd5e1)', borderRadius: '6px', cursor: crawlerStatus?.status === 'Paused' ? 'pointer' : 'not-allowed'
-                                            }}
-                                        >
-                                            <Play size={15} fill={crawlerStatus?.status === 'Paused' ? 'white' : 'var(--text-muted, #94a3b8)'} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            title="Dừng hẳn"
-                                            disabled={crawlerStatus?.status !== 'Running' && crawlerStatus?.status !== 'Starting' && crawlerStatus?.status !== 'Paused'}
-                                            onClick={async () => {
-                                                if (!window.confirm('Dừng crawler?')) return;
-                                                try {
-                                                    await fetchApi('/api/products/crawler/stop', { method: 'POST' });
-                                                    const s = await fetchApi('/api/products/crawler/status');
-                                                    if (s) setCrawlerStatus(s);
-                                                } catch (e) {}
-                                            }}
-                                            style={{
-                                                flex: 1, height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                background: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? '#ef4444' : 'var(--bg-primary, #f1f5f9)',
-                                                color: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'white' : 'var(--text-muted, #94a3b8)',
-                                                border: '1px solid var(--border-color, #cbd5e1)', borderRadius: '6px', cursor: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'pointer' : 'not-allowed'
-                                            }}
-                                        >
-                                            <Square size={15} fill={(crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'white' : 'var(--text-muted, #94a3b8)'} />
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     )}
 
@@ -561,7 +441,7 @@ export default function Sidebar() {
                                 )}
                             </div>
 
-                            {/* Sub-menu for profiles */}
+                            {/* Sub-menu for profiles & 2 Pill Buttons */}
                             {!isCollapsed && productsExpanded && (
                                 <div className="sidebar-submenu">
                                     {profiles.map(p => {
@@ -606,6 +486,7 @@ export default function Sidebar() {
                                         <Plus size={15} />
                                         <span>Thêm Profile</span>
                                     </button>
+
                                 </div>
                             )}
                         </div>
@@ -622,162 +503,368 @@ export default function Sidebar() {
                     </Link>
 
                     {/* ════════════════════════════════════════════════════════════ */}
-                    {/* AI ASSISTANT CARD ON LEFT SIDEBAR (EXACT MATCH USER SKETCH) */}
+                    {/* 2 ACCORDION ITEMS: AI ASSIT & CRAWL (INSIDE SCROLLABLE NAV)  */}
                     {/* ════════════════════════════════════════════════════════════ */}
                     {!isCollapsed && (
-                        <div style={{
-                            margin: '16px 12px 12px 12px',
-                            padding: '14px 14px',
-                            background: '#ffffff',
-                            borderRadius: '12px',
-                            border: '2px solid #0f4c81',
-                            boxShadow: '0 4px 16px rgba(15, 76, 129, 0.08)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '10px'
-                        }}>
-                            {/* Card Header Title */}
-                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <Bot size={18} style={{ color: '#0f4c81' }} /> AI Assistant
-                                </span>
-                                {(() => {
-                                    const totalDone = (aiRunnerState.completedCount || 0) + (aiRunnerState.skipCount || 0) + (aiRunnerState.errorCount || 0);
-                                    const isDone = (aiRunnerState.currentProgressPercent === 100 && aiRunnerState.totalRows > 0) ||
-                                                   (aiRunnerState.totalRows > 0 && totalDone >= aiRunnerState.totalRows);
-                                    
-                                    const handleForceReset = (e) => {
-                                        e.stopPropagation();
-                                        const resetObj = {
-                                            isRunning: false,
-                                            isPaused: false,
-                                            activeProfileName: aiRunnerState.activeProfileName || 'Profile',
-                                            activeTabName: aiRunnerState.activeTabName || 'Sheet1',
-                                            activeTaskName: 'Chưa có tác vụ',
-                                            totalRows: 0,
-                                            completedCount: 0,
-                                            pendingCount: 0,
-                                            errorCount: 0,
-                                            skipCount: 0,
-                                            currentProgressPercent: 0
-                                        };
-                                        try {
-                                            localStorage.setItem('ai_runner_state', JSON.stringify(resetObj));
-                                        } catch (err) {}
-                                        setAiRunnerState(resetObj);
-                                        window.dispatchEvent(new Event('ai_runner_update'));
-                                    };
+                        <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {/* ── 1. AI Assit Accordion Item ── */}
+                            <div ref={aiAccordionRef} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <button
+                                    type="button"
+                                    onClick={toggleAiAccordion}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justify: 'space-between',
+                                        width: '100%',
+                                        padding: '10px 14px',
+                                        borderRadius: '16px',
+                                        background: showAiSideview ? '#f0abfc' : '#fae8ff',
+                                        border: '1.5px solid #e879f9',
+                                        color: '#701a75',
+                                        fontWeight: 800,
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        boxShadow: showAiSideview ? '0 0 0 2px rgba(232, 121, 249, 0.4)' : 'none',
+                                        transition: 'all 0.2s ease',
+                                        boxSizing: 'border-box'
+                                    }}
+                                    title="Click để mở/đóng Tiến trình AI Assistant"
+                                >
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                                        <Bot size={16} /> AI Assit
+                                    </span>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: '12px', whiteSpace: 'nowrap', fontWeight: 800 }}>
+                                        {formatCount((aiRunnerState.completedCount || 0) + (aiRunnerState.skipCount || 0) + (aiRunnerState.errorCount || 0))} / {formatCount(aiRunnerState.totalRows || 0)}
+                                        {showAiSideview ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                    </span>
+                                </button>
 
-                                    if (isDone) {
-                                        return (
-                                            <span 
-                                                title="Tác vụ đã xong. Click để đặt lại Sẵn sàng"
-                                                onClick={handleForceReset}
-                                                style={{ fontSize: '10px', background: '#e0f2fe', color: '#0369a1', padding: '2px 7px', borderRadius: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
-                                            >
-                                                ✓ Hoàn thành
-                                            </span>
-                                        );
-                                    }
-                                    if (aiRunnerState.isRunning && !aiRunnerState.isPaused) {
-                                        return (
-                                            <span 
-                                                title="Đang chạy. Click để buộc dừng / reset nếu bị kẹt"
-                                                onClick={handleForceReset}
-                                                style={{ fontSize: '10px', background: '#dcfce7', color: '#15803d', padding: '2px 7px', borderRadius: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
-                                            >
-                                                <Loader2 className="spin" size={10} /> Running
-                                            </span>
-                                        );
-                                    }
-                                    if (aiRunnerState.isPaused) {
-                                        return (
-                                            <span style={{ fontSize: '10px', background: '#fffbeb', color: '#b45309', padding: '2px 7px', borderRadius: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                                ⏸️ Paused
-                                            </span>
-                                        );
-                                    }
-                                    return (
-                                        <span style={{ fontSize: '10px', background: '#f1f5f9', color: '#64748b', padding: '2px 7px', borderRadius: 10, fontWeight: 700 }}>
-                                            Sẵn sàng
-                                        </span>
-                                    );
-                                })()}
-                            </div>
-
-                            {/* Profile Info */}
-                            <div style={{ fontSize: '12.5px', color: '#334155', display: 'flex', gap: 6 }}>
-                                <span style={{ color: '#64748b', fontWeight: 600 }}>Profile:</span>
-                                <span style={{ color: '#0f4c81', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {aiRunnerState.activeProfileName || 'ABC'}
-                                </span>
-                            </div>
-
-                            {/* Tab Info */}
-                            <div style={{ fontSize: '12.5px', color: '#334155', display: 'flex', gap: 6 }}>
-                                <span style={{ color: '#64748b', fontWeight: 600 }}>Tab:</span>
-                                <span style={{ color: '#2563eb', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {aiRunnerState.activeTabName || 'ABC'}
-                                </span>
-                            </div>
-
-                            {/* Active Task / Action */}
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', background: '#f8fafc', padding: '6px 10px', borderRadius: '6px', borderLeft: '3px solid #0f4c81' }}>
-                                {aiRunnerState.activeTaskName || 'Viết SAPO'}
-                            </div>
-
-                            {/* Progress Status Bar (xx/xxxxx hoàn thành) */}
-                            <div>
-                                <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
-                                    <span>{aiRunnerState.completedCount + aiRunnerState.skipCount + aiRunnerState.errorCount}/{aiRunnerState.totalRows || 0} hoàn thành</span>
-                                    <span>{aiRunnerState.currentProgressPercent || 0}%</span>
-                                </div>
-                                <div style={{ width: '100%', height: '8px', background: '#e2e8f0', borderRadius: '6px', overflow: 'hidden' }}>
+                                {/* Accordion Expanded Content: AI Assistant Card */}
+                                {showAiSideview && (
                                     <div style={{
-                                        width: `${aiRunnerState.currentProgressPercent || 0}%`,
-                                        height: '100%',
-                                        background: 'linear-gradient(90deg, #0f4c81 0%, #16a34a 100%)',
-                                        transition: 'width 0.3s ease'
-                                    }} />
-                                </div>
+                                        padding: '12px',
+                                        background: '#ffffff',
+                                        borderRadius: '14px',
+                                        border: '2px solid #0f4c81',
+                                        boxShadow: '0 4px 16px rgba(15, 76, 129, 0.08)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '10px',
+                                        fontSize: '12px'
+                                    }}>
+                                        {/* Header */}
+                                        <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <Bot size={16} style={{ color: '#0f4c81' }} /> AI Assistant
+                                            </span>
+                                            {(() => {
+                                                const totalDone = (aiRunnerState.completedCount || 0) + (aiRunnerState.skipCount || 0) + (aiRunnerState.errorCount || 0);
+                                                const isDone = (aiRunnerState.currentProgressPercent === 100 && aiRunnerState.totalRows > 0) ||
+                                                               (aiRunnerState.totalRows > 0 && totalDone >= aiRunnerState.totalRows);
+                                                
+                                                const handleForceReset = (e) => {
+                                                    e.stopPropagation();
+                                                    const resetObj = {
+                                                        isRunning: false,
+                                                        isPaused: false,
+                                                        activeProfileName: aiRunnerState.activeProfileName || 'Profile',
+                                                        activeTabName: aiRunnerState.activeTabName || 'Sheet1',
+                                                        activeTaskName: 'Chưa có tác vụ',
+                                                        totalRows: 0,
+                                                        completedCount: 0,
+                                                        pendingCount: 0,
+                                                        errorCount: 0,
+                                                        skipCount: 0,
+                                                        currentProgressPercent: 0
+                                                    };
+                                                    try {
+                                                        localStorage.setItem('ai_runner_state', JSON.stringify(resetObj));
+                                                    } catch (err) {}
+                                                    setAiRunnerState(resetObj);
+                                                    window.dispatchEvent(new Event('ai_runner_update'));
+                                                };
+
+                                                if (isDone) {
+                                                    return (
+                                                        <span 
+                                                            title="Tác vụ đã xong. Click để đặt lại Sẵn sàng"
+                                                            onClick={handleForceReset}
+                                                            style={{ fontSize: '10px', background: '#e0f2fe', color: '#0369a1', padding: '2px 6px', borderRadius: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+                                                        >
+                                                            ✓ Hoàn thành
+                                                        </span>
+                                                    );
+                                                }
+                                                if (aiRunnerState.isRunning && !aiRunnerState.isPaused) {
+                                                    return (
+                                                        <span 
+                                                            title="Đang chạy. Click để buộc dừng / reset nếu bị kẹt"
+                                                            onClick={handleForceReset}
+                                                            style={{ fontSize: '10px', background: '#dcfce7', color: '#15803d', padding: '2px 6px', borderRadius: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+                                                        >
+                                                            <Loader2 className="spin" size={10} /> Running
+                                                        </span>
+                                                    );
+                                                }
+                                                if (aiRunnerState.isPaused) {
+                                                    return (
+                                                        <span style={{ fontSize: '10px', background: '#fffbeb', color: '#b45309', padding: '2px 6px', borderRadius: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                                            ⏸️ Paused
+                                                        </span>
+                                                    );
+                                                }
+                                                return (
+                                                    <span style={{ fontSize: '10px', background: '#f1f5f9', color: '#64748b', padding: '2px 7px', borderRadius: 10, fontWeight: 700 }}>
+                                                        Sẵn sàng
+                                                    </span>
+                                                );
+                                            })()}
+                                        </div>
+
+                                        {/* Profile & Tab */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '11.5px', color: '#475569' }}>
+                                            <div><strong>Profile:</strong> <span style={{ color: '#0f4c81', fontWeight: 700 }}>{aiRunnerState.activeProfileName || 'Profile Newland'}</span></div>
+                                            <div><strong>Tab:</strong> <span style={{ color: '#2563eb', fontWeight: 700 }}>{aiRunnerState.activeTabName || 'Sheet1'}</span></div>
+                                        </div>
+
+                                        {/* Active Task */}
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', background: '#f8fafc', padding: '5px 8px', borderRadius: '6px', borderLeft: '3px solid #0f4c81' }}>
+                                            {aiRunnerState.activeTaskName || 'Viết SAPO'}
+                                        </div>
+
+                                        {/* Progress Bar & Text */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#475569' }}>
+                                                <span>{aiRunnerState.completedCount + aiRunnerState.skipCount + aiRunnerState.errorCount}/{aiRunnerState.totalRows || 0} hoàn thành</span>
+                                                <span>{aiRunnerState.currentProgressPercent || 0}%</span>
+                                            </div>
+                                            <div style={{ width: '100%', height: '7px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                                                <div style={{
+                                                    width: `${aiRunnerState.currentProgressPercent || 0}%`,
+                                                    height: '100%',
+                                                    background: 'linear-gradient(90deg, #0f4c81 0%, #16a34a 100%)',
+                                                    transition: 'width 0.3s ease'
+                                                }} />
+                                            </div>
+                                        </div>
+
+                                        {/* 4 Badges */}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' }}>
+                                            <div style={{ fontSize: '10.5px', padding: '3px 5px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '4px', color: '#166534', fontWeight: 600 }}>✓ {aiRunnerState.completedCount || 0} Xong</div>
+                                            <div style={{ fontSize: '10.5px', padding: '3px 5px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', color: '#475569', fontWeight: 600 }}>⏳ {aiRunnerState.pendingCount || 0} Chờ</div>
+                                            <div style={{ fontSize: '10.5px', padding: '3px 5px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '4px', color: '#991b1b', fontWeight: 600 }}>⚠️ {aiRunnerState.errorCount || 0} Lỗi</div>
+                                            <div style={{ fontSize: '10.5px', padding: '3px 5px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '4px', color: '#92400e', fontWeight: 600 }}>⏭️ {aiRunnerState.skipCount || 0} Skip</div>
+                                        </div>
+
+                                        {/* Nút Cấu hình */}
+                                        <button
+                                            type="button"
+                                            onClick={() => router.push('/ai-assistant')}
+                                            style={{
+                                                width: '100%',
+                                                padding: '6px 10px',
+                                                background: '#0f4c81',
+                                                color: '#ffffff',
+                                                border: 'none',
+                                                borderRadius: '6px',
+                                                fontWeight: 700,
+                                                fontSize: '12px',
+                                                cursor: 'pointer',
+                                                textAlign: 'center'
+                                            }}
+                                        >
+                                            Cấu hình
+                                        </button>
+                                    </div>
+                                )}
                             </div>
 
-                            {/* 4 Status Badges Grid (Completed, Pending, Error, Skip) */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '2px' }}>
-                                <div style={{ fontSize: '11px', padding: '4px 6px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '4px', color: '#166534', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <span>✓</span> <span>{aiRunnerState.completedCount || 0} Xong</span>
-                                </div>
-                                <div style={{ fontSize: '11px', padding: '4px 6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', color: '#475569', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <span>⏳</span> <span>{aiRunnerState.pendingCount || 0} Chờ</span>
-                                </div>
-                                <div style={{ fontSize: '11px', padding: '4px 6px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '4px', color: '#991b1b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <span>⚠️</span> <span>{aiRunnerState.errorCount || 0} Lỗi</span>
-                                </div>
-                                <div style={{ fontSize: '11px', padding: '4px 6px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '4px', color: '#92400e', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <span>⏭️</span> <span>{aiRunnerState.skipCount || 0} Skip</span>
-                                </div>
-                            </div>
+                            {/* ── 2. Crawl Accordion Item ── */}
+                            <div ref={crawlAccordionRef} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <button
+                                    type="button"
+                                    onClick={toggleCrawlAccordion}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justify: 'space-between',
+                                        width: '100%',
+                                        padding: '10px 14px',
+                                        borderRadius: '16px',
+                                        background: showCrawlSideview ? '#7dd3fc' : '#e0f2fe',
+                                        border: '1.5px solid #38bdf8',
+                                        color: '#0369a1',
+                                        fontWeight: 800,
+                                        fontSize: '13px',
+                                        cursor: 'pointer',
+                                        boxShadow: showCrawlSideview ? '0 0 0 2px rgba(56, 189, 248, 0.4)' : 'none',
+                                        transition: 'all 0.2s ease',
+                                        boxSizing: 'border-box'
+                                    }}
+                                    title="Click để mở/đóng Tiến trình Crawl"
+                                >
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                                        🚀 Crawl
+                                    </span>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: '12px', whiteSpace: 'nowrap', fontWeight: 800 }}>
+                                        {formatCount(crawlerStatus?.current_item || 0)} / {formatCount(crawlerStatus?.total_items || 0)}
+                                        {showCrawlSideview ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                    </span>
+                                </button>
 
-                            {/* Nút Cấu hình (Navigates to /ai-assistant Configuration) */}
-                            <button
-                                type="button"
-                                onClick={() => router.push('/ai-assistant')}
-                                style={{
-                                    marginTop: '4px',
-                                    width: '100%',
-                                    padding: '8px 12px',
-                                    background: '#0f4c81',
-                                    color: '#ffffff',
-                                    border: 'none',
-                                    borderRadius: '8px',
-                                    fontWeight: 700,
-                                    fontSize: '13px',
-                                    cursor: 'pointer',
-                                    textAlign: 'center'
-                                }}
-                            >
-                                Cấu hình
-                            </button>
+                                {/* Accordion Expanded Content: Crawl Process Card */}
+                                {showCrawlSideview && (
+                                    <div style={{
+                                        padding: '12px',
+                                        background: '#ffffff',
+                                        borderRadius: '14px',
+                                        border: '2px solid #f97316',
+                                        boxShadow: '0 4px 16px rgba(249, 115, 22, 0.08)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '10px',
+                                        fontSize: '12px'
+                                    }}>
+                                        {/* Header */}
+                                        <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            🚀 Tiến trình Crawl
+                                        </div>
+
+                                        {/* Profile & Waiting Info */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '11.5px', color: '#475569' }}>
+                                            <div>
+                                                <strong>Profile:</strong> <span style={{ color: '#f97316', fontWeight: 700 }}>{profiles.find(p => p.slug === crawlerStatus?.profile_slug)?.name || crawlerStatus?.profile_slug || 'Chưa chọn'}</span>
+                                            </div>
+                                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                <strong>Waiting:</strong> <span style={{ color: '#94a3b8' }}>{profiles.filter(p => p.slug !== crawlerStatus?.profile_slug).map(p => p.name).join(', ') || 'Không có'}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Status Box */}
+                                        <div style={{
+                                            padding: '5px 8px',
+                                            borderRadius: '6px',
+                                            textAlign: 'center',
+                                            fontWeight: 800,
+                                            fontSize: '12px',
+                                            border: '1px solid',
+                                            background: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'rgba(34, 197, 94, 0.1)' :
+                                                        crawlerStatus?.status === 'Paused' ? 'rgba(245, 158, 11, 0.1)' :
+                                                        crawlerStatus?.status === 'Error' ? 'rgba(239, 68, 68, 0.1)' : '#f8fafc',
+                                            borderColor: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'rgba(34, 197, 94, 0.3)' :
+                                                         crawlerStatus?.status === 'Paused' ? 'rgba(245, 158, 11, 0.3)' :
+                                                         crawlerStatus?.status === 'Error' ? 'rgba(239, 68, 68, 0.3)' : '#e2e8f0',
+                                            color: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? '#16a34a' :
+                                                   crawlerStatus?.status === 'Paused' ? '#d97706' :
+                                                   crawlerStatus?.status === 'Error' ? '#dc2626' :
+                                                   crawlerStatus?.status === 'Completed' ? '#059669' : '#64748b'
+                                        }}>
+                                            {crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'Crawling' :
+                                             crawlerStatus?.status === 'Paused' ? 'Stop' :
+                                             crawlerStatus?.status === 'Error' ? 'Error' :
+                                             crawlerStatus?.status === 'Completed' ? 'Completed' : 'Idle'}
+                                        </div>
+
+                                        {/* Progress Bar & Text */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#475569' }}>
+                                                <span>{crawlerStatus?.current_item || 0}/{crawlerStatus?.total_items || 0} hoàn thành</span>
+                                                <span style={{ color: '#f97316' }}>{crawlerStatus?.progress || 0}%</span>
+                                            </div>
+                                            <div style={{ width: '100%', height: '7px', background: '#f1f5f9', borderRadius: '4px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+                                                <div style={{
+                                                    width: `${Math.min(100, Math.max(0, crawlerStatus?.progress || 0))}%`,
+                                                    height: '100%',
+                                                    background: crawlerStatus?.status === 'Paused' ? '#f59e0b' : crawlerStatus?.status === 'Completed' ? '#10b981' : '#f97316',
+                                                    transition: 'width 0.4s ease'
+                                                }} />
+                                            </div>
+                                        </div>
+
+                                        {/* 4 Badges */}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' }}>
+                                            <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(34, 197, 94, 0.1)', color: '#15803d', border: '1px solid rgba(34, 197, 94, 0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                ✓ {crawlerStatus?.current_item || 0} Xong
+                                            </div>
+                                            <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(148, 163, 184, 0.1)', color: '#475569', border: '1px solid #e2e8f0', fontWeight: 700, fontSize: '10.5px' }}>
+                                                ⏳ {Math.max(0, (crawlerStatus?.total_items || 0) - (crawlerStatus?.current_item || 0))} Chờ
+                                            </div>
+                                            <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(239, 68, 68, 0.1)', color: '#b91c1c', border: '1px solid rgba(239, 68, 68, 0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                ⚠ {crawlerStatus?.failed_items || 0} Lỗi
+                                            </div>
+                                            <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(249, 115, 22, 0.1)', color: '#c2410c', border: '1px solid rgba(249, 115, 22, 0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                ⏭️ {crawlerStatus?.skipped_items || 0} Skip
+                                            </div>
+                                        </div>
+
+                                        {/* Controls Row */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, borderTop: '1px solid #e2e8f0', paddingTop: '6px' }}>
+                                            <button
+                                                type="button"
+                                                title="Tạm dừng"
+                                                disabled={crawlerStatus?.status !== 'Running' && crawlerStatus?.status !== 'Starting'}
+                                                onClick={async () => {
+                                                    try {
+                                                        await fetchApi('/api/products/crawler/pause', { method: 'POST' });
+                                                        const s = await fetchApi('/api/products/crawler/status');
+                                                        if (s) setCrawlerStatus(s);
+                                                    } catch (e) {}
+                                                }}
+                                                style={{
+                                                    flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    background: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? '#f59e0b' : '#f1f5f9',
+                                                    color: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'white' : '#94a3b8',
+                                                    border: '1px solid #cbd5e1', borderRadius: '6px', cursor: crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' ? 'pointer' : 'not-allowed'
+                                                }}
+                                            >
+                                                <Pause size={14} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                title="Tiếp tục"
+                                                disabled={crawlerStatus?.status !== 'Paused'}
+                                                onClick={async () => {
+                                                    try {
+                                                        await fetchApi('/api/products/crawler/resume', { method: 'POST' });
+                                                        const s = await fetchApi('/api/products/crawler/status');
+                                                        if (s) setCrawlerStatus(s);
+                                                    } catch (e) {}
+                                                }}
+                                                style={{
+                                                    flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    background: crawlerStatus?.status === 'Paused' ? '#16a34a' : '#f1f5f9',
+                                                    color: crawlerStatus?.status === 'Paused' ? 'white' : '#94a3b8',
+                                                    border: '1px solid #cbd5e1', borderRadius: '6px', cursor: crawlerStatus?.status === 'Paused' ? 'pointer' : 'not-allowed'
+                                                }}
+                                            >
+                                                <Play size={14} fill={crawlerStatus?.status === 'Paused' ? 'white' : '#94a3b8'} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                title="Dừng hẳn"
+                                                disabled={crawlerStatus?.status !== 'Running' && crawlerStatus?.status !== 'Starting' && crawlerStatus?.status !== 'Paused'}
+                                                onClick={async () => {
+                                                    if (!window.confirm('Dừng crawler?')) return;
+                                                    try {
+                                                        await fetchApi('/api/products/crawler/stop', { method: 'POST' });
+                                                        const s = await fetchApi('/api/products/crawler/status');
+                                                        if (s) setCrawlerStatus(s);
+                                                    } catch (e) {}
+                                                }}
+                                                style={{
+                                                    flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    background: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? '#ef4444' : '#f1f5f9',
+                                                    color: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'white' : '#94a3b8',
+                                                    border: '1px solid #cbd5e1', borderRadius: '6px', cursor: (crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'pointer' : 'not-allowed'
+                                                }}
+                                            >
+                                                <Square size={14} fill={(crawlerStatus?.status === 'Running' || crawlerStatus?.status === 'Starting' || crawlerStatus?.status === 'Paused') ? 'white' : '#94a3b8'} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </nav>
@@ -910,7 +997,9 @@ export default function Sidebar() {
             )}
 
 
-            {/* ──────── Modal: Edit Profile ──────── */}
+
+
+            {/* ──────── Right-click Context Menu ──────── */}
             {editModal && (
                 <div
                     style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999998, display: 'flex', alignItems: 'center', justifyContent: 'center' }}

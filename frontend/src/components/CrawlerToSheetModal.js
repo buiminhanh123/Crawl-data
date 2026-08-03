@@ -214,6 +214,37 @@ export default function CrawlerToSheetModal({
     // ══════════════════════════════════════════════════════════════════
 
     const ZH_EN_MAP = {
+        '發光元件': 'Light Source',
+        '發光二極體': 'LED',
+        '紅光二極體': 'Red Light LED',
+        '可見紅光': 'Visible Red Light',
+        '掃描器種類': 'Scanner Type',
+        '景深': 'Depth of Field',
+        '解碼種類': 'Decode Capability',
+        '解碼': 'Decode',
+        '使用介面': 'Interface',
+        '使用界面': 'Interface',
+        '擴充槽': 'Expansion Slot',
+        '擴展插槽': 'Expansion Slot',
+        '像素': 'Pixels',
+        '已停產': '(Discontinued)',
+        '產品說明': 'Product Description',
+        '型號列表': 'Model List',
+        '輕巧易於攜帶的機身': 'Compact Body',
+        '大容量': 'Large Capacity',
+        '微軟視窗': 'Microsoft Windows',
+        '微型': 'Micro',
+        '光學': 'Optical',
+        '對比度': 'Contrast Ratio',
+        '列印對比': 'Print Contrast',
+        '掃描速度': 'Scan Speed',
+        '掃描角度': 'Scan Angle',
+        '讀取角度': 'Reading Angle',
+        '靜電防護': 'ESD Protection',
+        '外殼材質': 'Housing Material',
+        '顏色': 'Color',
+        '線材': 'Cable',
+        '保固': 'Warranty',
         '標籤': 'Label',
         '商品比較': 'Product Comparison',
         '提出詢問': 'Submit Inquiry',
@@ -407,7 +438,8 @@ export default function CrawlerToSheetModal({
                 const rawKey = item.key || item.name || item.label || item[0] || '';
                 const rawVal = item.value || item.val || item[1] || '';
                 const key = translateZhToEn(String(rawKey));
-                const val = translateZhToEn(String(rawVal));
+                let val = translateZhToEn(String(rawVal));
+                val = val.replace(/\n/g, '<br />');
                 if (key || val) {
                     rowsHtml += `  <tr><td>${key}</td><td>${val}</td></tr>\n`;
                 }
@@ -415,7 +447,8 @@ export default function CrawlerToSheetModal({
         } else {
             Object.entries(specsObj).forEach(([rawKey, rawVal]) => {
                 const key = translateZhToEn(String(rawKey));
-                const displayVal = typeof rawVal === 'object' ? JSON.stringify(rawVal) : translateZhToEn(String(rawVal ?? ''));
+                let displayVal = typeof rawVal === 'object' ? JSON.stringify(rawVal) : translateZhToEn(String(rawVal ?? ''));
+                displayVal = displayVal.replace(/\n/g, '<br />');
                 rowsHtml += `  <tr><td>${key}</td><td>${displayVal}</td></tr>\n`;
             });
         }
@@ -464,6 +497,16 @@ export default function CrawlerToSheetModal({
             // Handle field mappings
             let val = product[col.field];
 
+            // Product Detail URL fallback (product.url in DB maps to detail_url in preset)
+            if (col.field === 'detail_url' || col.field === 'url' || col.field === 'link' || col.field === 'product_url') {
+                val = val || product.url || product.detail_url || product.link || product.product_url || product.page_url || (product.slug ? `https://www.argox.com/products-detail/${product.slug}/` : '');
+            }
+
+            // Image URL fallback
+            if (col.field === 'image_url') {
+                val = val || product.image_url || product.image || product.img || product.thumbnail || '';
+            }
+
             // Brand fallback + translation
             if (col.field === 'brand') {
                 val = val || product.brand_name || product.brand || product.vendor || (product.profile_slug ? product.profile_slug.replace(/^profile-?/i, '').toUpperCase() : (profileSlug ? profileSlug.replace(/^profile-?/i, '').toUpperCase() : ''));
@@ -477,7 +520,7 @@ export default function CrawlerToSheetModal({
 
             // Fallback for model / sku
             if (col.field === 'model' && !val) {
-                val = product.sku || product.product_code || '';
+                val = product.sku || product.product_code || product.slug || '';
             }
 
             // Document / PDF links formatting
@@ -491,8 +534,10 @@ export default function CrawlerToSheetModal({
             }
 
             // Specs HTML Table formatting
-            if (col.field === 'specs_json') {
+            if (col.field === 'specs_json' || col.field === 'specifications' || col.field === 'specs' || col.field === 'specs_html' || col.field === 'technical_specs') {
                 val = convertSpecsToHtmlTable(val || product.specs_json || product.specs_html || product.specifications || product.specs || product.technical_specs);
+            } else if (typeof val === 'string' && (val.trim().startsWith('{') || val.trim().startsWith('['))) {
+                val = convertSpecsToHtmlTable(val);
             }
 
             return val !== undefined && val !== null ? String(val) : '';
