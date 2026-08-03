@@ -204,34 +204,39 @@ function ProductsContent() {
         }
         if (!logs) logs = [];
 
-        // Auto-generate realistic test history entries from active sheet if no logs saved yet
-        if (logs.length === 0 && profileSheets && profileSheets.length > 0) {
-            let sampleRows = [];
-            profileSheets.forEach(s => {
-                if (Array.isArray(s.data) && s.data.length > 1) {
-                    sampleRows.push(...s.data.slice(1));
-                }
-            });
-            if (sampleRows.length > 0) {
-                logs = sampleRows.slice(0, 100).map((r, i) => {
-                    const status = i % 4 === 0 ? 'posted' : (i % 7 === 0 ? 'error' : 'pending');
-                    const hoursAgo = i * 3.5;
-                    const dateObj = new Date(Date.now() - hoursAgo * 3600000);
-                    return {
-                        id: `log-${i}`,
-                        posted_at: status === 'pending' ? `Dự kiến: ${dateObj.toLocaleDateString('vi-VN')} ${dateObj.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : `${dateObj.toLocaleDateString('vi-VN')} ${dateObj.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`,
-                        model: r[3] || r[0] || `MD-${1000 + i}`,
-                        name: r[4] || r[1] || `Sản phẩm ${i + 1}`,
-                        platform: i % 2 === 0 ? 'Website (WordPress)' : 'Hệ thống ERP / CRM',
-                        status
-                    };
-                });
+        // Build set of current product models/names across all active sheet tabs
+        const currentKeys = new Set();
+        (profileSheets || []).forEach(s => {
+            const rows = s.data || [];
+            if (!Array.isArray(rows) || rows.length < 2) return;
+            const headers = (rows[0] || []).map(h => String(h || '').trim().toLowerCase());
+            let modelIdx = headers.findIndex(h => h.includes('model') || h.includes('mã') || h.includes('sku') || h.includes('part number'));
+            if (modelIdx === -1) modelIdx = 0;
+            let nameIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
+            if (nameIdx === -1) nameIdx = 1;
+
+            for (let r = 1; r < rows.length; r++) {
+                const row = rows[r];
+                if (!Array.isArray(row)) continue;
+                const model = String(row[modelIdx] || row[0] || '').trim().toLowerCase();
+                const name = String(row[nameIdx] || row[1] || '').trim().toLowerCase();
+                if (model) currentKeys.add(model);
+                if (name) currentKeys.add(name);
             }
+        });
+
+        // Filter logs so only products that exist in current profileSheets are kept
+        if (currentKeys.size > 0 && logs.length > 0) {
+            logs = logs.filter(l => {
+                const mKey = (l.model || '').trim().toLowerCase();
+                const nKey = (l.name || '').trim().toLowerCase();
+                return (mKey && currentKeys.has(mKey)) || (nKey && currentKeys.has(nKey));
+            });
         }
 
         const posted = logs.filter(l => l.status === 'posted').length;
         const err = logs.filter(l => l.status === 'error').length;
-        const total = Math.max(totalProductsCount, logs.length);
+        const total = totalProductsCount;
         const pending = Math.max(0, total - posted - err);
 
         let filtered = logs;
@@ -252,7 +257,9 @@ function ProductsContent() {
             postedCount: posted,
             pendingCount: pending,
             postingErrorCount: err,
-            filteredHistoryLogs: filtered,
+            filteredHistoryLogs: filtered
+        };
+    }, [customPostingLogs, profileSlug, profileSheets, totalProductsCount, historyStatusFilter, historySearchTerm]);
             allPostingLogs: logs
         };
     }, [profileSlug, profileSheets, totalProductsCount, historySearchTerm, historyStatusFilter]);
@@ -696,6 +703,13 @@ function ProductsContent() {
         if (activeSheetTabName === tabName) {
             setActiveSheetTabName(updated[0]?.name || '');
         }
+
+        // Auto-clear cached posting logs so deleted tab products are immediately removed from pending count
+        setCustomPostingLogs(null);
+        try {
+            localStorage.removeItem(`posting_logs_${profileSlug}`);
+        } catch (e) {}
+
         toast(`🗑️ Đã xóa tab "${tabName}"`, 'info');
 
         try {
