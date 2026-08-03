@@ -586,14 +586,15 @@ router.post('/export-excel', (req, res) => {
                         }
                     });
 
-                    if (foundIdx === -1) {
-                        if (tmplCol === 'ma_san_pham') foundIdx = 0;
-                        else if (tmplCol === 'ten_san_pham') foundIdx = 1;
-                        else if (tmplCol === 'url') foundIdx = 3;
-                        else if (tmplCol === 'noi_dung') foundIdx = 2;
-                    }
-
                     colIndexMap[tmplCol] = foundIdx;
+                });
+
+                // Positional fallback: if alias matching failed, assume column is at its template position index
+                // (works perfectly when sheet was generated from the new 31-col preset since labels == field names)
+                TEMPLATE_HEADERS.forEach((tmplCol, tmplIdx) => {
+                    if (colIndexMap[tmplCol] === -1) {
+                        colIndexMap[tmplCol] = tmplIdx;
+                    }
                 });
 
                 for (let r = 1; r < rawRows.length; r++) {

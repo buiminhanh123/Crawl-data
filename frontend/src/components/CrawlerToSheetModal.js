@@ -18,54 +18,60 @@ import {
 } from 'lucide-react';
 
 // Default Proposal Presets
+// 31-column standard preset matching mau-them-san-pham-17-07-2026.xlsx
 const DEFAULT_PRESETS = [
     {
         id: 'preset-default',
-        name: 'Đề xuất chuẩn (Đầy đủ Link, Model, PDF & Thông Số Kỹ Thuật)',
+        name: '📋 Mẫu Chuẩn 31 Cột (khớp file mau-them-san-pham)',
         columns: [
-            { id: 'col-1', label: 'Link Sản Phẩm', field: 'detail_url' },
-            { id: 'col-2', label: 'Hãng / Thương hiệu', field: 'brand' },
-            { id: 'col-3', label: 'Danh Mục', field: 'category' },
-            { id: 'col-4', label: 'Series', field: 'series' },
-            { id: 'col-5', label: 'Model / Mã SP', field: 'model' },
-            { id: 'col-6', label: 'Tên Sản Phẩm', field: 'name' },
-            { id: 'col-7', label: 'Link Hình Ảnh', field: 'image_url' },
-            { id: 'col-8', label: 'Link Tài Liệu / PDF', field: 'document_url' },
-            { id: 'col-9', label: 'Mô Tả Nguyên Bản', field: 'description' },
-            { id: 'col-10', label: 'Thông Số Kỹ Thuật Gốc', field: 'specs_json' },
-            { id: 'col-11', label: 'SAPO AI', field: 'custom_empty' },
-            { id: 'col-12', label: 'Bảng Thông Số AI (Dịch HTML)', field: 'custom_empty' }
-        ]
-    },
-    {
-        id: 'preset-seo',
-        name: 'Cấu hình SEO Content & Bài Viết',
-        columns: [
-            { id: 'col-1', label: 'Tên Sản Phẩm', field: 'name' },
-            { id: 'col-2', label: 'Model / Mã SP', field: 'model' },
-            { id: 'col-3', label: 'Danh Mục', field: 'category' },
-            { id: 'col-4', label: 'Link Chi Tiết', field: 'detail_url' },
-            { id: 'col-5', label: 'Link Ảnh', field: 'image_url' },
-            { id: 'col-6', label: 'Thông Số Kỹ Thuật Gốc', field: 'specs_json' },
-            { id: 'col-7', label: 'Ghi Chú Nguồn Ngoài', field: 'custom_empty' },
-            { id: 'col-8', label: 'SAPO AI', field: 'custom_empty' },
-            { id: 'col-9', label: 'Bài Viết Chi Tiết AI', field: 'custom_empty' }
+            { id: 'col-A',  label: 'ma_san_pham',          field: 'model' },
+            { id: 'col-B',  label: 'ten_san_pham',          field: 'name' },
+            { id: 'col-C',  label: 'ten_san_pham_en',       field: 'custom_empty' },
+            { id: 'col-D',  label: 'url',                   field: 'detail_url' },
+            { id: 'col-E',  label: 'url_en',                field: 'custom_empty' },
+            { id: 'col-F',  label: 'tieu_de_trang',         field: 'name' },
+            { id: 'col-G',  label: 'tieu_de_trang_en',      field: 'custom_empty' },
+            { id: 'col-H',  label: 'mo_ta',                 field: 'description' },
+            { id: 'col-I',  label: 'mo_ta_en',              field: 'custom_empty' },
+            { id: 'col-J',  label: 'gia',                   field: 'custom_empty' },
+            { id: 'col-K',  label: 'khuyen_mai',            field: 'custom_empty' },
+            { id: 'col-L',  label: 'anh_dai_dien',          field: 'image_url' },
+            { id: 'col-M',  label: 'anh_1',                 field: 'custom_empty' },
+            { id: 'col-N',  label: 'anh_2',                 field: 'custom_empty' },
+            { id: 'col-O',  label: 'anh_3',                 field: 'custom_empty' },
+            { id: 'col-P',  label: 'anh_4',                 field: 'custom_empty' },
+            { id: 'col-Q',  label: 'nhan',                  field: 'custom_empty' },
+            { id: 'col-R',  label: 'danh_muc_id',           field: 'custom_empty' },
+            { id: 'col-S',  label: 'thuong_hieu_id',        field: 'custom_empty' },
+            { id: 'col-T',  label: 'noi_dung',              field: 'specs_json' },
+            { id: 'col-U',  label: 'noi_dung_en',           field: 'custom_empty' },
+            { id: 'col-V',  label: 'tl_hdsd_tieu_de',       field: 'doc_title' },
+            { id: 'col-W',  label: 'tl_hdsd_link',          field: 'document_url' },
+            { id: 'col-X',  label: 'tl_cad_tieu_de',        field: 'custom_empty' },
+            { id: 'col-Y',  label: 'tl_cad_link',           field: 'custom_empty' },
+            { id: 'col-Z',  label: 'tl_chungchi_tieu_de',   field: 'custom_empty' },
+            { id: 'col-AA', label: 'tl_chungchi_link',      field: 'custom_empty' },
+            { id: 'col-AB', label: 'tl_phanmem_tieu_de',    field: 'custom_empty' },
+            { id: 'col-AC', label: 'tl_phanmem_link',       field: 'custom_empty' },
+            { id: 'col-AD', label: 'tl_tailieu_tieu_de',    field: 'custom_empty' },
+            { id: 'col-AE', label: 'tl_tailieu_link',       field: 'custom_empty' }
         ]
     }
 ];
 
 const AVAILABLE_FIELDS = [
-    { value: 'detail_url', label: '🌐 Link bài viết chi tiết' },
-    { value: 'brand', label: '🏷️ Hãng / Thương hiệu' },
-    { value: 'main_category', label: '📁 Danh mục lớn (Main Category)' },
-    { value: 'category', label: '📂 Danh mục con (Sub Category)' },
-    { value: 'series', label: '📌 Dòng Series sản phẩm' },
-    { value: 'model', label: '🔢 Model / Mã sản phẩm' },
-    { value: 'name', label: '📝 Tên sản phẩm' },
-    { value: 'image_url', label: '🖼️ Link hình ảnh chính' },
-    { value: 'document_url', label: '📄 Link tài liệu / Datasheet PDF' },
-    { value: 'description', label: '📖 Mô tả / Nội dung chi tiết gốc' },
-    { value: 'specs_json', label: '📊 Thông số kỹ thuật gốc (JSON / HTML / Text)' },
+    { value: 'model',        label: '🔢 Mã sản phẩm / Model (ma_san_pham)' },
+    { value: 'name',         label: '📝 Tên sản phẩm (ten_san_pham / tieu_de_trang)' },
+    { value: 'detail_url',   label: '🌐 URL nguồn sản phẩm (url)' },
+    { value: 'description',  label: '📖 Mô tả ngắn (mo_ta)' },
+    { value: 'image_url',    label: '🖼️ Ảnh đại diện (anh_dai_dien)' },
+    { value: 'specs_json',   label: '📊 Nội dung / Thông số kỹ thuật → HTML Table (noi_dung)' },
+    { value: 'document_url', label: '📄 Link tài liệu / Datasheet PDF (tl_hdsd_link)' },
+    { value: 'doc_title',    label: '🏷️ Tiêu đề tài liệu (tl_hdsd_tieu_de) — tự điền nếu có PDF' },
+    { value: 'brand',        label: '🏢 Hãng / Thương hiệu' },
+    { value: 'main_category',label: '📁 Danh mục lớn (Main Category)' },
+    { value: 'category',     label: '📂 Danh mục con (Sub Category)' },
+    { value: 'series',       label: '📌 Dòng Series sản phẩm' },
     { value: 'custom_empty', label: '➕ (Ô trống - Tự nhập tên Header tùy ý)' }
 ];
 
@@ -99,13 +105,27 @@ export default function CrawlerToSheetModal({
     const [customQuantity, setCustomQuantity] = useState(totalProductsCount || 50);
     const [fetchingProducts, setFetchingProducts] = useState(false);
 
-    // Load saved presets from localStorage on mount
+    // Load saved presets from localStorage on mount (with migration for old <20-col presets)
     useEffect(() => {
         try {
+            const PRESET_VERSION = 'v2_31col'; // bump this when preset schema changes
+            const savedVersion = localStorage.getItem('crawler_preset_version');
+            if (savedVersion !== PRESET_VERSION) {
+                // Clear outdated presets (old 12-col format) and use new defaults
+                localStorage.removeItem('crawler_sheet_mapping_presets');
+                localStorage.setItem('crawler_preset_version', PRESET_VERSION);
+                return;
+            }
             const saved = localStorage.getItem('crawler_sheet_mapping_presets');
             if (saved) {
                 const parsed = JSON.parse(saved);
                 if (Array.isArray(parsed) && parsed.length > 0) {
+                    // Safety check: ignore if first preset has fewer than 20 cols (old schema)
+                    const firstCols = parsed[0]?.columns?.length || 0;
+                    if (firstCols < 20) {
+                        localStorage.removeItem('crawler_sheet_mapping_presets');
+                        return;
+                    }
                     setPresets(parsed);
                     setSelectedPresetId(parsed[0].id);
                     setColumns(parsed[0].columns);
@@ -493,49 +513,71 @@ export default function CrawlerToSheetModal({
     const mapProductToRow = (product) => {
         return columns.map(col => {
             if (col.field === 'custom_empty') return '';
-            
-            // Handle field mappings
+
             let val = product[col.field];
 
-            // Product Detail URL fallback (product.url in DB maps to detail_url in preset)
-            if (col.field === 'detail_url' || col.field === 'url' || col.field === 'link' || col.field === 'product_url') {
-                val = val || product.url || product.detail_url || product.link || product.product_url || product.page_url || (product.slug ? `https://www.argox.com/products-detail/${product.slug}/` : '');
+            // --- URL (url / detail_url) ---
+            if (col.field === 'detail_url' || col.field === 'url' || col.field === 'product_url') {
+                val = product.url || product.detail_url || product.link || product.product_url || product.page_url || '';
             }
 
-            // Image URL fallback
+            // --- Image URL ---
             if (col.field === 'image_url') {
-                val = val || product.image_url || product.image || product.img || product.thumbnail || '';
+                val = product.image_url || product.image || product.img || product.thumbnail || '';
             }
 
-            // Brand fallback + translation
+            // --- Model / SKU ---
+            if (col.field === 'model') {
+                val = product.model || product.sku || product.product_code || product.slug || '';
+            }
+
+            // --- Name (translate Zh → En) ---
+            if (col.field === 'name') {
+                val = translateZhToEn(String(product.name || product.title || ''));
+            }
+
+            // --- Brand (translate Zh → En) ---
             if (col.field === 'brand') {
-                val = val || product.brand_name || product.brand || product.vendor || (product.profile_slug ? product.profile_slug.replace(/^profile-?/i, '').toUpperCase() : (profileSlug ? profileSlug.replace(/^profile-?/i, '').toUpperCase() : ''));
+                val = product.brand_name || product.brand || product.vendor ||
+                    (product.profile_slug ? product.profile_slug.replace(/^profile-?/i, '').toUpperCase() :
+                    (profileSlug ? profileSlug.replace(/^profile-?/i, '').toUpperCase() : ''));
                 val = translateZhToEn(String(val || ''));
             }
 
-            // Category / Series / Name translation
-            if (col.field === 'category' || col.field === 'main_category' || col.field === 'series' || col.field === 'name') {
+            // --- Category / Main Category / Series (translate) ---
+            if (col.field === 'category' || col.field === 'main_category' || col.field === 'series') {
                 val = translateZhToEn(String(val || ''));
             }
 
-            // Fallback for model / sku
-            if (col.field === 'model' && !val) {
-                val = product.sku || product.product_code || product.slug || '';
-            }
-
-            // Document / PDF links formatting
-            if (col.field === 'document_url') {
-                val = formatDocumentLinks(val || product.pdf_url || product.datasheet_url || product.download_links || product.documents);
-            }
-
-            // Description plain text formatting (NO <p> tags!)
+            // --- Description → plain text (strip HTML tags) ---
             if (col.field === 'description') {
-                val = formatDescriptionToPlainText(val || product.description_raw || product.summary || '');
+                val = formatDescriptionToPlainText(
+                    product.description || product.description_raw || product.summary || ''
+                );
             }
 
-            // Specs HTML Table formatting
-            if (col.field === 'specs_json' || col.field === 'specifications' || col.field === 'specs' || col.field === 'specs_html' || col.field === 'technical_specs') {
-                val = convertSpecsToHtmlTable(val || product.specs_json || product.specs_html || product.specifications || product.specs || product.technical_specs);
+            // --- Document URL → formatted link list ---
+            if (col.field === 'document_url') {
+                val = formatDocumentLinks(
+                    product.document_url || product.pdf_url || product.datasheet_url ||
+                    product.download_links || product.documents
+                );
+            }
+
+            // --- doc_title — computed: "Datasheet sản phẩm" if any PDF/document exists ---
+            if (col.field === 'doc_title') {
+                const hasDoc = !!(product.document_url || product.pdf_url || product.datasheet_url ||
+                    product.download_links || product.documents);
+                val = hasDoc ? 'Datasheet sản phẩm' : '';
+            }
+
+            // --- Specs → HTML table (noi_dung) ---
+            if (col.field === 'specs_json' || col.field === 'specifications' ||
+                col.field === 'specs' || col.field === 'specs_html' || col.field === 'technical_specs') {
+                val = convertSpecsToHtmlTable(
+                    product.specs_json || product.specs_html || product.specifications ||
+                    product.specs || product.technical_specs || val
+                );
             } else if (typeof val === 'string' && (val.trim().startsWith('{') || val.trim().startsWith('['))) {
                 val = convertSpecsToHtmlTable(val);
             }
