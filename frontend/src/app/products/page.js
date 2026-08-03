@@ -8,6 +8,7 @@ import ImportSheetModal from '@/components/ImportSheetModal';
 import AiAssistantModal from '@/components/AiAssistantModal';
 import CrawlerToSheetModal from '@/components/CrawlerToSheetModal';
 import ExportExcelModal from '@/components/ExportExcelModal';
+import GoogleDriveModal from '@/components/GoogleDriveModal';
 import { 
     Search, 
     Download, 
@@ -23,6 +24,7 @@ import {
     Bot,
     FileSpreadsheet,
     Layers,
+    HardDrive,
     Pin,
 
     Edit3,
@@ -55,6 +57,7 @@ function ProductsContent() {
     const [currentProfile, setCurrentProfile] = useState(null);
     const [profilesList, setProfilesList] = useState([]);
     const [showImportModal, setShowImportModal] = useState(false);
+    const [showGoogleDriveModal, setShowGoogleDriveModal] = useState(false);
 
     // Crawler to Sheet conversion state
     const [showCrawlerToSheetModal, setShowCrawlerToSheetModal] = useState(false);
@@ -1852,6 +1855,28 @@ function ProductsContent() {
                         }}
                     >
                         <History size={15} style={{ color: 'var(--accent)' }} /> Xem Lịch Sử & Tiến Độ Đăng
+                    </button>
+
+                    <button 
+                        type="button"
+                        className="btn"
+                        onClick={() => setShowGoogleDriveModal(true)}
+                        style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: 8, 
+                            background: '#f0f9ff', 
+                            border: '1px solid #7dd3fc', 
+                            color: '#0369a1', 
+                            padding: '9px 14px', 
+                            borderRadius: 'var(--radius-md)', 
+                            fontWeight: 600, 
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            boxShadow: 'var(--shadow-sm)'
+                        }}
+                    >
+                        <HardDrive size={15} style={{ color: '#0284c7' }} /> Kết Nối Google Drive
                     </button>
                 </div>
             </div>
@@ -4689,6 +4714,13 @@ function ProductsContent() {
                 onClose={() => setShowExportModal(false)}
                 defaultProfileSlug={profileSlug}
                 profiles={profilesList}
+            />
+
+            {/* Modal Google Drive Setup & Auth */}
+            <GoogleDriveModal
+                isOpen={showGoogleDriveModal}
+                onClose={() => setShowGoogleDriveModal(false)}
+                toast={toast}
             />
 
         </div>

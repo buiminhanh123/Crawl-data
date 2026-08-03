@@ -695,7 +695,7 @@ export default function AiAssistantModal({
                 isPaused: false,
                 activeProfileName: profileName || 'Profile',
                 activeTabName: selectedTab || 'Sheet1',
-                activeTaskName: 'Tác vụ AI Modal',
+                activeTaskName: promptText ? (promptText.slice(0, 30) + (promptText.length > 30 ? '...' : '')) : 'Tác vụ AI Modal',
                 totalRows: initialJobs.length,
                 completedCount: 0,
                 pendingCount: initialJobs.length,
@@ -719,6 +719,30 @@ export default function AiAssistantModal({
         let workingData = activeSheet.data.map(r => Array.isArray(r) ? [...r] : []);
         let processedCount = 0;
         let errorsCount = 0;
+        let skippedCount = 0;
+
+        const syncRunnerProgress = (done, errs, skips, isRunning = true) => {
+            try {
+                const total = jobList.length || 1;
+                const totalDone = done;
+                const percent = Math.min(100, Math.round((totalDone / total) * 100));
+                const runnerObj = {
+                    isRunning,
+                    isPaused: false,
+                    activeProfileName: profileName || 'Profile',
+                    activeTabName: tabName || selectedTab || 'Sheet1',
+                    activeTaskName: templatePrompt ? (templatePrompt.slice(0, 30) + (templatePrompt.length > 30 ? '...' : '')) : 'Tác vụ AI Modal',
+                    totalRows: total,
+                    completedCount: Math.max(0, done - errs - skips),
+                    pendingCount: Math.max(0, total - totalDone),
+                    errorCount: errs,
+                    skipCount: skips,
+                    currentProgressPercent: percent
+                };
+                localStorage.setItem('ai_runner_state', JSON.stringify(runnerObj));
+                window.dispatchEvent(new Event('ai_runner_update'));
+            } catch (e) {}
+        };
 
         // Pending Jobs Queue
         const pendingQueue = [...jobList];
@@ -739,7 +763,9 @@ export default function AiAssistantModal({
                 if (skipIfExist && existingVal && String(existingVal).trim() !== '') {
                     job.status = 'skipped';
                     job.result = existingVal;
+                    skippedCount++;
                     processedCount++;
+                    syncRunnerProgress(processedCount, errorsCount, skippedCount, true);
                     setJobs(prev => prev.map(j => j.rowNum === job.rowNum ? { ...job } : j));
                     setAiState(p => ({
                         ...p,
@@ -804,6 +830,7 @@ export default function AiAssistantModal({
                     job.status = 'done';
                     job.result = cleanedAiContent;
                     processedCount++;
+                    syncRunnerProgress(processedCount, errorsCount, skippedCount, true);
 
                         // Immediate Sheet Cell Update & Auto-Save
                         const updatedSheets = sheets.map(s => s.name === tabName ? { ...s, data: workingData } : s);
@@ -829,6 +856,7 @@ export default function AiAssistantModal({
                         job.error = 'AI không trả về kết quả';
                         errorsCount++;
                         processedCount++;
+                        syncRunnerProgress(processedCount, errorsCount, skippedCount, true);
                         setAiState(p => ({
                             ...p,
                             completedRows: processedCount,
@@ -841,6 +869,7 @@ export default function AiAssistantModal({
                     job.error = err.message || 'Lỗi kết nối';
                     errorsCount++;
                     processedCount++;
+                    syncRunnerProgress(processedCount, errorsCount, skippedCount, true);
                     setAiState(p => ({
                         ...p,
                         completedRows: processedCount,
@@ -867,23 +896,7 @@ export default function AiAssistantModal({
             logs: [isAborted ? '⏹️ Đã dừng tiến trình AI' : `🎉 Tác vụ AI đã hoàn tất thành công!`, ...p.logs]
         }));
 
-        try {
-            const runnerObj = {
-                isRunning: false,
-                isPaused: false,
-                activeProfileName: profileName || 'Profile',
-                activeTabName: selectedTab || 'Sheet1',
-                activeTaskName: 'Tác vụ AI Modal',
-                totalRows: jobList.length,
-                completedCount: processedCount,
-                pendingCount: 0,
-                errorCount: errorsCount,
-                skipCount: 0,
-                currentProgressPercent: 100
-            };
-            localStorage.setItem('ai_runner_state', JSON.stringify(runnerObj));
-            window.dispatchEvent(new Event('ai_runner_update'));
-        } catch (e) {}
+        syncRunnerProgress(processedCount, errorsCount, skippedCount, false);
 
         if (!isAborted) {
             playCompletionChime();

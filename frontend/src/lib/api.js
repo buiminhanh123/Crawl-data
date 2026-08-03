@@ -37,10 +37,15 @@ export async function fetchApi(path, options = {}) {
         headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`${API_BASE}${path}`, {
-        ...options,
-        headers,
-    });
+    let res;
+    try {
+        res = await fetch(`${API_BASE}${path}`, {
+            ...options,
+            headers,
+        });
+    } catch (netErr) {
+        throw new Error('Không thể kết nối tới Backend Server (http://localhost:3002). Vui lòng kiểm tra và chạy lại lệnh `node server.js`!');
+    }
 
     if (res.status === 401) {
         if (typeof window !== 'undefined') {

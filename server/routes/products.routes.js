@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const { productQueries, profileQueries, profileSheetQueries } = require('../db');
+const googleDriveRoutes = require('./google-drive.routes');
+
+router.use('/google-drive', googleDriveRoutes);
 
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const SERVER_DIR = path.resolve(__dirname, '..');
@@ -482,13 +485,46 @@ router.get('/profile-sheet', (req, res) => {
 });
 
 // POST /api/products/profile-sheet — save profile sheet data
-router.post('/profile-sheet', (req, res) => {
+// POST /api/products/profile-sheet
+router.post('/profile-sheet', async (req, res) => {
     try {
         const { profile, sheets } = req.body;
         if (!profile || !sheets) {
             return res.status(400).json({ error: 'profile and sheets are required.' });
         }
         profileSheetQueries.save(profile, sheets);
+
+        // Auto-sync to Google Drive _DATA spreadsheet if Drive is connected
+        try {
+            const googleDriveService = require('../services/google-drive.service');
+            if (googleDriveService.isConnected()) {
+                const targetProfile = profileQueries.getBySlug(profile);
+                let driveFolderId = targetProfile ? targetProfile.drive_folder_id : null;
+
+                // Auto-create drive folders if not created yet
+                if (targetProfile && !driveFolderId) {
+                    const driveFolders = await googleDriveService.createProfileFolders(targetProfile.name);
+                    if (driveFolders.profileFolderId) {
+                        driveFolderId = driveFolders.profileFolderId;
+                        profileQueries.updateDriveInfo(profile, driveFolders.profileFolderId, driveFolders.datasheetFolderId, null);
+                    }
+                }
+
+                if (driveFolderId && Array.isArray(sheets)) {
+                    for (const sObj of sheets) {
+                        if (sObj && sObj.data && sObj.data.length > 0) {
+                            const resSync = await googleDriveService.syncGoogleSheetData(driveFolderId, targetProfile ? targetProfile.name : profile, sObj.name, sObj.data);
+                            if (resSync && resSync.spreadsheetId) {
+                                profileQueries.updateDriveInfo(profile, null, null, resSync.spreadsheetId);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (dErr) {
+            console.error('[ProductsRoute] Google Drive _DATA sheet sync error:', dErr);
+        }
+
         res.json({ message: 'Lưu dữ liệu Sheet thành công!' });
     } catch (err) {
         console.error('Failed to save profile sheet:', err);
@@ -541,7 +577,7 @@ const ALIAS_MAP = {
     tl_tailieu_link: ['tl_tailieu_link', 'tài liệu link', 'cột ae']
 };
 
-router.post('/export-excel', (req, res) => {
+router.post('/export-excel', async (req, res) => {
     try {
         const { profile = 'newland', sheetNames = [], mode = 'template' } = req.body;
         const sheets = profileSheetQueries.getBySlug(profile);
@@ -621,9 +657,23 @@ router.post('/export-excel', (req, res) => {
         }
 
         const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        const exportFileName = `Export_${profile}_${Date.now()}.xlsx`;
+
+        // Upload copy to Google Drive profile folder if connected
+        try {
+            const googleDriveService = require('../services/google-drive.service');
+            if (googleDriveService.isConnected()) {
+                const targetProfile = profileQueries.getBySlug(profile);
+                if (targetProfile && targetProfile.drive_folder_id) {
+                    await googleDriveService.uploadExcelToDrive(targetProfile.drive_folder_id, exportFileName, buf);
+                }
+            }
+        } catch (dErr) {
+            console.error('[ProductsRoute] Google Drive Excel upload error:', dErr);
+        }
 
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename="Export_${profile}_${Date.now()}.xlsx"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${exportFileName}"`);
         res.send(buf);
 
     } catch (err) {
@@ -644,13 +694,31 @@ router.get('/profiles', (req, res) => {
 });
 
 // POST /api/products/profiles — create a new product profile
-router.post('/profiles', (req, res) => {
+router.post('/profiles', async (req, res) => {
     try {
         const { name, brand_name, target_url } = req.body;
         if (!name || !name.trim()) {
             return res.status(400).json({ error: 'Tên Profile là bắt buộc.' });
         }
         const profile = profileQueries.create(name, brand_name || '', target_url || '');
+
+        // Automatically create Google Drive folder & "Datasheet" subfolder if Drive connected
+        try {
+            const googleDriveService = require('../services/google-drive.service');
+            if (googleDriveService.isConnected()) {
+                const driveFolders = await googleDriveService.createProfileFolders(profile.name);
+                if (driveFolders.profileFolderId) {
+                    profileQueries.updateDriveInfo(profile.slug, driveFolders.profileFolderId, driveFolders.datasheetFolderId, null);
+                    profile.drive_folder_id = driveFolders.profileFolderId;
+                    profile.datasheet_folder_id = driveFolders.datasheetFolderId;
+                    profile.drive_folder_link = driveFolders.profileFolderLink;
+                    profile.datasheet_folder_link = driveFolders.datasheetFolderLink;
+                }
+            }
+        } catch (dErr) {
+            console.error('[ProductsRoute] Google Drive folder creation error:', dErr);
+        }
+
         res.json({ message: 'Tạo Profile thành công.', profile });
     } catch (err) {
         console.error('Failed to create profile:', err);

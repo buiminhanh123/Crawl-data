@@ -167,6 +167,8 @@ export default function Sidebar() {
         }
     };
 
+    const prevIsRunningRef = useRef(false);
+
     useEffect(() => {
         const saved = localStorage.getItem('sidebar_collapsed');
         if (saved === 'true') {
@@ -209,6 +211,12 @@ export default function Sidebar() {
                         } catch (e) {}
                     }
                     setAiRunnerState(parsed);
+
+                    // Auto-expand AI Assistant card in sidebar when task starts
+                    if (parsed.isRunning && !prevIsRunningRef.current) {
+                        setShowAiSideview(true);
+                    }
+                    prevIsRunningRef.current = !!parsed.isRunning;
                 }
             } catch (e) {}
         };
@@ -269,6 +277,27 @@ export default function Sidebar() {
             alert(err.message || 'Lỗi khi tạo Profile');
         } finally {
             setCreating(false);
+        }
+    };
+
+    const handleDeleteProfile = async (profile) => {
+        if (!profile) return;
+        setCtxMenu(null);
+        if (profile.slug === 'newland') {
+            alert('Không thể xóa Profile Newland mặc định.');
+            return;
+        }
+        if (!confirm(`Bạn có chắc chắn muốn xóa Profile "${profile.name}"?\n\nTất cả sản phẩm đã crawl và dữ liệu sheet thuộc Profile này sẽ bị xóa.`)) {
+            return;
+        }
+        try {
+            await fetchApi(`/api/products/profiles/${profile.slug}`, {
+                method: 'DELETE'
+            });
+            await fetchProfiles();
+            router.push('/products');
+        } catch (err) {
+            alert(err.message || 'Lỗi khi xóa Profile.');
         }
     };
 

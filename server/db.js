@@ -166,7 +166,16 @@ async function initDatabase() {
     } catch (e) {}
     try {
         db.run('ALTER TABLE product_profiles ADD COLUMN check_config_json TEXT DEFAULT NULL');
-    } catch (e) {} // Column may already exist
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN drive_folder_id TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN datasheet_folder_id TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN data_sheet_id TEXT DEFAULT NULL');
+    } catch (e) {}
 
     try {
         const profRes = db.exec("SELECT COUNT(*) FROM product_profiles");
@@ -868,6 +877,14 @@ const profileQueries = {
         const res = db.exec('SELECT last_insert_rowid()');
         saveDatabase();
         return { id: res[0].values[0][0], name: name.trim(), slug, brand_name: brandName.trim(), target_url: targetUrl.trim() };
+    },
+
+    updateDriveInfo: (slug, driveFolderId, datasheetFolderId, dataSheetId) => {
+        db.run(
+            'UPDATE product_profiles SET drive_folder_id = COALESCE(?, drive_folder_id), datasheet_folder_id = COALESCE(?, datasheet_folder_id), data_sheet_id = COALESCE(?, data_sheet_id), updated_at = datetime("now") WHERE slug = ?',
+            [driveFolderId, datasheetFolderId, dataSheetId, slug]
+        );
+        saveDatabase();
     },
 
     delete: (id) => {
