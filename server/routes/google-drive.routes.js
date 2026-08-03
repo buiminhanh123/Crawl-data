@@ -139,6 +139,16 @@ router.get('/check-profile-folders', async (req, res) => {
                 } else {
                     folderValid = true;
                 }
+            } else if (connected) {
+                // DB does not have drive_folder_id saved yet -> auto-search Google Drive for existing folder by name
+                const existing = await googleDriveService.findExistingProfileFolder(p.name);
+                if (existing && existing.profileFolderId) {
+                    profileQueries.updateDriveInfo(p.slug, existing.profileFolderId, existing.datasheetFolderId, null);
+                    p.drive_folder_id = existing.profileFolderId;
+                    p.datasheet_folder_id = existing.datasheetFolderId;
+                    hasFolder = true;
+                    folderValid = true;
+                }
             }
 
             results.push({

@@ -169,6 +169,73 @@ async function handleAuthCode(code) {
     return tokens;
 }
 
+async function findExistingProfileFolder(profileName) {
+    const authClient = getAuthClient();
+    if (!authClient || !isConnected() || !profileName) return null;
+
+    try {
+        const drive = google.drive({ version: 'v3', auth: authClient });
+        const config = getConfig();
+
+        let parentQuery = '';
+        if (config.parentFolderId && config.parentFolderId.trim()) {
+            parentQuery = `'${config.parentFolderId.trim()}' in parents and `;
+        }
+
+        const safeName = profileName.trim().replace(/'/g, "\\'");
+        const q = `${parentQuery}mimeType='application/vnd.google-apps.folder' and name='${safeName}' and trashed=false`;
+
+        const res = await drive.files.list({
+            q,
+            fields: 'files(id, name, webViewLink)'
+        });
+
+        if (res.data.files && res.data.files.length > 0) {
+            const profileFolderId = res.data.files[0].id;
+            const profileFolderLink = res.data.files[0].webViewLink;
+
+            let datasheetFolderId = null;
+            let datasheetFolderLink = null;
+
+            try {
+                const dsQ = `'${profileFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and name='Datasheet' and trashed=false`;
+                const dsRes = await drive.files.list({ q: dsQ, fields: 'files(id, name, webViewLink)' });
+                if (dsRes.data.files && dsRes.data.files.length > 0) {
+                    datasheetFolderId = dsRes.data.files[0].id;
+                    datasheetFolderLink = dsRes.data.files[0].webViewLink;
+                }
+            } catch (e) {}
+
+            if (!datasheetFolderId) {
+                try {
+                    const dsFolder = await drive.files.create({
+                        resource: {
+                            name: 'Datasheet',
+                            mimeType: 'application/vnd.google-apps.folder',
+                            parents: [profileFolderId]
+                        },
+                        fields: 'id, name, webViewLink'
+                    });
+                    datasheetFolderId = dsFolder.data.id;
+                    datasheetFolderLink = dsFolder.data.webViewLink;
+                } catch (e) {}
+            }
+
+            return {
+                profileFolderId,
+                datasheetFolderId,
+                profileFolderLink,
+                datasheetFolderLink,
+                isExisting: true
+            };
+        }
+    } catch (err) {
+        console.error('[GoogleDriveService] Error searching existing folder:', err);
+    }
+
+    return null;
+}
+
 async function createProfileFolders(profileName) {
     const authClient = getAuthClient();
     if (!authClient || !isConnected()) {
@@ -177,6 +244,14 @@ async function createProfileFolders(profileName) {
     }
 
     try {
+        // 1. First search Google Drive to see if folder already exists (prevent duplicate folders!)
+        const existing = await findExistingProfileFolder(profileName);
+        if (existing) {
+            console.log(`[GoogleDriveService] Linked existing Drive folder for '${profileName}': Folder=${existing.profileFolderId}, Datasheet=${existing.datasheetFolderId}`);
+            return existing;
+        }
+
+        // 2. Otherwise create new folder
         const drive = google.drive({ version: 'v3', auth: authClient });
         const config = getConfig();
 
@@ -221,7 +296,7 @@ async function createProfileFolders(profileName) {
         });
         const datasheetFolderId = datasheetFolder.data.id;
 
-        console.log(`[GoogleDriveService] Created Drive folders for Profile '${profileName}': Folder=${profileFolderId}, DatasheetFolder=${datasheetFolderId}`);
+        console.log(`[GoogleDriveService] Created new Drive folders for Profile '${profileName}': Folder=${profileFolderId}, DatasheetFolder=${datasheetFolderId}`);
         return {
             profileFolderId,
             datasheetFolderId,
@@ -351,6 +426,7 @@ module.exports = {
     getAuthUrl,
     handleAuthCode,
     createProfileFolders,
+    findExistingProfileFolder,
     syncGoogleSheetData,
     uploadExcelToDrive,
     verifyDriveFolderExists
