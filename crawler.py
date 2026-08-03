@@ -988,29 +988,59 @@ def extract_product_data(soup, slug, url=""):
         'privacy', 'terms', 'support', 'downloads', 'investors', 'careers', 'home',
         'trang chủ', 'main', 'index', '公司簡介', '關於立象', '關於我們', '聯絡我們',
         '新聞', '解決方案', '首頁', '企業簡介', 'about-us', 'company-info',
-        'products', 'product', 'sản phẩm', '產品', '产品'
+        'products', 'product', 'sản phẩm', '產品', '产品', 'all products', 'catalogs'
     }
 
-    # Strategy A: Breadcrumbs HTML parsing (Authoritative source from website menu)
-    bc_elements = soup.find_all(class_=re.compile(r'\b(bread|crumb|crumbs|nav-path|location|site-map)\b', re.I))
-    if not bc_elements:
-        bc_elements = soup.find_all(['nav', 'div', 'ul', 'ol'], attrs={"aria-label": re.compile(r'breadcrumb', re.I)})
-    if not bc_elements:
-        bc_elements = soup.find_all(attrs={"itemtype": re.compile(r'BreadcrumbList', re.I)})
-
     crumbs = []
-    if bc_elements:
-        for bc_el in bc_elements:
-            items = bc_el.find_all(["a", "li", "span"])
-            for item in items:
-                t = translate_zh_to_en(item.text.strip())
-                t_lower = t.lower()
-                if t and t not in crumbs and t_lower not in INVALID_NAV_KEYWORDS and not any(k == t_lower for k in INVALID_NAV_KEYWORDS) and not any(x in t for x in ('>', '/')):
-                    crumbs.append(t)
-            if len(crumbs) >= 1:
-                break
 
-    clean_crumbs = [c for c in crumbs if c.lower() != name.lower() and c.lower() != slug.lower()]
+    # Strategy A1: JSON-LD Structured Data Parsing (Modern Web Standard)
+    for script_ld in soup.find_all('script', type='application/ld+json'):
+        try:
+            ld_str = script_ld.string or script_ld.text or ''
+            if 'BreadcrumbList' in ld_str:
+                ld_data = json.loads(ld_str)
+                if isinstance(ld_data, dict) and ld_data.get('@type') == 'BreadcrumbList':
+                    items = ld_data.get('itemListElement', [])
+                    if isinstance(items, list):
+                        items.sort(key=lambda x: x.get('position', 0) if isinstance(x, dict) else 0)
+                        for it in items:
+                            if not isinstance(it, dict): continue
+                            c_name = it.get('name') or (it.get('item', {}).get('name') if isinstance(it.get('item'), dict) else '')
+                            if c_name:
+                                t = translate_zh_to_en(str(c_name).strip())
+                                t_lower = t.lower()
+                                if t and t not in crumbs and t_lower not in INVALID_NAV_KEYWORDS and not any(x in t for x in ('>', '/')):
+                                    crumbs.append(t)
+                        if crumbs: break
+        except Exception:
+            pass
+
+    # Strategy A2: Breadcrumbs HTML parsing
+    if not crumbs:
+        bc_elements = soup.find_all(class_=re.compile(r'\b(bread|crumb|crumbs|nav-path|location|site-map|path|breadcrumbs)\b', re.I))
+        if not bc_elements:
+            bc_elements = soup.find_all(['nav', 'div', 'ul', 'ol'], attrs={"aria-label": re.compile(r'breadcrumb', re.I)})
+        if not bc_elements:
+            bc_elements = soup.find_all(attrs={"itemtype": re.compile(r'BreadcrumbList', re.I)})
+
+        if bc_elements:
+            for bc_el in bc_elements:
+                items = bc_el.find_all(["a", "li", "span"])
+                for item in items:
+                    t = translate_zh_to_en(item.text.strip())
+                    t_lower = t.lower()
+                    if t and t not in crumbs and t_lower not in INVALID_NAV_KEYWORDS and not any(k == t_lower for k in INVALID_NAV_KEYWORDS) and not any(x in t for x in ('>', '/')):
+                        crumbs.append(t)
+                if len(crumbs) >= 1:
+                    break
+
+    clean_crumbs = [
+        c for c in crumbs 
+        if c.lower() != (name or '').lower() 
+        and c.lower() != (slug or '').lower()
+        and not re.match(r'^[A-Za-z0-9]{1,4}[-_/][0-9]{2,5}[A-Za-z0-9]*$', c.strip()) # Reject raw model codes like AS-8520
+    ]
+
     if len(clean_crumbs) >= 3:
         main_category = clean_crumbs[0]
         category = clean_crumbs[1]
@@ -1046,7 +1076,7 @@ def extract_product_data(soup, slug, url=""):
                 break
 
     # Clean up any leftover invalid nav items in category or series
-    if any(k in (category or '').lower() for k in INVALID_NAV_KEYWORDS):
+    if any(k in (category or '').lower() for k in INVALID_NAV_KEYWORDS) or re.match(r'^[A-Za-z0-9]{1,4}[-_/][0-9]{2,5}[A-Za-z0-9]*$', category.strip()):
         category = ""
     if any(k in (series or '').lower() for k in INVALID_NAV_KEYWORDS):
         series = ""
@@ -1064,6 +1094,7 @@ def extract_product_data(soup, slug, url=""):
         p.replace('-', ' ').replace('_', ' ').title() 
         for p in parts 
         if p.lower() not in GENERIC_SEGMENTS and not p.isdigit()
+        and not re.match(r'^[A-Za-z0-9]{1,4}[-_/][0-9]{2,5}[A-Za-z0-9]*$', p.strip())
     ]
 
     if not category:
