@@ -260,9 +260,6 @@ function ProductsContent() {
             filteredHistoryLogs: filtered
         };
     }, [customPostingLogs, profileSlug, profileSheets, totalProductsCount, historyStatusFilter, historySearchTerm]);
-            allPostingLogs: logs
-        };
-    }, [profileSlug, profileSheets, totalProductsCount, historySearchTerm, historyStatusFilter]);
 
     const paginatedHistoryLogs = useMemo(() => {
         if (historyPageSize === 'all') return filteredHistoryLogs;
