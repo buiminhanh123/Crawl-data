@@ -75,6 +75,34 @@ const AVAILABLE_FIELDS = [
     { value: 'custom_empty', label: '➕ (Ô trống - Tự nhập tên Header tùy ý)' }
 ];
 
+// Helper to build 31-column preset with HAR field mappings applied
+function build31ColPresetFromHarMapping(fieldMappings, profileSlug = '') {
+    const defaultCols = JSON.parse(JSON.stringify(DEFAULT_PRESETS[0].columns));
+    if (!fieldMappings || typeof fieldMappings !== 'object' || Object.keys(fieldMappings).length === 0) {
+        return {
+            id: 'preset-default',
+            name: '📋 Mẫu Chuẩn 31 Cột (khớp file mau-them-san-pham)',
+            columns: defaultCols
+        };
+    }
+
+    const customCols = defaultCols.map(col => ({ ...col, field: 'custom_empty' }));
+
+    for (const [fieldKey, targetColId] of Object.entries(fieldMappings)) {
+        if (!targetColId) continue;
+        const targetCol = customCols.find(c => c.id === targetColId);
+        if (targetCol) {
+            targetCol.field = fieldKey;
+        }
+    }
+
+    return {
+        id: `preset-har-${profileSlug || 'custom'}`,
+        name: `📡 Theo Cấu Hình HAR Analysis (Mẫu 31 Cột — ${profileSlug.toUpperCase() || 'Chỉ Định'})`,
+        columns: customCols
+    };
+}
+
 export default function CrawlerToSheetModal({
     isOpen,
     onClose,
@@ -135,6 +163,31 @@ export default function CrawlerToSheetModal({
             console.error('Failed to load mapping presets:', e);
         }
     }, []);
+
+    // Check & Load Profile HAR Mapping Preset when modal is opened
+    useEffect(() => {
+        if (!isOpen || !profileSlug) return;
+        let isSubscribed = true;
+
+        const loadHarMappingPreset = async () => {
+            try {
+                const data = await fetchApi(`/api/products/profiles/${profileSlug}/har-report`);
+                if (isSubscribed && data?.report?.fieldMappings && Object.keys(data.report.fieldMappings).length > 0) {
+                    const harPreset = build31ColPresetFromHarMapping(data.report.fieldMappings, profileSlug);
+                    setPresets(prev => {
+                        const filtered = prev.filter(p => !p.id.startsWith('preset-har-'));
+                        return [harPreset, ...filtered];
+                    });
+                    setSelectedPresetId(harPreset.id);
+                    setColumns(harPreset.columns);
+                }
+            } catch (e) {}
+        };
+
+        loadHarMappingPreset();
+
+        return () => { isSubscribed = false; };
+    }, [isOpen, profileSlug]);
 
     useEffect(() => {
         if (selectedProductIds.length > 0) {

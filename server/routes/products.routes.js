@@ -804,11 +804,15 @@ router.post('/profiles/:slug/har', harUpload.single('har'), (req, res) => {
             return res.status(400).json({ error: 'File HAR không có cấu trúc hợp lệ (thiếu log.entries).' });
         }
 
+        const existingReport = profileQueries.getHarReport(slug);
         const report = analyzeHar(harData, profile.target_url || '');
         report.profileSlug = slug;
         report.profileName = profile.name;
         report.harFileName = req.file.originalname;
         report.harFileSizeKb = Math.round(req.file.size / 1024);
+        if (existingReport?.fieldMappings) {
+            report.fieldMappings = existingReport.fieldMappings;
+        }
 
         // Save report to DB
         profileQueries.saveHarReport(slug, report);
@@ -832,6 +836,28 @@ router.get('/profiles/:slug/har-report', (req, res) => {
     } catch (err) {
         console.error('Failed to get HAR report:', err);
         res.status(500).json({ error: 'Lỗi khi lấy báo cáo HAR.' });
+    }
+});
+
+// POST /api/products/profiles/:slug/har-mapping — save HAR field column mapping for profile
+router.post('/profiles/:slug/har-mapping', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { fieldMappings } = req.body;
+        
+        let report = profileQueries.getHarReport(slug);
+        if (!report) {
+            report = { profileSlug: slug, fields: [], summary: {} };
+        }
+        
+        report.fieldMappings = fieldMappings || {};
+        report.mappingUpdatedAt = new Date().toISOString();
+        
+        profileQueries.saveHarReport(slug, report);
+        res.json({ message: 'Đã lưu cấu hình ánh xạ HAR thành công!', fieldMappings: report.fieldMappings });
+    } catch (err) {
+        console.error('Failed to save HAR mapping:', err);
+        res.status(500).json({ error: err.message || 'Lỗi khi lưu cấu hình ánh xạ HAR.' });
     }
 });
 

@@ -47,8 +47,57 @@ import {
     XCircle,
     AlertTriangle,
     Settings,
-    RefreshCw
+    RefreshCw,
+    Sparkles
 } from 'lucide-react';
+
+const STANDARD_31_COLUMNS = [
+    { id: 'col-A',  colLetter: 'A', label: 'Cột A (ma_san_pham)' },
+    { id: 'col-B',  colLetter: 'B', label: 'Cột B (ten_san_pham)' },
+    { id: 'col-C',  colLetter: 'C', label: 'Cột C (ten_san_pham_en)' },
+    { id: 'col-D',  colLetter: 'D', label: 'Cột D (url)' },
+    { id: 'col-E',  colLetter: 'E', label: 'Cột E (url_en)' },
+    { id: 'col-F',  colLetter: 'F', label: 'Cột F (tieu_de_trang)' },
+    { id: 'col-G',  colLetter: 'G', label: 'Cột G (tieu_de_trang_en)' },
+    { id: 'col-H',  colLetter: 'H', label: 'Cột H (mo_ta)' },
+    { id: 'col-I',  colLetter: 'I', label: 'Cột I (mo_ta_en)' },
+    { id: 'col-J',  colLetter: 'J', label: 'Cột J (gia)' },
+    { id: 'col-K',  colLetter: 'K', label: 'Cột K (khuyen_mai)' },
+    { id: 'col-L',  colLetter: 'L', label: 'Cột L (anh_dai_dien)' },
+    { id: 'col-M',  colLetter: 'M', label: 'Cột M (anh_1)' },
+    { id: 'col-N',  colLetter: 'N', label: 'Cột N (anh_2)' },
+    { id: 'col-O',  colLetter: 'O', label: 'Cột O (anh_3)' },
+    { id: 'col-P',  colLetter: 'P', label: 'Cột P (anh_4)' },
+    { id: 'col-Q',  colLetter: 'Q', label: 'Cột Q (nhan)' },
+    { id: 'col-R',  colLetter: 'R', label: 'Cột R (danh_muc_id)' },
+    { id: 'col-S',  colLetter: 'S', label: 'Cột S (thuong_hieu_id)' },
+    { id: 'col-T',  colLetter: 'T', label: 'Cột T (noi_dung)' },
+    { id: 'col-U',  colLetter: 'U', label: 'Cột U (noi_dung_en)' },
+    { id: 'col-V',  colLetter: 'V', label: 'Cột V (tl_hdsd_tieu_de)' },
+    { id: 'col-W',  colLetter: 'W', label: 'Cột W (tl_hdsd_link)' },
+    { id: 'col-X',  colLetter: 'X', label: 'Cột X (tl_cad_tieu_de)' },
+    { id: 'col-Y',  colLetter: 'Y', label: 'Cột Y (tl_cad_link)' },
+    { id: 'col-Z',  colLetter: 'Z', label: 'Cột Z (tl_chungchi_tieu_de)' },
+    { id: 'col-AA', colLetter: 'AA', label: 'Cột AA (tl_chungchi_link)' },
+    { id: 'col-AB', colLetter: 'AB', label: 'Cột AB (tl_phanmem_tieu_de)' },
+    { id: 'col-AC', colLetter: 'AC', label: 'Cột AC (tl_phanmem_link)' },
+    { id: 'col-AD', colLetter: 'AD', label: 'Cột AD (tl_tailieu_tieu_de)' },
+    { id: 'col-AE', colLetter: 'AE', label: 'Cột AE (tl_tailieu_link)' }
+];
+
+const DEFAULT_HAR_FIELD_MAPPINGS = {
+    model: 'col-A',
+    name: 'col-B',
+    detail_url: 'col-D',
+    description: 'col-H',
+    price: 'col-J',
+    image_url: 'col-L',
+    category: 'col-R',
+    brand: 'col-S',
+    specs_json: 'col-T',
+    doc_title: 'col-V',
+    document_url: 'col-W'
+};
 
 function ProductsContent() {
     const { user, hasPermission } = useAuth();
@@ -278,16 +327,43 @@ function ProductsContent() {
     const [harReport, setHarReport] = useState(null);
     const [sitemapInfo, setSitemapInfo] = useState(null);
     const [harReportLoading, setHarReportLoading] = useState(false);
+    const [harFieldMappings, setHarFieldMappings] = useState(DEFAULT_HAR_FIELD_MAPPINGS);
+    const [savingHarMapping, setSavingHarMapping] = useState(false);
 
     const fetchHarReport = async (slug) => {
         setHarReportLoading(true);
         try {
             const data = await fetchApi(`/api/products/profiles/${slug}/har-report`);
-            if (data?.report) setHarReport(data.report);
+            if (data?.report) {
+                setHarReport(data.report);
+                if (data.report.fieldMappings && Object.keys(data.report.fieldMappings).length > 0) {
+                    setHarFieldMappings(data.report.fieldMappings);
+                } else {
+                    setHarFieldMappings(DEFAULT_HAR_FIELD_MAPPINGS);
+                }
+            }
         } catch (err) {
             setHarReport(null);
         } finally {
             setHarReportLoading(false);
+        }
+    };
+
+    const handleSaveHarMapping = async () => {
+        try {
+            setSavingHarMapping(true);
+            const res = await fetchApi(`/api/products/profiles/${profileSlug}/har-mapping`, {
+                method: 'POST',
+                body: JSON.stringify({ fieldMappings: harFieldMappings })
+            });
+            toast('✅ Đã lưu cấu hình gán trường HAR vào mẫu 31 cột thành công!', 'success');
+            if (harReport) {
+                setHarReport(prev => ({ ...prev, fieldMappings: harFieldMappings }));
+            }
+        } catch (err) {
+            toast('❌ ' + (err.message || 'Lỗi khi lưu gán cột HAR'), 'danger');
+        } finally {
+            setSavingHarMapping(false);
         }
     };
 
@@ -3816,16 +3892,45 @@ function ProductsContent() {
                                      </button>
                                  </div>
                              </div>
-                            {/* Crawlable Fields Table */}
+                            {/* Crawlable Fields Table with 31-Column Mapping */}
                             <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
-                                <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <span>📋</span> Các Trường Có Thể Crawl Được
-                                    </h4>
-                                    <div style={{ display: 'flex', gap: 10, fontSize: 11.5, alignItems: 'center' }}>
-                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: '50%', background: '#16a34a', display: 'inline-block' }} /> Cao ≥50%</span>
-                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} /> Trung bình 20-49%</span>
-                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 10, height: 10, borderRadius: '50%', background: '#94a3b8', display: 'inline-block' }} /> Thấp &lt;20%</span>
+                                <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                                    <div>
+                                        <h4 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <span>📋</span> Các Trường Phân Tích HAR & Chỉ Định Gán Cột Sheet
+                                        </h4>
+                                        <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                                            Chỉ định chính xác từng trường HAR sẽ đổ vào cột nào trong <strong>Mẫu 31 Cột Chuẩn</strong> (từ Cột A đến Cột AE).
+                                        </span>
+                                    </div>
+                                    
+                                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <button
+                                            type="button"
+                                            onClick={handleSaveHarMapping}
+                                            disabled={savingHarMapping}
+                                            style={{
+                                                padding: '7px 14px', background: '#3b82f6', color: 'white',
+                                                border: 'none', borderRadius: 6, fontWeight: 700, fontSize: 12.5,
+                                                cursor: savingHarMapping ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+                                                boxShadow: '0 2px 8px rgba(59,130,246,0.3)'
+                                            }}
+                                        >
+                                            {savingHarMapping ? <Loader2 size={14} className="spin" /> : <span>💾</span>}
+                                            Lưu Chỉ Định Cột HAR
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowCrawlerToSheetModal(true)}
+                                            style={{
+                                                padding: '7px 14px', background: '#16a34a', color: 'white',
+                                                border: 'none', borderRadius: 6, fontWeight: 700, fontSize: 12.5,
+                                                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+                                                boxShadow: '0 2px 8px rgba(22,163,74,0.3)'
+                                            }}
+                                        >
+                                            <span>📥</span> Chuyển Dữ Liệu Sang Sheet
+                                        </button>
                                     </div>
                                 </div>
 
@@ -3833,16 +3938,20 @@ function ProductsContent() {
                                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                                         <thead>
                                             <tr style={{ background: 'var(--bg-secondary)', borderBottom: '2px solid var(--border-color)' }}>
-                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 200 }}>Trường Dữ Liệu</th>
-                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 160 }}>Độ Tin Cậy</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 180 }}>Trường Dữ Liệu</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 120 }}>Độ Tin Cậy</th>
                                                 <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Giá Trị Mẫu</th>
-                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 100 }}>Lần Xuất Hiện</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 700, fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', width: 80 }}>Xuất Hiện</th>
+                                                <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, fontSize: 12, color: 'var(--accent)', textTransform: 'uppercase', width: 230 }}>🎯 Gán Cột (Mẫu 31 Cột)</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {(harReport.fields || []).map((field, idx) => {
                                                 const confColor = field.confidence >= 50 ? '#16a34a' : field.confidence >= 20 ? '#f59e0b' : '#94a3b8';
                                                 const rowBg = field.confidence >= 50 ? 'rgba(22,163,74,0.04)' : field.confidence >= 20 ? 'rgba(245,158,11,0.04)' : 'var(--bg-card)';
+                                                const currentColId = harFieldMappings[field.fieldKey] || '';
+                                                const assignedCol = STANDARD_31_COLUMNS.find(c => c.id === currentColId);
+
                                                 return (
                                                     <tr key={field.fieldKey} style={{ borderBottom: '1px solid var(--border-color)', background: rowBg }}>
                                                         <td style={{ padding: '12px 16px' }}>
@@ -3851,17 +3960,17 @@ function ProductsContent() {
                                                         </td>
                                                         <td style={{ padding: '12px 16px' }}>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                                <div style={{ flex: 1, height: 8, background: 'var(--bg-secondary)', borderRadius: 4, overflow: 'hidden', minWidth: 80 }}>
+                                                                <div style={{ flex: 1, height: 8, background: 'var(--bg-secondary)', borderRadius: 4, overflow: 'hidden', minWidth: 60 }}>
                                                                     <div style={{ height: '100%', width: `${field.confidence}%`, background: confColor, borderRadius: 4, transition: 'width 0.4s ease' }} />
                                                                 </div>
-                                                                <span style={{ fontSize: 13, fontWeight: 700, color: confColor, minWidth: 36, textAlign: 'right' }}>{field.confidence}%</span>
+                                                                <span style={{ fontSize: 12.5, fontWeight: 700, color: confColor, minWidth: 32, textAlign: 'right' }}>{field.confidence}%</span>
                                                             </div>
                                                         </td>
                                                         <td style={{ padding: '12px 16px' }}>
                                                             {field.samples && field.samples.length > 0 ? (
                                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                                                     {field.samples.slice(0, 2).map((s, si) => (
-                                                                        <div key={si} style={{ fontSize: 11.5, color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '3px 8px', borderRadius: 4, fontFamily: 'monospace', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                        <div key={si} style={{ fontSize: 11.5, color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '3px 8px', borderRadius: 4, fontFamily: 'monospace', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                                             <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>{s.path}:</span>
                                                                             {s.value}
                                                                         </div>
@@ -3872,9 +3981,39 @@ function ProductsContent() {
                                                             )}
                                                         </td>
                                                         <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                                                            <span style={{ fontWeight: 700, fontSize: 15, color: field.occurrences > 0 ? confColor : 'var(--text-muted)' }}>
+                                                            <span style={{ fontWeight: 700, fontSize: 14, color: field.occurrences > 0 ? confColor : 'var(--text-muted)' }}>
                                                                 {field.occurrences || 0}
                                                             </span>
+                                                        </td>
+                                                        <td style={{ padding: '12px 16px' }}>
+                                                            <select
+                                                                value={currentColId}
+                                                                onChange={(e) => {
+                                                                    const selectedVal = e.target.value;
+                                                                    setHarFieldMappings(prev => ({
+                                                                        ...prev,
+                                                                        [field.fieldKey]: selectedVal
+                                                                    }));
+                                                                }}
+                                                                style={{
+                                                                    padding: '6px 10px',
+                                                                    fontSize: 12,
+                                                                    fontWeight: 600,
+                                                                    borderRadius: 6,
+                                                                    border: assignedCol ? '1.5px solid var(--accent)' : '1px solid var(--border-color)',
+                                                                    background: assignedCol ? 'rgba(99,102,241,0.08)' : 'var(--bg-primary)',
+                                                                    color: assignedCol ? 'var(--accent)' : 'var(--text-secondary)',
+                                                                    width: '100%',
+                                                                    cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                <option value="">-- Bỏ qua (Không đổ dữ liệu) --</option>
+                                                                {STANDARD_31_COLUMNS.map(col => (
+                                                                    <option key={col.id} value={col.id}>
+                                                                        {col.label}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
                                                         </td>
                                                     </tr>
                                                 );
