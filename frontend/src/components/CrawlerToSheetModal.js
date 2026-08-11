@@ -659,31 +659,33 @@ export default function CrawlerToSheetModal({
         try {
             let targetProducts = [];
 
+            const profileProducts = allProducts.filter(p => !p.profile_slug || p.profile_slug === profileSlug);
+
             if (productScope === 'selected' && selectedProductIds.length > 0) {
-                targetProducts = allProducts.filter(p => selectedProductIds.includes(p.id));
+                targetProducts = profileProducts.filter(p => selectedProductIds.includes(p.id));
             } else if (productScope === 'limit_count') {
                 const reqLimit = Math.max(1, parseInt(customQuantity) || 1);
-                if (allProducts.length >= reqLimit) {
-                    targetProducts = allProducts.slice(0, reqLimit);
+                if (profileProducts.length >= reqLimit) {
+                    targetProducts = profileProducts.slice(0, reqLimit);
                 } else {
-                    const res = await fetchApi(`/api/products?limit=${reqLimit}&page=1`);
+                    const res = await fetchApi(`/api/products?profile=${encodeURIComponent(profileSlug)}&limit=${reqLimit}&page=1`);
                     if (res && Array.isArray(res.items)) {
                         targetProducts = res.items;
                     } else {
-                        targetProducts = allProducts;
+                        targetProducts = profileProducts;
                     }
                 }
             } else {
-                // 'all_db': Fetch all products in database
+                // 'all_db': Fetch all products in database for THIS specific profile
                 const fetchLimit = totalProductsCount > 0 ? totalProductsCount : 10000;
-                if (allProducts.length >= fetchLimit) {
-                    targetProducts = allProducts;
+                if (profileProducts.length >= fetchLimit && profileProducts.length > 0) {
+                    targetProducts = profileProducts;
                 } else {
-                    const res = await fetchApi(`/api/products?limit=${fetchLimit}&page=1`);
+                    const res = await fetchApi(`/api/products?profile=${encodeURIComponent(profileSlug)}&limit=${fetchLimit}&page=1`);
                     if (res && Array.isArray(res.items)) {
                         targetProducts = res.items;
                     } else {
-                        targetProducts = allProducts;
+                        targetProducts = profileProducts;
                     }
                 }
             }

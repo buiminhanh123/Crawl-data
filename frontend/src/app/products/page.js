@@ -9,9 +9,12 @@ import AiAssistantModal from '@/components/AiAssistantModal';
 import CrawlerToSheetModal from '@/components/CrawlerToSheetModal';
 import ExportExcelModal from '@/components/ExportExcelModal';
 import GoogleDriveModal from '@/components/GoogleDriveModal';
+import ProfileChecklistModal from '@/components/ProfileChecklistModal';
+import IncompleteRowsModal from '@/components/IncompleteRowsModal';
 import { 
     Search, 
     Download, 
+    CheckSquare, 
     ExternalLink, 
     Eye, 
     Package, 
@@ -46,6 +49,9 @@ import {
     Clock,
     XCircle,
     AlertTriangle,
+    ShieldAlert,
+    ChevronDown,
+    FileText,
     Settings,
     RefreshCw,
     Sparkles
@@ -172,7 +178,7 @@ function ProductsContent() {
 
 
     const toast = (msg, type = 'success') => {
-        const id = Date.now();
+        const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         setToasts(p => [...p, { id, message: msg, type }]);
         setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
     };
@@ -284,9 +290,96 @@ function ProductsContent() {
         }
 
         const posted = logs.filter(l => l.status === 'posted').length;
-        const err = logs.filter(l => l.status === 'error').length;
+        const webPostingErr = logs.filter(l => l.status === 'error').length;
+
+        // Audit & Check Status Error Scan across all profileSheets
+        const sheetErrorKeys = new Set();
+        const codeAliases = ['ma_san_pham', 'mã sản phẩm', 'mã sp', 'ma sp', 'sku', 'model', 'part_number'];
+        const nameAliases = ['ten_san_pham', 'tên sản phẩm', 'tên sp', 'ten sp', 'tiêu đề', 'title', 'name'];
+        const catAliases = ['danh_muc_id', 'danh mục id', 'category id', 'danh mục', 'danh_muc'];
+
+        // Track duplicate SKUs across sheets
+        const skuMap = {};
+        (profileSheets || []).forEach(s => {
+            if (!s.data || !Array.isArray(s.data) || s.data.length <= 1) return;
+            const headers = (s.data[0] || []).map(h => String(h || '').trim().toLowerCase());
+            let codeIdx = headers.findIndex(h => codeAliases.some(a => h === a || h.includes(a)));
+            if (codeIdx === -1) codeIdx = 0;
+
+            for (let r = 1; r < s.data.length; r++) {
+                const row = s.data[r];
+                if (!Array.isArray(row) || row.every(c => c === null || c === undefined || String(c).trim() === '')) continue;
+                const codeVal = String(row[codeIdx] || '').trim().toUpperCase();
+                if (codeVal) {
+                    skuMap[codeVal] = (skuMap[codeVal] || 0) + 1;
+                }
+            }
+        });
+
+        (profileSheets || []).forEach((s, sIdx) => {
+            if (!s.data || !Array.isArray(s.data) || s.data.length <= 1) return;
+            const headers = (s.data[0] || []).map(h => String(h || '').trim().toLowerCase());
+
+            let codeIdx = headers.findIndex(h => codeAliases.some(a => h === a || h.includes(a)));
+            if (codeIdx === -1) codeIdx = 0;
+
+            let nameIdx = headers.findIndex(h => nameAliases.some(a => h === a || h.includes(a)));
+            if (nameIdx === -1) nameIdx = 1;
+
+            let catIdx = headers.findIndex(h => catAliases.some(a => h === a || h.includes(a)));
+            if (catIdx === -1 && headers.length > 17) catIdx = 17;
+
+            let statusColIdx = headers.findIndex(h => {
+                const norm = String(h || '').trim().toLowerCase();
+                return norm === 'check status' || norm === 'trạng thái audit' || norm === 'status audit' || norm === 'check_status';
+            });
+
+            for (let r = 1; r < s.data.length; r++) {
+                const row = s.data[r];
+                if (!Array.isArray(row) || row.every(c => c === null || c === undefined || String(c).trim() === '')) continue;
+
+                const valCode = String(row[codeIdx] || '').trim();
+                const valName = String(row[nameIdx] || '').trim();
+                const valCat = catIdx >= 0 && catIdx < row.length ? String(row[catIdx] || '').trim() : '';
+                const statusVal = statusColIdx >= 0 && statusColIdx < row.length ? String(row[statusColIdx] || '').trim() : '';
+
+                let isError = false;
+
+                // 1. Explicit CHECK STATUS column contains error
+                if (statusVal) {
+                    const sLower = statusVal.toLowerCase();
+                    if (statusVal.startsWith('❌') || statusVal.startsWith('🔴') || sLower.includes('lỗi') || sLower.includes('thiếu') || sLower.includes('trùng') || sLower.includes('phải là số') || sLower.includes('id (') || sLower.includes('meta desc (')) {
+                        isError = true;
+                    }
+                }
+
+                // 2. Missing mandatory fields or non-numeric Cat ID or Duplicate SKU
+                if (!isError) {
+                    if (!valCode || !valName || !valCat) {
+                        isError = true;
+                    } else if (!/^\d+$/.test(valCat)) {
+                        isError = true;
+                    } else if (valCode && skuMap[valCode.toUpperCase()] > 1) {
+                        isError = true;
+                    }
+                }
+
+                if (isError) {
+                    const uKey = valCode ? valCode.toUpperCase() : `${s.name}_r_${r}`;
+                    sheetErrorKeys.add(uKey);
+                }
+            }
+        });
+
+        // Add web posting error products to error keys set
+        logs.filter(l => l.status === 'error').forEach(l => {
+            const mKey = (l.model || '').trim().toUpperCase();
+            if (mKey) sheetErrorKeys.add(mKey);
+        });
+
+        const totalErrCount = Math.max(webPostingErr, sheetErrorKeys.size);
         const total = totalProductsCount;
-        const pending = Math.max(0, total - posted - err);
+        const pending = Math.max(0, total - posted - totalErrCount);
 
         let filtered = logs;
         if (historyStatusFilter !== 'all') {
@@ -305,7 +398,7 @@ function ProductsContent() {
         return {
             postedCount: posted,
             pendingCount: pending,
-            postingErrorCount: err,
+            postingErrorCount: totalErrCount,
             filteredHistoryLogs: filtered
         };
     }, [customPostingLogs, profileSlug, profileSheets, totalProductsCount, historyStatusFilter, historySearchTerm]);
@@ -745,6 +838,7 @@ function ProductsContent() {
             return;
         }
 
+        pushUndoSnapshot(profileSheets);
         const updated = profileSheets.map(s => s.name === oldName ? { ...s, name: trimmed } : s);
         setProfileSheets(updated);
         if (activeSheetTabName === oldName) {
@@ -771,6 +865,7 @@ function ProductsContent() {
         const confirmDelete = window.confirm(`⚠️ Bạn có chắc chắn muốn XÓA tab "${tabName}"?\n\nDữ liệu trong tab này sẽ bị mất.`);
         if (!confirmDelete) return;
 
+        pushUndoSnapshot(profileSheets);
         const updated = profileSheets.filter(s => s.name !== tabName);
         setProfileSheets(updated);
         if (activeSheetTabName === tabName) {
@@ -808,6 +903,7 @@ function ProductsContent() {
         // Default header line
         emptyRows[0] = ['Cột A', 'Cột B', 'Cột C', 'Cột D', 'Cột E', 'Cột F', 'Cột G', 'Cột H', 'Cột I', 'Cột J', 'Cột K', 'Cột L'];
 
+        pushUndoSnapshot(profileSheets);
         const updated = [...profileSheets, { name: newTabName, data: emptyRows }];
         setProfileSheets(updated);
         setActiveSheetTabName(newTabName);
@@ -839,6 +935,15 @@ function ProductsContent() {
         if (!sheetsData || !Array.isArray(sheetsData)) return;
         const stack = historyStackRef.current;
         const index = historyIndexRef.current;
+
+        // Tránh lưu trùng lặp snapshot liên tiếp
+        if (index >= 0 && stack[index]) {
+            try {
+                if (JSON.stringify(stack[index]) === JSON.stringify(sheetsData)) {
+                    return;
+                }
+            } catch (e) {}
+        }
 
         const newStack = stack.slice(0, index + 1);
         const snapshot = JSON.parse(JSON.stringify(sheetsData));
@@ -908,6 +1013,10 @@ function ProductsContent() {
     // AI Assistant modal & background task state
     const [showAiModal, setShowAiModal] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
+    const [showChecklistModal, setShowChecklistModal] = useState(false);
+    const [showIncompleteRowsModal, setShowIncompleteRowsModal] = useState(false);
+    const [auditModalTab, setAuditModalTab] = useState('mandatory');
+    const [showAuditMenuDropdown, setShowAuditMenuDropdown] = useState(false);
     const [aiTaskState, setAiTaskState] = useState({
         isRunning: false,
         tabName: '',
@@ -1014,9 +1123,12 @@ function ProductsContent() {
             startDataIdx = Math.max(pageFreezeRows, autoHeaderRowIdx + 1);
         }
 
-        const dataRows = activePageSheetData.slice(startDataIdx);
+        const items = [];
+        for (let i = startDataIdx; i < activePageSheetData.length; i++) {
+            items.push({ rawIdx: i, row: activePageSheetData[i] });
+        }
 
-        const filteredData = dataRows.filter((row) => {
+        const filteredData = items.filter(({ rawIdx, row }) => {
             if (!Array.isArray(row)) return false;
 
             // Filter out garbage CSS selector rows if any
@@ -1061,8 +1173,8 @@ function ProductsContent() {
             const colIdx = columnSortState.colIndex;
             const dir = columnSortState.direction === 'asc' ? 1 : -1;
             filteredData.sort((a, b) => {
-                const valA = Array.isArray(a) && a[colIdx] !== undefined && a[colIdx] !== null ? String(a[colIdx]).trim() : '';
-                const valB = Array.isArray(b) && b[colIdx] !== undefined && b[colIdx] !== null ? String(b[colIdx]).trim() : '';
+                const valA = Array.isArray(a.row) && a.row[colIdx] !== undefined && a.row[colIdx] !== null ? String(a.row[colIdx]).trim() : '';
+                const valB = Array.isArray(b.row) && b.row[colIdx] !== undefined && b.row[colIdx] !== null ? String(b.row[colIdx]).trim() : '';
                 return valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' }) * dir;
             });
         }
@@ -1174,6 +1286,7 @@ function ProductsContent() {
             return { ...s, data: newData };
         });
 
+        pushUndoSnapshot(profileSheets);
         setProfileSheets(updatedSheets);
         toast(`➕ Đã thêm ${count} Cột mới vào Tab "${activeSheetTabName}"!`, 'success');
 
@@ -1204,6 +1317,7 @@ function ProductsContent() {
             return { ...s, data: existingData };
         });
 
+        pushUndoSnapshot(profileSheets);
         setProfileSheets(updatedSheets);
         setSelectedPageCell(null);
         toast(`🗑️ Đã xóa Hàng ${rowNum} khỏi Tab "${activeSheetTabName}"!`, 'success');
@@ -1319,6 +1433,25 @@ function ProductsContent() {
         }
     };
 
+    const scrollToRowInSheet = (rowIndex) => {
+        if (!rowIndex || rowIndex < 1) return;
+        if (rowIndex > pageRowLimit) {
+            setPageRowLimit(prev => Math.max(prev, rowIndex + 50));
+        }
+        setTimeout(() => {
+            const rowEl = document.getElementById(`sheet-row-${rowIndex}`);
+            if (rowEl) {
+                rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                const container = document.querySelector('.sheet-table-container');
+                if (container) {
+                    const targetScroll = Math.max(0, (rowIndex - 3) * 36);
+                    container.scrollTo({ top: targetScroll, behavior: 'smooth' });
+                }
+            }
+        }, 150);
+    };
+
     const handleDeleteSelectedRows = async () => {
         if (selectedRowIndices.length === 0 || !activeSheetTabName) return;
         const sorted = [...selectedRowIndices].sort((a, b) => a - b);
@@ -1419,10 +1552,21 @@ function ProductsContent() {
     const handleClearRangeContent = async (minRow, maxRow, minCol, maxCol, silent = false) => {
         if (!activeSheetTabName || !activePageSheetData) return;
 
+        const headerEndIdx = autoHeaderRowIdx >= 0 ? autoHeaderRowIdx : 0;
+        const firstDataRowIdx = headerEndIdx + 1;
+        
+        let startR = minRow;
+        if (minRow <= headerEndIdx && maxRow > headerEndIdx) {
+            startR = firstDataRowIdx;
+        }
+
+        pushUndoSnapshot(profileSheets);
+
         const updatedSheets = profileSheets.map(s => {
             if (s.name !== activeSheetTabName) return s;
             const existingData = [...(s.data || [])];
-            for (let r = minRow; r <= maxRow; r++) {
+            for (let r = startR; r <= maxRow; r++) {
+                if (r <= headerEndIdx && maxRow > headerEndIdx) continue;
                 if (!existingData[r]) continue;
                 const newRow = Array.isArray(existingData[r]) ? [...existingData[r]] : [];
                 for (let c = minCol; c <= maxCol; c++) {
@@ -1435,7 +1579,7 @@ function ProductsContent() {
 
         setProfileSheets(updatedSheets);
         if (!silent) {
-            const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+            const count = (maxRow - startR + 1) * (maxCol - minCol + 1);
             toast(`🧹 Đã xóa nội dung ${count} ô thành công!`, 'success');
         }
 
@@ -1452,8 +1596,9 @@ function ProductsContent() {
     const handleCutRangeContent = (minRow, maxRow, minCol, maxCol) => {
         handleCopyRangeContent(minRow, maxRow, minCol, maxCol);
         if (cellClipboardRef.current) cellClipboardRef.current.type = 'cut';
-        handleClearRangeContent(minRow, maxRow, minCol, maxCol, true);
-        const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+        const safeMinRow = (minRow < 2 && maxRow >= 2) ? 2 : minRow;
+        handleClearRangeContent(safeMinRow, maxRow, minCol, maxCol, true);
+        const count = (maxRow - safeMinRow + 1) * (maxCol - minCol + 1);
         toast(`✂️ Đã cắt ${count} ô!`, 'info');
     };
 
@@ -1476,6 +1621,8 @@ function ProductsContent() {
             toast('⚠️ Bộ nhớ tạm không có dữ liệu để dán!', 'warning');
             return;
         }
+
+        pushUndoSnapshot(profileSheets);
 
         const updatedSheets = profileSheets.map(s => {
             if (s.name !== activeSheetTabName) return s;
@@ -1585,10 +1732,22 @@ function ProductsContent() {
             const maxRowsInTab = activePageSheetData.length;
             const maxColsInTab = maxPageCols;
 
-            // Delete / Backspace -> Clear cell contents
+            // Delete / Backspace -> Clear cell contents (Bảo vệ tiêu đề Cột ở Hàng 0 & Hàng 1)
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 e.preventDefault();
-                handleClearRangeContent(minRow, maxRow, minCol, maxCol);
+                if (selectedColIndices.length > 0) {
+                    const minC = Math.min(...selectedColIndices);
+                    const maxC = Math.max(...selectedColIndices);
+                    handleClearRangeContent(2, maxRowsInTab - 1, minC, maxC);
+                } else if (selectedRowIndices.length > 0) {
+                    const dataRows = selectedRowIndices.filter(r => r >= 2);
+                    if (dataRows.length > 0) {
+                        handleClearRangeContent(Math.min(...dataRows), Math.max(...dataRows), 0, maxColsInTab - 1);
+                    }
+                } else {
+                    const safeMinRow = (minRow < 2 && maxRow >= 2) ? 2 : minRow;
+                    handleClearRangeContent(safeMinRow, maxRow, minCol, maxCol);
+                }
                 return;
             }
 
@@ -1743,25 +1902,43 @@ function ProductsContent() {
         }
     };
 
-    const fetchProfileSheetData = async () => {
+    const fetchProfileSheetData = async (keepActiveTab = true) => {
         try {
             const data = await fetchApi(`/api/products/profile-sheet?profile=${profileSlug}`);
             if (data?.sheets && data.sheets.length > 0) {
                 setProfileSheets(data.sheets);
-                if (historyStackRef.current.length === 0) {
-                    historyStackRef.current = [JSON.parse(JSON.stringify(data.sheets))];
-                    historyIndexRef.current = 0;
-                }
-                setActiveSheetTabName(data.sheets[0].name);
+                historyStackRef.current = [JSON.parse(JSON.stringify(data.sheets))];
+                historyIndexRef.current = 0;
+                
+                setActiveSheetTabName(prev => {
+                    if (keepActiveTab && prev && data.sheets.some(s => s.name === prev)) {
+                        return prev;
+                    }
+                    return data.sheets[0].name;
+                });
                 setViewMode('sheet');
             } else {
                 setProfileSheets([]);
+                historyStackRef.current = [];
+                historyIndexRef.current = -1;
                 setViewMode('products');
             }
         } catch (err) {
             console.error('Failed to fetch profile sheet:', err);
         }
     };
+
+    useEffect(() => {
+        const handleProfileSheetUpdated = (e) => {
+            if (!e.detail?.profileSlug || e.detail.profileSlug === profileSlug) {
+                fetchProfileSheetData(true);
+            }
+        };
+        window.addEventListener('profile_sheet_updated', handleProfileSheetUpdated);
+        return () => {
+            window.removeEventListener('profile_sheet_updated', handleProfileSheetUpdated);
+        };
+    }, [profileSlug]);
 
     useEffect(() => {
         // Reset state & refetch profile data when profileSlug changes
@@ -1772,7 +1949,7 @@ function ProductsContent() {
         setProducts([]);
         setTotalProducts(0);
 
-        fetchProfileSheetData();
+        fetchProfileSheetData(false);
         fetchCategories();
 
         const fetchProfileInfo = async () => {
@@ -2081,6 +2258,208 @@ function ProductsContent() {
                     )}
                 </button>
 
+                {/* Unified Data Audit Center Menu Dropdown Button */}
+                <div style={{ position: 'relative', marginLeft: 'auto' }}>
+                    <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setShowAuditMenuDropdown(prev => !prev)}
+                        style={{
+                            display: 'flex', alignItems: 'center', gap: 8,
+                            fontSize: 13.5, padding: '8px 16px', fontWeight: 700,
+                            background: 'linear-gradient(135deg, #1e293b, #0f172a)', color: '#ffffff',
+                            border: '1px solid #334155', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                            boxShadow: '0 4px 12px rgba(15, 23, 42, 0.3)'
+                        }}
+                    >
+                        <ShieldAlert size={16} style={{ color: '#38bdf8' }} />
+                        <span>Trung Tâm Kiểm Tra Dữ Liệu</span>
+                        <ChevronDown size={14} style={{ color: '#94a3b8', transform: showAuditMenuDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }} />
+                    </button>
+
+                    {showAuditMenuDropdown && (
+                        <div
+                            style={{
+                                position: 'absolute', top: '100%', right: 0, marginTop: 6, width: 300,
+                                background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 12,
+                                boxShadow: '0 15px 30px -5px rgba(0,0,0,0.2), 0 8px 10px -6px rgba(0,0,0,0.1)',
+                                zIndex: 1000, overflow: 'hidden', padding: '6px 0'
+                            }}
+                        >
+                            <div style={{ padding: '8px 14px', fontSize: 11, fontWeight: 700, color: '#94a3b8', borderBottom: '1px solid #f1f5f9', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                🛡️ Danh Mục Kiểm Tra & Audit Dữ Liệu
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setShowChecklistModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#334155'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <CheckSquare size={15} style={{ color: '#0284c7' }} />
+                                <div>
+                                    <div>Checklist Tiến Độ (8 Bước)</div>
+                                    <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400 }}>Theo dõi tiến độ workflow hoàn thiện</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('web_posted');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#16a34a'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#f0fdf4'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <ExternalLink size={15} style={{ color: '#16a34a' }} />
+                                <div>
+                                    <div>🌐 Trạng Thái Đăng Bài Website</div>
+                                    <div style={{ fontSize: 11, color: '#15803d', fontWeight: 400 }}>Kiểm tra xem SP đã đăng hay chưa & Ghi cột Sheet</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('mandatory');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#e11d48'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#fff1f2'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <ShieldAlert size={15} style={{ color: '#e11d48' }} />
+                                <div>
+                                    <div>🔴 Trường Bắt Buộc (Mã, Tên, ID)</div>
+                                    <div style={{ fontSize: 11, color: '#9f1239', fontWeight: 400 }}>Khóa cứng xuất Excel nếu thiếu</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('duplicate_sku');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#7c3aed'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#faf5ff'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <Copy size={15} style={{ color: '#7c3aed' }} />
+                                <div>
+                                    <div>🆔 Trùng Mã Sản Phẩm (SKUs)</div>
+                                    <div style={{ fontSize: 11, color: '#6b21a8', fontWeight: 400 }}>Cảnh báo lặp lại SKU giữa các dòng</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('image_links');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#d97706'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#fffbeb'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <ExternalLink size={15} style={{ color: '#d97706' }} />
+                                <div>
+                                    <div>🖼️ Kiểm Tra Link Ảnh Đại Diện</div>
+                                    <div style={{ fontSize: 11, color: '#92400e', fontWeight: 400 }}>Kiểm tra định dạng URL & Live Ping link ảnh</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('pdf_links');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#b45309'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#fffbeb'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <ExternalLink size={15} style={{ color: '#b45309' }} />
+                                <div>
+                                    <div>📄 Kiểm Tra Link File PDF</div>
+                                    <div style={{ fontSize: 11, color: '#78350f', fontWeight: 400 }}>Kiểm tra URL & Live Ping file tài liệu HDSD</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('meta_desc');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#2563eb'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#eff6ff'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <FileText size={15} style={{ color: '#2563eb' }} />
+                                <div>
+                                    <div>📝 Meta Description (mo_ta)</div>
+                                    <div style={{ fontSize: 11, color: '#1e40af', fontWeight: 400 }}>Cột H: mô tả ngắn tối đa 160 ký tự</div>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowAuditMenuDropdown(false);
+                                    setAuditModalTab('category_ids');
+                                    setShowIncompleteRowsModal(true);
+                                }}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 14px',
+                                    background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: '#0d9488'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = '#f0fdf4'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                                <Package size={15} style={{ color: '#0d9488' }} />
+                                <div>
+                                    <div>🏷️ ID Danh Mục & Thương Hiệu</div>
+                                    <div style={{ fontSize: 11, color: '#115e59', fontWeight: 400 }}>Kiểm tra định dạng ID là số</div>
+                                </div>
+                            </button>
+                        </div>
+                    )}
+                </div>
+
                 {/* Export Excel Button */}
                 <button
                     type="button"
@@ -2091,7 +2470,7 @@ function ProductsContent() {
                         fontSize: 13.5, padding: '8px 18px', fontWeight: 700,
                         background: 'linear-gradient(135deg, #10b981, #059669)', color: '#ffffff',
                         border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
-                        marginLeft: 'auto', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)'
+                        boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)'
                     }}
                 >
                     <Download size={16} />
@@ -2234,14 +2613,45 @@ function ProductsContent() {
                                                 `Đã bôi đen chọn ${selectedColIndices.length} cột (${selectedColIndices.map(c => getColLetter(c)).join(', ')})`
                                             )}
                                         </span>
+                                        {selectedRowIndices.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => scrollToRowInSheet(Math.min(...selectedRowIndices) + 1)}
+                                                style={{
+                                                    background: '#2563eb', color: '#ffffff', border: 'none',
+                                                    padding: '3px 10px', borderRadius: 6, fontSize: 11.5,
+                                                    fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                    boxShadow: '0 2px 4px rgba(37,99,235,0.2)'
+                                                }}
+                                                title="Tự động cuộn tới đúng vị trí dòng đang được chọn"
+                                            >
+                                                📍 Cuộn đến Hàng #{Math.min(...selectedRowIndices) + 1}
+                                            </button>
+                                        )}
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        {selectedColIndices.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const minC = Math.min(...selectedColIndices);
+                                                    const maxC = Math.max(...selectedColIndices);
+                                                    handleClearRangeContent(2, activePageSheetData.length - 1, minC, maxC);
+                                                    setSelectedColIndices([]);
+                                                }}
+                                                style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '5px 14px', borderRadius: 4, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(59,130,246,0.2)' }}
+                                                title="Chỉ xóa dữ liệu của cột, giữ nguyên tiêu đề Cột"
+                                            >
+                                                🧹 Xóa Nội Dung Cột (Giữ Tiêu Đề)
+                                            </button>
+                                        )}
                                         <button
                                             type="button"
                                             onClick={selectedRowIndices.length > 0 ? handleDeleteSelectedRows : handleDeleteSelectedCols}
                                             style={{ background: '#ef4444', color: 'white', border: 'none', padding: '5px 14px', borderRadius: 4, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(239,68,68,0.2)' }}
+                                            title={selectedRowIndices.length > 0 ? 'Xóa hàng khỏi bảng' : 'Xóa hẳn cột khỏi cấu trúc bảng'}
                                         >
-                                            <Trash2 size={14} /> Xóa {selectedRowIndices.length > 0 ? `${selectedRowIndices.length} Hàng Đã Chọn` : `${selectedColIndices.length} Cột Đã Chọn`}
+                                            <Trash2 size={14} /> {selectedRowIndices.length > 0 ? `Xóa ${selectedRowIndices.length} Hàng Đã Chọn` : `Xóa Cột Khỏi Bảng`}
                                         </button>
                                         <button
                                             type="button"
@@ -2592,13 +3002,14 @@ function ProductsContent() {
                                                             </div>
                                                         </td>
                                                     </tr>
-                                                ) : renderedPageRows.map((row, rIdx) => {
+                                                ) : renderedPageRows.map(({ rawIdx: rIdx, row }) => {
                                                     const isRowPinned = rIdx < pageFreezeRows;
                                                     const isLastPinnedRow = pageFreezeRows > 0 && rIdx === pageFreezeRows - 1;
                                                     const isRowSelected = selectedRowSet.has(rIdx);
                                                     return (
                                                         <tr
                                                             key={rIdx}
+                                                            id={`sheet-row-${rIdx + 1}`}
                                                             className={isLastPinnedRow ? 'pinned-row-last' : ''}
                                                             style={isRowPinned ? { position: 'sticky', top: (rIdx + 1) * 32, zIndex: 9, background: '#fffbeb' } : {}}
                                                         >
@@ -2845,14 +3256,33 @@ function ProductsContent() {
                                 </div>
                             </div>
 
-                            {/* Description block */}
-                            {selectedProduct.description && (
-                                <div style={{ marginBottom: 24 }}>
-                                    <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>Overview Description</h5>
-                                    <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, background: 'var(--bg-primary)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                                        {selectedProduct.description}
-                                    </p>
+                            {/* Short Description - Tính năng nổi bật (bullet points) */}
+                            {selectedProduct.short_description && (
+                                <div style={{ marginBottom: 20 }}>
+                                    <h5 style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ fontSize: 16 }}>✨</span> Tính Năng Nổi Bật
+                                    </h5>
+                                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7, background: 'var(--bg-primary)', padding: '10px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', whiteSpace: 'pre-line' }}>
+                                        {selectedProduct.short_description}
+                                    </div>
                                 </div>
+                            )}
+
+                            {/* Description - Tổng quan sản phẩm (detailed overview) */}
+                            {selectedProduct.description && (
+                                <div style={{ marginBottom: 20 }}>
+                                    <h5 style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ fontSize: 16 }}>📋</span> Tổng Quan Sản Phẩm
+                                    </h5>
+                                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7, background: 'var(--bg-primary)', padding: '10px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', whiteSpace: 'pre-line' }}>
+                                        {selectedProduct.description}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Fallback for products with only legacy description (no short_description) */}
+                            {!selectedProduct.short_description && !selectedProduct.description && selectedProduct.description !== undefined && (
+                                <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 16 }}>Chưa có mô tả cho sản phẩm này.</p>
                             )}
 
                             {/* Specifications Grid */}
@@ -2888,15 +3318,34 @@ function ProductsContent() {
 
                             {/* Download Links */}
                             {(() => {
-                                let downloadsArr = [];
-                                if (Array.isArray(selectedProduct.parsedDownloads)) {
-                                    downloadsArr = selectedProduct.parsedDownloads;
-                                } else if (typeof selectedProduct.download_links === 'string') {
-                                    try { downloadsArr = JSON.parse(selectedProduct.download_links) || []; } catch (e) {}
-                                } else if (Array.isArray(selectedProduct.download_links)) {
-                                    downloadsArr = selectedProduct.download_links;
+                                let rawDl = selectedProduct?.parsedDownloads || selectedProduct?.download_links;
+                                if (typeof rawDl === 'string') {
+                                    try { rawDl = JSON.parse(rawDl); } catch (e) { rawDl = []; }
                                 }
-                                if (downloadsArr.length === 0) {
+
+                                let downloadsArr = [];
+                                if (Array.isArray(rawDl)) {
+                                    downloadsArr = rawDl.map(item => {
+                                        if (typeof item === 'string') return { name: 'Download File', url: item };
+                                        if (item && typeof item === 'object') {
+                                            return { name: item.name || item.title || 'Download File', url: item.url || item.href || item.link || '' };
+                                        }
+                                        return null;
+                                    }).filter(d => d && d.url);
+                                } else if (rawDl && typeof rawDl === 'object') {
+                                    downloadsArr = Object.entries(rawDl).map(([key, val]) => {
+                                        if (typeof val === 'string') {
+                                            const titleMap = { catalogue: 'Catalogue PDF', manual: 'Sách Hướng Dẫn PDF', datasheet: 'Datasheet PDF' };
+                                            const name = titleMap[key.toLowerCase()] || (key.charAt(0).toUpperCase() + key.slice(1));
+                                            return { name, url: val };
+                                        } else if (val && typeof val === 'object') {
+                                            return { name: val.name || val.title || key, url: val.url || val.href || '' };
+                                        }
+                                        return null;
+                                    }).filter(d => d && d.url);
+                                }
+
+                                if (!Array.isArray(downloadsArr) || downloadsArr.length === 0) {
                                     return (
                                         <div style={{ marginTop: 28 }}>
                                             <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -3804,37 +4253,37 @@ function ProductsContent() {
                                      <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginRight: 4 }}>Chỉ báo nguồn:</span>
 
                                      {/* 1. Website Link Status */}
-                                     {currentProfile?.target_url ? (
-                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
-                                             🟢 Link Web: {currentProfile.target_url.replace(/^https?:\/\//, '').split('/')[0]}
-                                         </span>
-                                     ) : (
-                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(239,68,68,0.12)', color: '#b91c1c', fontSize: 12, fontWeight: 600, border: '1px solid rgba(239,68,68,0.3)' }}>
-                                             🔴 Chưa có Link Web
-                                         </span>
-                                     )}
+                                      {currentProfile?.target_url ? (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
+                                              🟢 Link Web: {currentProfile.target_url.replace(/^https?:\/\//, '').split('/')[0]}
+                                          </span>
+                                      ) : (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'var(--bg-secondary)', color: 'var(--text-muted)', fontSize: 12, fontWeight: 500, border: '1px solid var(--border-color)' }}>
+                                              ⚪ Link Web: Tùy chọn
+                                          </span>
+                                      )}
 
-                                     {/* 2. HAR Analysis Status */}
-                                     {harReport?.harFileName ? (
-                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
-                                             🟢 File HAR: {harReport.harFileName} ({harReport.summary?.totalEntries || 0} reqs)
-                                         </span>
-                                     ) : (
-                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(245,158,11,0.12)', color: '#b45309', fontSize: 12, fontWeight: 600, border: '1px solid rgba(245,158,11,0.3)' }}>
-                                             🟡 Chưa nạp File HAR
-                                         </span>
-                                     )}
+                                      {/* 2. HAR Analysis Status */}
+                                      {harReport?.harFileName ? (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
+                                              🟢 File HAR: {harReport.harFileName} ({harReport.summary?.totalEntries || 0} reqs)
+                                          </span>
+                                      ) : (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(245,158,11,0.12)', color: '#b45309', fontSize: 12, fontWeight: 600, border: '1px solid rgba(245,158,11,0.3)' }}>
+                                              🟡 Chưa nạp File HAR
+                                          </span>
+                                      )}
 
-                                     {/* 3. Sitemap Status */}
-                                     {sitemapInfo?.sitemapXml || sitemapInfo?.sitemapUrl || currentProfile?.sitemap_url ? (
-                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
-                                             🟢 Sitemap: Đã sẵn sàng
-                                         </span>
-                                     ) : (
-                                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(245,158,11,0.12)', color: '#b45309', fontSize: 12, fontWeight: 600, border: '1px solid rgba(245,158,11,0.3)' }}>
-                                             🟡 Chưa nạp Sitemap
-                                         </span>
-                                     )}
+                                      {/* 3. Sitemap Status */}
+                                      {sitemapInfo?.sitemapXml || sitemapInfo?.sitemapUrl || currentProfile?.sitemap_url ? (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'rgba(34,197,94,0.12)', color: '#15803d', fontSize: 12, fontWeight: 600, border: '1px solid rgba(34,197,94,0.3)' }}>
+                                              🟢 Sitemap: Đã sẵn sàng
+                                          </span>
+                                      ) : (
+                                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: 'var(--bg-secondary)', color: 'var(--text-muted)', fontSize: 12, fontWeight: 500, border: '1px solid var(--border-color)' }}>
+                                              ⚪ Sitemap XML: Tùy chọn
+                                          </span>
+                                      )}
                                  </div>
 
                                  {/* Quick Action Buttons Row */}
@@ -3848,7 +4297,7 @@ function ProductsContent() {
                                          }}
                                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', color: 'var(--text-primary)', boxShadow: 'var(--shadow-sm)' }}
                                      >
-                                         🌐 {currentProfile?.target_url ? 'Sửa Link Web Hãng' : '➕ Nhập Link Web Hãng'}
+                                         🌐 {currentProfile?.target_url ? 'Sửa Link Web Hãng' : '➕ Nhập Link Web Hãng (Tùy Chọn)'}
                                      </button>
 
                                      {/* Action 2: Nạp File HAR */}
@@ -3888,7 +4337,7 @@ function ProductsContent() {
                                          }}
                                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', color: 'var(--text-primary)', boxShadow: 'var(--shadow-sm)' }}
                                      >
-                                         🗺️ Nạp / Cấu Hình Sitemap XML
+                                         🗺️ Nạp / Cấu Hình Sitemap XML (Tùy Chọn)
                                      </button>
                                  </div>
                              </div>
@@ -4864,6 +5313,57 @@ function ProductsContent() {
                 onClose={() => setShowExportModal(false)}
                 defaultProfileSlug={profileSlug}
                 profiles={profilesList}
+                onOpenChecklist={() => setShowChecklistModal(true)}
+                onOpenIncompleteRows={() => setShowIncompleteRowsModal(true)}
+            />
+
+            {/* Modal Profile Checklist */}
+            <ProfileChecklistModal
+                isOpen={showChecklistModal}
+                onClose={() => setShowChecklistModal(false)}
+                profileSlug={profileSlug}
+                profileName={profilesList.find(p => p.slug === profileSlug)?.name || profileSlug}
+                onOpenAiAssistant={() => setShowAiModal(true)}
+                onOpenImgDownloader={() => window.dispatchEvent(new CustomEvent('open_img_downloader'))}
+                onOpenPdfDownloader={() => window.dispatchEvent(new CustomEvent('open_pdf_downloader'))}
+                onOpenExportExcel={() => setShowExportModal(true)}
+                onOpenCrawlerToSheet={() => setShowCrawlerToSheetModal(true)}
+                onOpenIncompleteRows={() => setShowIncompleteRowsModal(true)}
+            />
+
+            {/* Modal Incomplete Sheet Rows Inspector */}
+            <IncompleteRowsModal
+                isOpen={showIncompleteRowsModal}
+                onClose={() => setShowIncompleteRowsModal(false)}
+                profileSlug={profileSlug}
+                profileName={profilesList.find(p => p.slug === profileSlug)?.name || profileSlug}
+                sheets={profileSheets}
+                initialTab={auditModalTab}
+                onNavigateToRow={(sheetName, rowIndex) => {
+                    if (sheetName) {
+                        setActiveSheetTabName(sheetName);
+                        setSelectedRowIndices([rowIndex - 1]);
+                        toast(`📍 Đã chuyển sang Tab "${sheetName}" - Hàng #${rowIndex}!`, 'info');
+                        scrollToRowInSheet(rowIndex);
+                    }
+                }}
+                onUpdateSheets={(newSheets) => {
+                    setProfileSheets(newSheets);
+                }}
+                onUpdateCell={(sheetName, rowIndex, colIndex, newValue) => {
+                    setProfileSheets(prev => prev.map(s => {
+                        if (s.name !== sheetName) return s;
+                        const newData = s.data.map((row, rIdx) => {
+                            if (rIdx !== rowIndex - 1) return row;
+                            const newRow = [...row];
+                            while (newRow.length <= colIndex) newRow.push('');
+                            newRow[colIndex] = newValue;
+                            return newRow;
+                        });
+                        return { ...s, data: newData };
+                    }));
+                    toast(`💾 Đã cập nhật Tab "${sheetName}" - Hàng #${rowIndex}!`, 'success');
+                }}
             />
 
             {/* Modal Google Drive Setup & Auth */}

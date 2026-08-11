@@ -1,4 +1,6 @@
 'use client';
+import ImgDownloaderModal from './ImgDownloaderModal';
+import PdfDownloaderModal from './PdfDownloaderModal';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -24,7 +26,9 @@ import {
     CheckCircle2,
     Pause,
     Play,
-    Square
+    Square,
+    ImageDown,
+    FileText
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -47,9 +51,23 @@ export default function Sidebar() {
     const [activeProfileSlug, setActiveProfileSlug] = useState('');
     const [showCrawlSideview, setShowCrawlSideview] = useState(false);
     const [showAiSideview, setShowAiSideview] = useState(false);
+    const [showImgDownloader, setShowImgDownloader] = useState(false);
+    const [showImgAccordion, setShowImgAccordion] = useState(false);
+    const [imgDownloadStatus, setImgDownloadStatus] = useState(null);
+    const [showPdfDownloader, setShowPdfDownloader] = useState(false);
+    const [showPdfAccordion, setShowPdfAccordion] = useState(false);
+    const [pdfDownloadStatus, setPdfDownloadStatus] = useState(null);
 
     const aiAccordionRef = useRef(null);
     const crawlAccordionRef = useRef(null);
+    const imgAccordionRef = useRef(null);
+    const pdfAccordionRef = useRef(null);
+    const prevImgRunningRef = useRef(false);
+    const prevPdfRunningRef = useRef(false);
+    const prevImgStatusRef = useRef('idle');
+    const prevImgStepRef = useRef('');
+    const prevPdfStatusRef = useRef('idle');
+    const prevPdfStepRef = useRef('');
 
     const toggleAiAccordion = () => {
         const nextState = !showAiSideview;
@@ -84,9 +102,13 @@ export default function Sidebar() {
     const completedTimerRef = useRef(null);
 
     useEffect(() => {
+        const showPushToast = (msg, type = 'info') => {
+            try { window.dispatchEvent(new CustomEvent('app_toast_notification', { detail: { message: msg, type } })); } catch (e) {}
+        };
+
         const fetchStatus = async () => {
             try {
-                const s = await fetchApi('/api/products/crawler/status');
+                const s = await fetchApi('/api/products/crawler/status', { silent: true });
                 if (s) {
                     setCrawlerStatus(s);
 
@@ -95,7 +117,7 @@ export default function Sidebar() {
                         if (!completedTimerRef.current) {
                             completedTimerRef.current = setTimeout(async () => {
                                 try {
-                                    await fetchApi('/api/products/crawler/reset', { method: 'POST' });
+                                    await fetchApi('/api/products/crawler/reset', { method: 'POST', silent: true });
                                     setCrawlerStatus({
                                         status: 'Idle',
                                         progress: 0,
@@ -121,11 +143,100 @@ export default function Sidebar() {
         };
         fetchStatus();
         const timer = setInterval(fetchStatus, 2500);
+
+        // ── Poll Image Downloader status ──
+        const fetchImgStatus = async () => {
+            try {
+                const s = await fetchApi('/api/img-downloader/status', { silent: true });
+                if (s) {
+                    setImgDownloadStatus(s);
+                    const running = s.status === 'running' || s.status === 'loading' || s.status === 'autofilling';
+                    
+                    if (running && !prevImgRunningRef.current) {
+                        setShowImgAccordion(true);
+                        setTimeout(() => imgAccordionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 100);
+                        showPushToast(`🚀 Bắt đầu tiến trình tải ảnh...`, 'info');
+                    }
+
+                    if (s.step === 'autofilling' && prevImgStepRef.current !== 'autofilling') {
+                        showPushToast('📥 Tải ảnh hoàn tất! 🔗 Đang tự động điền link vào Sheet & CSDL...', 'info');
+                    }
+
+                    if (s.status === 'completed' && prevImgStatusRef.current !== 'completed') {
+                        showPushToast(`🎉 Hoàn tất! Đã tải & điền link ảnh thành công (${s.ok || 0}/${s.total || 0})!`, 'success');
+                        if (s.fail > 0) {
+                            showPushToast(`⚠️ Có ${s.fail} file ảnh không tải được (xem _failed_downloads.txt)`, 'warning');
+                        }
+                        try { window.dispatchEvent(new CustomEvent('profile_sheet_updated', { detail: { profileSlug: activeProfileSlug } })); } catch (e) {}
+                    }
+
+                    if (s.step === 'autofilling' || (!running && prevImgRunningRef.current)) {
+                        try { window.dispatchEvent(new CustomEvent('profile_sheet_updated', { detail: { profileSlug: activeProfileSlug } })); } catch (e) {}
+                    }
+
+                    prevImgRunningRef.current = running;
+                    prevImgStatusRef.current = s.status;
+                    prevImgStepRef.current = s.step;
+                }
+            } catch (e) {}
+        };
+        fetchImgStatus();
+        const imgTimer = setInterval(fetchImgStatus, 2500);
+
+        // ── Poll PDF Downloader status ──
+        const fetchPdfStatus = async () => {
+            try {
+                const s = await fetchApi('/api/pdf-downloader/status', { silent: true });
+                if (s) {
+                    setPdfDownloadStatus(s);
+                    const running = s.status === 'running' || s.status === 'loading' || s.status === 'autofilling';
+                    
+                    if (running && !prevPdfRunningRef.current) {
+                        setShowPdfAccordion(true);
+                        setTimeout(() => pdfAccordionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 100);
+                        showPushToast(`🚀 Bắt đầu quét & tải PDF...`, 'info');
+                    }
+
+                    if (s.step === 'autofilling' && prevPdfStepRef.current !== 'autofilling') {
+                        showPushToast('📥 Tải PDF xong! 🔗 Đang tự động điền link Google Drive vào Sheet & CSDL...', 'info');
+                    }
+
+                    if (s.status === 'completed' && prevPdfStatusRef.current !== 'completed') {
+                        showPushToast(`🎉 Hoàn tất! Đã tải & điền link PDF thành công (${s.ok || 0}/${s.total || 0})!`, 'success');
+                        if (s.fail > 0) {
+                            showPushToast(`⚠️ Có ${s.fail} file PDF không tìm thấy / lỗi`, 'warning');
+                        }
+                        try { window.dispatchEvent(new CustomEvent('profile_sheet_updated', { detail: { profileSlug: activeProfileSlug } })); } catch (e) {}
+                    }
+
+                    if (s.step === 'autofilling' || (!running && prevPdfRunningRef.current)) {
+                        try { window.dispatchEvent(new CustomEvent('profile_sheet_updated', { detail: { profileSlug: activeProfileSlug } })); } catch (e) {}
+                    }
+
+                    prevPdfRunningRef.current = running;
+                    prevPdfStatusRef.current = s.status;
+                    prevPdfStepRef.current = s.step;
+                }
+            } catch (e) {}
+        };
+        fetchPdfStatus();
+        const pdfTimer = setInterval(fetchPdfStatus, 2500);
+
+        const handleOpenImgDownloader = () => setShowImgDownloader(true);
+        const handleOpenPdfDownloader = () => setShowPdfDownloader(true);
+        window.addEventListener('open_img_downloader', handleOpenImgDownloader);
+        window.addEventListener('open_pdf_downloader', handleOpenPdfDownloader);
+
         return () => {
             clearInterval(timer);
+            clearInterval(imgTimer);
+            clearInterval(pdfTimer);
             if (completedTimerRef.current) clearTimeout(completedTimerRef.current);
+            window.removeEventListener('open_img_downloader', handleOpenImgDownloader);
+            window.removeEventListener('open_pdf_downloader', handleOpenPdfDownloader);
         };
     }, []);
+
 
     // ── Right-click context menu state ──
     const [ctxMenu, setCtxMenu] = useState(null); // { x, y, profile }
@@ -158,13 +269,11 @@ export default function Sidebar() {
 
     const fetchProfiles = async () => {
         try {
-            const data = await fetchApi('/api/products/profiles');
+            const data = await fetchApi('/api/products/profiles', { silent: true });
             if (data?.profiles && data.profiles.length > 0) {
                 setProfiles(data.profiles);
             }
-        } catch (err) {
-            console.error('Failed to fetch profiles:', err);
-        }
+        } catch (err) {}
     };
 
     const prevIsRunningRef = useRef(false);
@@ -531,6 +640,30 @@ export default function Sidebar() {
                         <span className="nav-label">AI Assistant</span>
                     </Link>
 
+                    {/* Image Downloader Button */}
+                    <button
+                        type="button"
+                        onClick={() => setShowImgDownloader(true)}
+                        className="sidebar-nav-item"
+                        title={isCollapsed ? 'Image Downloader' : ''}
+                        style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                        <span className="icon"><ImageDown size={20} /></span>
+                        <span className="nav-label">Image Downloader</span>
+                    </button>
+
+                    {/* PDF Downloader Button */}
+                    <button
+                        type="button"
+                        onClick={() => setShowPdfDownloader(true)}
+                        className="sidebar-nav-item"
+                        title={isCollapsed ? 'PDF Downloader' : ''}
+                        style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                        <span className="icon"><FileText size={20} /></span>
+                        <span className="nav-label">PDF Downloader</span>
+                    </button>
+
                     {/* ════════════════════════════════════════════════════════════ */}
                     {/* 2 ACCORDION ITEMS: AI ASSIT & CRAWL (INSIDE SCROLLABLE NAV)  */}
                     {/* ════════════════════════════════════════════════════════════ */}
@@ -894,9 +1027,257 @@ export default function Sidebar() {
                                     </div>
                                 )}
                             </div>
+
+                            {/* ── 3. Image Downloader Accordion ── */}
+                            {(() => {
+                                const imgRunning = imgDownloadStatus?.status === 'running' || imgDownloadStatus?.status === 'loading';
+                                const imgDone   = imgDownloadStatus?.status === 'completed' || imgDownloadStatus?.status === 'stopped';
+                                const imgPct    = imgDownloadStatus?.total > 0
+                                    ? Math.round((imgDownloadStatus.done / imgDownloadStatus.total) * 100) : 0;
+                                const accentColor = imgRunning ? '#059669' : imgDone ? '#0369a1' : '#6b7280';
+                                const bgColor     = showImgAccordion ? '#bbf7d0' : '#dcfce7';
+
+                                return (
+                                    <div ref={imgAccordionRef} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowImgAccordion(v => !v)}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                width: '100%', padding: '10px 14px', borderRadius: '16px',
+                                                background: bgColor, border: '1.5px solid #86efac',
+                                                color: '#14532d', fontWeight: 800, fontSize: '13px',
+                                                cursor: 'pointer',
+                                                boxShadow: showImgAccordion ? '0 0 0 2px rgba(134,239,172,0.5)' : 'none',
+                                                transition: 'all 0.2s ease', boxSizing: 'border-box'
+                                            }}
+                                            title="Click để mở/đóng Tiến trình Tải ảnh"
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                                                <ImageDown size={15} /> Tải ảnh
+                                                {imgRunning && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16a34a', display: 'inline-block', animation: 'imgPulse 1.2s infinite' }} />}
+                                            </span>
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: '8px', whiteSpace: 'nowrap', fontWeight: 800 }}>
+                                                {(imgDownloadStatus?.done || 0).toLocaleString('vi-VN')} / {(imgDownloadStatus?.total || 0).toLocaleString('vi-VN')}
+                                                {showImgAccordion ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                            </span>
+                                        </button>
+
+                                        {showImgAccordion && (
+                                            <div style={{
+                                                padding: '12px', background: '#ffffff', borderRadius: '14px',
+                                                border: '2px solid #16a34a',
+                                                boxShadow: '0 4px 16px rgba(22,163,74,0.08)',
+                                                display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px'
+                                            }}>
+                                                {/* Header */}
+                                                <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                        <ImageDown size={15} style={{ color: '#16a34a' }} /> Image Downloader
+                                                    </span>
+                                                    <span style={{
+                                                        fontSize: '10px', padding: '2px 8px', borderRadius: 10, fontWeight: 700,
+                                                        background: imgRunning ? '#dcfce7' : imgDone ? '#dbeafe' : '#f1f5f9',
+                                                        color: imgRunning ? '#15803d' : imgDone ? '#1d4ed8' : '#64748b'
+                                                    }}>
+                                                        {imgRunning ? '⚡ Đang tải' : imgDone ? (imgDownloadStatus?.status === 'completed' ? '✅ Xong' : '⛔ Dừng') : 'Chờ'}
+                                                    </span>
+                                                </div>
+
+                                                {/* Progress */}
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#475569' }}>
+                                                        <span>{(imgDownloadStatus?.done || 0).toLocaleString('vi-VN')}/{(imgDownloadStatus?.total || 0).toLocaleString('vi-VN')} ảnh</span>
+                                                        <span style={{ color: '#16a34a' }}>{imgPct}%</span>
+                                                    </div>
+                                                    <div style={{ width: '100%', height: '7px', background: '#f1f5f9', borderRadius: '4px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+                                                        <div style={{
+                                                            width: `${imgPct}%`, height: '100%', borderRadius: 4,
+                                                            background: imgDone
+                                                                ? (imgDownloadStatus?.status === 'completed' ? '#22c55e' : '#f59e0b')
+                                                                : 'linear-gradient(90deg,#16a34a,#22c55e)',
+                                                            transition: 'width 0.4s ease'
+                                                        }} />
+                                                    </div>
+                                                </div>
+
+                                                {/* Stats */}
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' }}>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(34,197,94,0.1)', color: '#15803d', border: '1px solid rgba(34,197,94,0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        ✓ {(imgDownloadStatus?.ok || 0).toLocaleString('vi-VN')} Xong
+                                                    </div>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(148,163,184,0.1)', color: '#475569', border: '1px solid #e2e8f0', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        ⏭️ {(imgDownloadStatus?.skip || 0).toLocaleString('vi-VN')} Đã có
+                                                    </div>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(239,68,68,0.1)', color: '#b91c1c', border: '1px solid rgba(239,68,68,0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        ⚠ {(imgDownloadStatus?.fail || 0).toLocaleString('vi-VN')} Lỗi
+                                                    </div>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(249,115,22,0.1)', color: '#c2410c', border: '1px solid rgba(249,115,22,0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        {imgDownloadStatus?.speed || 0} ảnh/s
+                                                    </div>
+                                                </div>
+
+                                                {/* ETA */}
+                                                {imgRunning && imgDownloadStatus?.eta > 0 && (
+                                                    <div style={{ fontSize: '11px', color: '#64748b', textAlign: 'center' }}>
+                                                        ETA: <strong>{imgDownloadStatus.eta}s</strong>
+                                                    </div>
+                                                )}
+
+                                                {/* Controls */}
+                                                <div style={{ display: 'flex', gap: 5, borderTop: '1px solid #e2e8f0', paddingTop: '6px' }}>
+                                                    {imgRunning && (
+                                                        <button type="button" onClick={async () => { try { await fetchApi('/api/img-downloader/stop', { method: 'POST' }); } catch(e){} }}
+                                                            style={{ flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, background: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}
+                                                        >
+                                                            <Square size={11} fill="white" /> Dừng
+                                                        </button>
+                                                    )}
+                                                    {(imgDone || (!imgRunning && imgDownloadStatus?.status && imgDownloadStatus.status !== 'idle')) && (
+                                                        <button type="button" onClick={async () => { try { await fetchApi('/api/img-downloader/reset', { method: 'POST' }); setImgDownloadStatus(null); } catch(e){} }}
+                                                            style={{ flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}
+                                                        >
+                                                            ↺ Reset
+                                                        </button>
+                                                    )}
+                                                    <button type="button" onClick={() => setShowImgDownloader(true)}
+                                                        style={{ flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}
+                                                    >
+                                                        ⚙ Cấu hình
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
+                            {/* ── 4. PDF Downloader Accordion ── */}
+                            {(() => {
+                                const pdfRunning = pdfDownloadStatus?.status === 'running' || pdfDownloadStatus?.status === 'loading';
+                                const pdfDone   = pdfDownloadStatus?.status === 'completed' || pdfDownloadStatus?.status === 'stopped';
+                                const pdfPct    = pdfDownloadStatus?.total > 0
+                                    ? Math.round((pdfDownloadStatus.done / pdfDownloadStatus.total) * 100) : 0;
+                                const bgColor   = showPdfAccordion ? '#bfdbfe' : '#dbeafe';
+
+                                return (
+                                    <div ref={pdfAccordionRef} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPdfAccordion(v => !v)}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                width: '100%', padding: '10px 14px', borderRadius: '16px',
+                                                background: bgColor, border: '1.5px solid #93c5fd',
+                                                color: '#1e40af', fontWeight: 800, fontSize: '13px',
+                                                cursor: 'pointer',
+                                                boxShadow: showPdfAccordion ? '0 0 0 2px rgba(147,197,253,0.5)' : 'none',
+                                                transition: 'all 0.2s ease', boxSizing: 'border-box'
+                                            }}
+                                            title="Click để mở/đóng Tiến trình Tải PDF Drive"
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                                                <FileText size={15} /> Tải PDF Drive
+                                                {pdfRunning && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#2563eb', display: 'inline-block', animation: 'imgPulse 1.2s infinite' }} />}
+                                            </span>
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: '8px', whiteSpace: 'nowrap', fontWeight: 800 }}>
+                                                {(pdfDownloadStatus?.done || 0).toLocaleString('vi-VN')} / {(pdfDownloadStatus?.total || 0).toLocaleString('vi-VN')}
+                                                {showPdfAccordion ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                            </span>
+                                        </button>
+
+                                        {showPdfAccordion && (
+                                            <div style={{
+                                                padding: '12px', background: '#ffffff', borderRadius: '14px',
+                                                border: '2px solid #2563eb',
+                                                boxShadow: '0 4px 16px rgba(37,99,235,0.08)',
+                                                display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12px'
+                                            }}>
+                                                {/* Header */}
+                                                <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                        <FileText size={15} style={{ color: '#2563eb' }} /> PDF Downloader
+                                                    </span>
+                                                    <span style={{
+                                                        fontSize: '10px', padding: '2px 8px', borderRadius: 10, fontWeight: 700,
+                                                        background: pdfRunning ? '#dcfce7' : pdfDone ? '#dbeafe' : '#f1f5f9',
+                                                        color: pdfRunning ? '#15803d' : pdfDone ? '#1d4ed8' : '#64748b'
+                                                    }}>
+                                                        {pdfRunning ? '⚡ Đang tải' : pdfDone ? (pdfDownloadStatus?.status === 'completed' ? '✅ Xong' : '⛔ Dừng') : 'Chờ'}
+                                                    </span>
+                                                </div>
+
+                                                {/* Progress */}
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#475569' }}>
+                                                        <span>{(pdfDownloadStatus?.done || 0).toLocaleString('vi-VN')}/{(pdfDownloadStatus?.total || 0).toLocaleString('vi-VN')} file</span>
+                                                        <span style={{ color: '#2563eb' }}>{pdfPct}%</span>
+                                                    </div>
+                                                    <div style={{ width: '100%', height: '7px', background: '#f1f5f9', borderRadius: '4px', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+                                                        <div style={{
+                                                            width: `${pdfPct}%`, height: '100%', borderRadius: 4,
+                                                            background: pdfDone
+                                                                ? (pdfDownloadStatus?.status === 'completed' ? '#22c55e' : '#f59e0b')
+                                                                : 'linear-gradient(90deg,#2563eb,#3b82f6)',
+                                                            transition: 'width 0.4s ease'
+                                                        }} />
+                                                    </div>
+                                                </div>
+
+                                                {/* Stats */}
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px' }}>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(34,197,94,0.1)', color: '#15803d', border: '1px solid rgba(34,197,94,0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        ✓ {(pdfDownloadStatus?.ok || 0).toLocaleString('vi-VN')} Upload
+                                                    </div>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(148,163,184,0.1)', color: '#475569', border: '1px solid #e2e8f0', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        ⏭️ {(pdfDownloadStatus?.skip || 0).toLocaleString('vi-VN')} Đã có
+                                                    </div>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(239,68,68,0.1)', color: '#b91c1c', border: '1px solid rgba(239,68,68,0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        ⚠ {(pdfDownloadStatus?.fail || 0).toLocaleString('vi-VN')} Lỗi
+                                                    </div>
+                                                    <div style={{ padding: '3px 5px', borderRadius: '5px', background: 'rgba(249,115,22,0.1)', color: '#c2410c', border: '1px solid rgba(249,115,22,0.2)', fontWeight: 700, fontSize: '10.5px' }}>
+                                                        {pdfDownloadStatus?.speed || 0} file/s
+                                                    </div>
+                                                </div>
+
+                                                {/* ETA */}
+                                                {pdfRunning && pdfDownloadStatus?.etaSec > 0 && (
+                                                    <div style={{ fontSize: '11px', color: '#64748b', textAlign: 'center' }}>
+                                                        ETA: <strong>{pdfDownloadStatus.etaSec}s</strong>
+                                                    </div>
+                                                )}
+
+                                                {/* Controls */}
+                                                <div style={{ display: 'flex', gap: 5, borderTop: '1px solid #e2e8f0', paddingTop: '6px' }}>
+                                                    {pdfRunning && (
+                                                        <button type="button" onClick={async () => { try { await fetchApi('/api/pdf-downloader/stop', { method: 'POST' }); } catch(e){} }}
+                                                            style={{ flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, background: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}
+                                                        >
+                                                            <Square size={11} fill="white" /> Dừng
+                                                        </button>
+                                                    )}
+                                                    {(pdfDone || (!pdfRunning && pdfDownloadStatus?.status && pdfDownloadStatus.status !== 'idle')) && (
+                                                        <button type="button" onClick={async () => { try { await fetchApi('/api/pdf-downloader/reset', { method: 'POST' }); setPdfDownloadStatus(null); } catch(e){} }}
+                                                            style={{ flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}
+                                                        >
+                                                            ↺ Reset
+                                                        </button>
+                                                    )}
+                                                    <button type="button" onClick={() => setShowPdfDownloader(true)}
+                                                        style={{ flex: 1, height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '11px' }}
+                                                    >
+                                                        ⚙ Cấu hình
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
                         </div>
                     )}
                 </nav>
+                <style>{`@keyframes imgPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
 
                 <div className="sidebar-user">
                     <div className="sidebar-user-avatar">{getInitials(user.display_name)}</div>
@@ -970,6 +1351,12 @@ export default function Sidebar() {
                     </div>
                 </div>
             )}
+
+            {/* ──────── Image Downloader Modal ──────── */}
+            <ImgDownloaderModal
+                isOpen={showImgDownloader}
+                onClose={() => setShowImgDownloader(false)}
+            />
 
             {/* ──────── Context Menu (right-click on profile) ──────── */}
             {ctxMenu && (
@@ -1156,6 +1543,9 @@ export default function Sidebar() {
                     </div>
                 </div>
             )}
+
+            <ImgDownloaderModal isOpen={showImgDownloader} onClose={() => setShowImgDownloader(false)} />
+            <PdfDownloaderModal isOpen={showPdfDownloader} onClose={() => setShowPdfDownloader(false)} />
         </>
     );
 }

@@ -164,7 +164,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
@@ -442,7 +442,7 @@ async def block_resources(route):
 
 async def fetch_page_browser(browser, browser_sem, url):
     """
-    Fallback method: Camoufox headless browser.
+    Fallback / JS rendering method: Headless browser.
     Strictly limited by browser_sem — max 5 concurrent browser ops regardless
     of total worker count. Prevents browser instance overload.
     """
@@ -451,7 +451,9 @@ async def fetch_page_browser(browser, browser_sem, url):
         try:
             page = await browser.new_page()
             await page.route("**/*", block_resources)
-            await page.goto(url, timeout=25000, wait_until="domcontentloaded")
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            if 'kew-ltd.co.jp' in url:
+                await page.wait_for_timeout(3500) # wait for OneLink JS translation into Vietnamese
             html = await page.content()
             return html, 'browser'
         except Exception as e:
@@ -466,8 +468,13 @@ async def fetch_page_browser(browser, browser_sem, url):
 async def get_page_content(session, browser, browser_sem, url):
     """
     Get page HTML using HTTP first, browser as fallback.
-    404s are returned immediately without trying browser.
+    For Kew Japan (kew-ltd.co.jp), force browser rendering to execute OneLink JS translation into Vietnamese.
     """
+    if 'kew-ltd.co.jp' in url and browser:
+        b_html, b_reason = await fetch_page_browser(browser, browser_sem, url)
+        if b_html:
+            return b_html, b_reason
+
     html, reason = await fetch_page_http(session, url)
     if html:
         return html, reason
@@ -910,6 +917,53 @@ ZH_EN_MAP = {
     '常見問題': 'FAQ',
 }
 
+KEW_VI_MAP = {
+    'LINE UP': 'DANH MỤC SẢN PHẨM',
+    'MULTIMETER': 'ĐỒNG HỒ VẠN NĂNG',
+    'CLAMP METER': 'ĐỒNG HỒ KẸP',
+    'INSULATION TESTER': 'BỘ KIỂM THỬ CÁCH ĐIỆN',
+    'EARTH TESTER': 'BỘ KIỂM THỬ TIẾP ĐẤT',
+    'MULTI FUNCTION INSTALLATION TESTER': 'BỘ KIỂM THỬ CÁCH ĐIỆN ĐA NĂNG',
+    'MULTIFUNCTION INSTALLATION TESTER': 'BỘ KIỂM THỬ CÁCH ĐIỆN ĐA NĂNG',
+    'INTELLIGENT SOCKET TESTER': 'BỘ KIỂM THỬ Ổ CẮM THÔNG MINH',
+    'RCD TESTER': 'BỘ KIỂM THỬ RCD',
+    'LOOP/PFC/PSC TESTER': 'BỘ KIỂM THỬ MẠCH VÒNG/PFC/PSC',
+    'PORTABLE APPLIANCE TESTER': 'BỘ KIỂM THỬ THIẾT BỊ DI ĐỘNG',
+    'VOLTAGE TESTER': 'BỘ KIỂM THỬ ĐIỆN ÁP',
+    'VOLTAGE DETECTOR': 'BỘ PHÁT HIỆN ĐIỆN ÁP',
+    'PHASE INDICATOR': 'CHỈ BÁO PHA',
+    'EVSE ADAPTER': 'BỘ ĐIỀU HỢP EVSE',
+    'POWER METER': 'ĐỒNG HỒ ĐO ĐIỆN',
+    'LOGGER': 'BỘ GHI NHẬT KÝ',
+    'THERMOMETER': 'NHIỆT KẾ',
+    'LIGHT METER': 'ĐỒNG HỒ ĐO ÁNH SÁNG',
+    'LAN CABLE TESTER': 'BỘ KIỂM THỬ CÁP LAN',
+    'SENSOR': 'CẢM BIẾN',
+    'BREAKER ADAPTER': 'BỘ ĐIỀU HỢP CẦU DAO',
+    'ACCESSORY': 'PHỤ KIỆN',
+    'ANALOG MULTIMETER': 'ĐỒNG HỒ VẠN NĂNG TƯƠNG TỰ',
+    'DIGITAL MULTIMETER WITH AC/DC CLAMP SENSOR': 'ĐỒNG HỒ VẠN NĂNG KỸ THUẬT SỐ CÓ CẢM BIẾN KẸP AC/DC',
+    'DIGITAL MULTIMETER': 'ĐỒNG HỒ VẠN NĂNG KỸ THUẬT SỐ',
+    'AC CLAMP METER': 'ĐỒNG HỒ ĐO KẸP AC',
+    'AC/DC CLAMP METER': 'ĐỒNG HỒ ĐO KẸP AC/DC',
+    'LEAKAGE CLAMP METER': 'ĐỒNG HỒ ĐO KẸP DÒ DÒNG',
+    'ANALOG INSULATION TESTER': 'KIỂM THỬ CÁCH ĐIỆN ANALOG',
+    'DIGITAL INSULATION TESTER': 'KIỂM THỬ CÁCH ĐIỆN KỸ THUẬT SỐ',
+    'HIGH VOLTAGE INSULATION TESTER': 'KIỂM THỬ CÁCH ĐIỆN CAO ÁP',
+}
+
+def translate_kew_term(text):
+    if not text or not isinstance(text, str):
+        return text or ""
+    up = text.strip().upper()
+    if up in KEW_VI_MAP:
+        return KEW_VI_MAP[up]
+    for k, v in sorted(KEW_VI_MAP.items(), key=lambda x: -len(x[0])):
+        if k in up:
+            pattern = re.compile(re.escape(k), re.I)
+            text = pattern.sub(v, text)
+    return text.strip()
+
 def translate_zh_to_en(text):
     if not text or not isinstance(text, str):
         return text or ""
@@ -946,6 +1000,103 @@ def extract_product_data(soup, slug, url=""):
     - series: Dòng Series (e.g. CP / CX Series, OS Series)
     - description, image_url, specs, part_number, download_links
     """
+    # ── Kew Japan (kew-ltd.co.jp) Dedicated Extractor ─────────────────────
+    if url and 'kew-ltd.co.jp' in url:
+        model_el = soup.select_one("h1.goods_model, h1, .goods_model")
+        if model_el:
+            for b in model_el.find_all(['span', 'em', 'strong', 'b']):
+                if any(x in b.text.upper() for x in ('NEW', 'HOT', 'SALE', 'BEST')):
+                    b.decompose()
+            raw_model = model_el.text.strip()
+        else:
+            raw_model = slug.upper()
+
+        crumbs = []
+        pankuzu = soup.select_one("nav.pankuzu, ul.pankuzu_list, div.pankuzu_inner")
+        if pankuzu:
+            for item in pankuzu.find_all(['li', 'a', 'span']):
+                t = item.text.strip()
+                t = re.sub(r'^\s*>\s*', '', t)
+                if t and t.upper() not in ('TOP', 'HOME', 'TRANG CHỦ', 'DÒNG SẢN PHẨM') and t not in crumbs:
+                    crumbs.append(t)
+
+        main_cat = translate_kew_term(crumbs[0]) if len(crumbs) >= 1 else ""
+        cat = main_cat
+        ser = translate_kew_term(crumbs[1]) if len(crumbs) >= 2 else main_cat
+        if len(crumbs) >= 3 and (not raw_model or raw_model.lower() == slug.lower()):
+            raw_model = crumbs[2]
+
+        if ser and raw_model and raw_model.lower() not in ser.lower():
+            p_name = f"{ser} {raw_model}".strip()
+        else:
+            p_name = translate_kew_term(raw_model or slug.upper())
+
+        p_name = translate_kew_term(p_name)
+        part_num = raw_model or slug.upper()
+
+        bullets = []
+        feat_box = soup.select_one("div.goods_feature, div[class*='feature']")
+        if feat_box:
+            for li in feat_box.find_all("li"):
+                bt = li.text.strip()
+                if bt and len(bt) > 2 and bt not in bullets:
+                    bullets.append(bt)
+        short_desc = "\n".join([f"• {b}" for b in bullets]) if bullets else ""
+
+        overview_texts = []
+        for sec in soup.select("div[class*='overview'], div[class*='goods_item'], section"):
+            sec_title_el = sec.find(['h2', 'h3', 'h4'])
+            sec_title = sec_title_el.text.strip() if sec_title_el else ""
+            if any(k in sec_title.lower() for k in ['tổng quan', 'overview', 'đặc điểm', 'tính năng']):
+                stext = sec.text.strip()
+                if stext and stext not in overview_texts:
+                    overview_texts.append(stext)
+        detailed_desc = "\n\n".join(overview_texts) if overview_texts else ""
+
+        download_links = {}
+        manual_vi = ""
+        manual_en = ""
+        for a in soup.select("a[href*='.pdf'], a[href*='/download/dl/']"):
+            href = a.get('href', '')
+            if not href.startswith('http'):
+                href = "https://vi.kew-ltd.co.jp" + href
+            t = a.text.strip().lower()
+            if 'tài liệu' in t or 'catalog' in t or 'giới thiệu' in t:
+                if 'catalogue' not in download_links:
+                    download_links['catalogue'] = href
+            elif 'hướng dẫn' in t or 'manual' in t:
+                if 'việt' in t or 'vietnamese' in t:
+                    manual_vi = href
+                elif not manual_en:
+                    manual_en = href
+
+        if manual_vi or manual_en:
+            download_links['manual'] = manual_vi or manual_en
+
+        img_url = ""
+        og_img = soup.find("meta", property="og:image")
+        if og_img and og_img.get("content"):
+            img_url = og_img.get("content").strip()
+        if not img_url:
+            for img in soup.find_all("img"):
+                src = img.get("src", "")
+                if src and 'photo_product' in src:
+                    img_url = urllib.parse.urljoin(url, src)
+                    break
+
+        specs = {}
+        tables = soup.find_all("table")
+        for table in tables:
+            for row in table.find_all("tr"):
+                cols = row.find_all(["td", "th"])
+                if len(cols) >= 2:
+                    k = cols[0].text.strip()
+                    v = cols[1].text.strip()
+                    if k and v:
+                        specs[k] = v
+
+        return p_name, main_cat, cat, ser, short_desc, detailed_desc, img_url, specs, part_num, download_links
+
     # 1. Name
     name_el = soup.find("h1") or soup.find("h2", class_=re.compile(r'title|product', re.I))
     name = name_el.text.strip() if name_el else slug.replace("-", " ").replace("_", " ").title()
@@ -1320,22 +1471,31 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
                 return
 
             # Full crawl
-            name, main_cat_ext, cat_extracted, series_extracted, description, image_url, specs, part_number, downloads = extract_product_data(soup, slug, url)
+            result = extract_product_data(soup, slug, url)
+            if len(result) == 10:
+                name, main_cat_ext, cat_extracted, series_extracted, short_description, description, image_url, specs, part_number, downloads = result
+            else:
+                # fallback for non-Kew (returns 9 values)
+                name, main_cat_ext, cat_extracted, series_extracted, description, image_url, specs, part_number, downloads = result
+                short_description = ""
 
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("""
             INSERT INTO products
-                (main_category, category, series, slug, name, description, image_url, url, specifications, part_number, download_links, profile_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (main_category, category, series, slug, name, short_description, description, image_url, url, specifications, part_number, download_links, profile_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(url) DO UPDATE SET
                 main_category=excluded.main_category, category=excluded.category, series=excluded.series,
-                slug=excluded.slug, name=excluded.name, description=excluded.description,
+                slug=excluded.slug, name=excluded.name,
+                short_description=excluded.short_description,
+                description=excluded.description,
                 image_url=excluded.image_url, specifications=excluded.specifications,
                 part_number=excluded.part_number, download_links=excluded.download_links,
                 profile_slug=excluded.profile_slug
             """, (
-                main_cat_ext, cat_extracted, series_extracted, slug, name, description, image_url, url,
+                main_cat_ext, cat_extracted, series_extracted, slug, name,
+                short_description, description, image_url, url,
                 json.dumps(specs, ensure_ascii=False), part_number,
                 json.dumps(downloads, ensure_ascii=False), profile_slug
             ))

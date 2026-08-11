@@ -215,6 +215,64 @@ async function initDatabase() {
         )
     `);
     // ──────────────────────────────────────────────────────────
+    // SCHEMA: AI Glossary, Translation Memory, and Whitelist
+    // ──────────────────────────────────────────────────────────
+    db.run(`
+        CREATE TABLE IF NOT EXISTS ai_glossary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT DEFAULT 'global',
+            source_term TEXT NOT NULL,
+            target_term TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS ai_translation_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            series_key TEXT NOT NULL,
+            source_text TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            hit_count INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(series_key, source_text)
+        )
+    `);
+
+    db.run(`
+        CREATE TABLE IF NOT EXISTS ai_whitelist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT DEFAULT 'unit',
+            term TEXT NOT NULL UNIQUE,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+
+    // Seed default Whitelist units & acronyms
+    try {
+        const wlRes = db.exec("SELECT COUNT(*) FROM ai_whitelist");
+        const wlCount = wlRes[0]?.values[0]?.[0] || 0;
+        if (wlCount === 0) {
+            const defaultUnits = [
+                'mm', 'cm', 'm', 'km', 'g', 'kg', 't', 'kW', 'W', 'mW', 'MW',
+                'V', 'mV', 'kV', 'A', 'mA', 'Hz', 'kHz', 'MHz', 'GHz',
+                'RPM', 'rpm', 'r/min', 'bar', 'mbar', 'psi', 'kPa', 'MPa',
+                'N.m', 'Nm', 'L', 'l', 'L/min', 'l/min', 'm3/h', 'm³/h', 'gpm',
+                '°C', '°F', 'K', 'dB', 'dBA', 'IP65', 'IP66', 'IP67', 'IP68', 'IP20', 'IP54', 'IP55',
+                'ISO', 'CE', 'RoHS', 'PLC', 'CNC', 'AC', 'DC', 'LED', 'USB', 'RS485', 'RS232', 'Modbus'
+            ];
+            defaultUnits.forEach(u => {
+                db.run("INSERT OR IGNORE INTO ai_whitelist (category, term) VALUES (?, ?)", ['unit', u]);
+            });
+        }
+    } catch (e) {
+        console.error('Failed to seed default whitelist:', e);
+    }
+    // ──────────────────────────────────────────────────────────
 
     // Seed default admin user if none exists
     const adminExists = db.exec("SELECT COUNT(*) as c FROM users WHERE role = 'admin'");
@@ -331,6 +389,7 @@ async function openProductsDb() {
             category TEXT,
             slug TEXT,
             name TEXT,
+            short_description TEXT,
             description TEXT,
             image_url TEXT,
             url TEXT UNIQUE,
@@ -362,6 +421,7 @@ async function openProductsDb() {
         'ALTER TABLE products ADD COLUMN series TEXT DEFAULT NULL',
         'ALTER TABLE products ADD COLUMN main_category TEXT DEFAULT NULL',
         'ALTER TABLE products ADD COLUMN part_number TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN short_description TEXT DEFAULT NULL',
         "ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'",
         "ALTER TABLE crawler_failed ADD COLUMN profile_slug TEXT DEFAULT NULL"
     ];
@@ -1063,6 +1123,158 @@ const aiPromptProfileQueries = {
     }
 };
 
+const aiGlossaryQueries = {
+    getAll: (scope = null) => {
+        let sql = 'SELECT id, scope, source_term, target_term, notes, is_active, created_at, updated_at FROM ai_glossary';
+        let params = [];
+        if (scope) {
+            sql += ' WHERE scope = ? OR scope = "global"';
+            params.push(String(scope).trim());
+        }
+        sql += ' ORDER BY scope ASC, source_term ASC';
+        const results = db.exec(sql, params);
+        if (!results[0]?.values) return [];
+        const cols = results[0].columns;
+        return results[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+    },
+
+    create: (scope = 'global', sourceTerm, targetTerm, notes = '') => {
+        db.run(
+            'INSERT INTO ai_glossary (scope, source_term, target_term, notes, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, datetime("now"), datetime("now"))',
+            [String(scope || 'global').trim(), String(sourceTerm || '').trim(), String(targetTerm || '').trim(), String(notes || '').trim()]
+        );
+        saveDatabase();
+        const res = db.exec('SELECT MAX(id) as id FROM ai_glossary');
+        const newId = res[0]?.values[0]?.[0];
+        const result = db.exec('SELECT * FROM ai_glossary WHERE id = ?', [newId]);
+        if (!result[0]?.values[0]) return null;
+        const cols = result[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, result[0].values[0][i]]));
+    },
+
+    update: (id, scope, sourceTerm, targetTerm, notes, isActive = 1) => {
+        db.run(
+            'UPDATE ai_glossary SET scope = ?, source_term = ?, target_term = ?, notes = ?, is_active = ?, updated_at = datetime("now") WHERE id = ?',
+            [String(scope || 'global').trim(), String(sourceTerm || '').trim(), String(targetTerm || '').trim(), String(notes || '').trim(), isActive ? 1 : 0, id]
+        );
+        saveDatabase();
+        const result = db.exec('SELECT * FROM ai_glossary WHERE id = ?', [id]);
+        if (!result[0]?.values[0]) return null;
+        const cols = result[0].columns;
+        return Object.fromEntries(cols.map((c, i) => [c, result[0].values[0][i]]));
+    },
+
+    delete: (id) => {
+        db.run('DELETE FROM ai_glossary WHERE id = ?', [id]);
+        saveDatabase();
+        return true;
+    },
+
+    bulkSave: (items) => {
+        if (!Array.isArray(items)) return [];
+        items.forEach(item => {
+            if (item && item.source_term && item.target_term) {
+                const existing = db.exec('SELECT id FROM ai_glossary WHERE LOWER(source_term) = LOWER(?) AND scope = ?', [String(item.source_term).trim(), String(item.scope || 'global').trim()]);
+                if (existing[0]?.values[0]) {
+                    db.run(
+                        'UPDATE ai_glossary SET target_term = ?, notes = ?, updated_at = datetime("now") WHERE id = ?',
+                        [String(item.target_term).trim(), String(item.notes || '').trim(), existing[0].values[0][0]]
+                    );
+                } else {
+                    db.run(
+                        'INSERT INTO ai_glossary (scope, source_term, target_term, notes, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, datetime("now"), datetime("now"))',
+                        [String(item.scope || 'global').trim(), String(item.source_term).trim(), String(item.target_term).trim(), String(item.notes || '').trim()]
+                    );
+                }
+            }
+        });
+        saveDatabase();
+        return aiGlossaryQueries.getAll();
+    }
+};
+
+const aiTranslationMemoryQueries = {
+    getBySeries: (seriesKey) => {
+        if (!seriesKey) return [];
+        const results = db.exec('SELECT id, series_key, source_text, translated_text, hit_count, updated_at FROM ai_translation_memory WHERE series_key = ? ORDER BY hit_count DESC', [String(seriesKey).trim()]);
+        if (!results[0]?.values) return [];
+        const cols = results[0].columns;
+        return results[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+    },
+
+    getAll: () => {
+        const results = db.exec('SELECT id, series_key, source_text, translated_text, hit_count, updated_at FROM ai_translation_memory ORDER BY series_key ASC, hit_count DESC');
+        if (!results[0]?.values) return [];
+        const cols = results[0].columns;
+        return results[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+    },
+
+    upsert: (seriesKey, sourceText, translatedText) => {
+        const sKey = String(seriesKey || 'default').trim();
+        const sText = String(sourceText || '').trim();
+        const tText = String(translatedText || '').trim();
+        if (!sKey || !sText || !tText) return null;
+
+        const existing = db.exec('SELECT id, hit_count FROM ai_translation_memory WHERE series_key = ? AND LOWER(source_text) = LOWER(?)', [sKey, sText]);
+        if (existing[0]?.values[0]) {
+            const id = existing[0].values[0][0];
+            const hits = (existing[0].values[0][1] || 1) + 1;
+            db.run('UPDATE ai_translation_memory SET translated_text = ?, hit_count = ?, updated_at = datetime("now") WHERE id = ?', [tText, hits, id]);
+        } else {
+            db.run('INSERT INTO ai_translation_memory (series_key, source_text, translated_text, hit_count, created_at, updated_at) VALUES (?, ?, ?, 1, datetime("now"), datetime("now"))', [sKey, sText, tText]);
+        }
+        saveDatabase();
+        return true;
+    },
+
+    bulkUpsert: (seriesKey, pairs) => {
+        if (!seriesKey || !Array.isArray(pairs)) return 0;
+        let count = 0;
+        pairs.forEach(p => {
+            if (p && p.source_text && p.translated_text) {
+                const ok = aiTranslationMemoryQueries.upsert(seriesKey, p.source_text, p.translated_text);
+                if (ok) count++;
+            }
+        });
+        return count;
+    },
+
+    delete: (id) => {
+        db.run('DELETE FROM ai_translation_memory WHERE id = ?', [id]);
+        saveDatabase();
+        return true;
+    },
+
+    deleteBySeries: (seriesKey) => {
+        db.run('DELETE FROM ai_translation_memory WHERE series_key = ?', [seriesKey]);
+        saveDatabase();
+        return true;
+    }
+};
+
+const aiWhitelistQueries = {
+    getAll: () => {
+        const results = db.exec('SELECT id, category, term, created_at FROM ai_whitelist ORDER BY category ASC, term ASC');
+        if (!results[0]?.values) return [];
+        const cols = results[0].columns;
+        return results[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+    },
+
+    add: (term, category = 'unit') => {
+        const t = String(term || '').trim();
+        if (!t) return null;
+        db.run('INSERT OR IGNORE INTO ai_whitelist (category, term) VALUES (?, ?)', [category, t]);
+        saveDatabase();
+        return true;
+    },
+
+    delete: (id) => {
+        db.run('DELETE FROM ai_whitelist WHERE id = ?', [id]);
+        saveDatabase();
+        return true;
+    }
+};
+
 module.exports = {
     initDatabase,
     saveDatabase,
@@ -1074,5 +1286,8 @@ module.exports = {
     localSheetQueries,
     profileQueries,
     profileSheetQueries,
-    aiPromptProfileQueries
+    aiPromptProfileQueries,
+    aiGlossaryQueries,
+    aiTranslationMemoryQueries,
+    aiWhitelistQueries
 };

@@ -39,7 +39,7 @@ export default function DashboardPage() {
 
     const fetchProfiles = async () => {
         try {
-            const data = await fetchApi('/api/products/profiles');
+            const data = await fetchApi('/api/products/profiles', { silent: true });
             if (data?.profiles) setProfiles(data.profiles);
         } catch (e) {}
     };
@@ -75,7 +75,7 @@ export default function DashboardPage() {
     const fileInputRef = useRef(null);
 
     const toast = (msg, type = 'success') => {
-        const id = Date.now();
+        const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         setToasts(p => [...p, { id, message: msg, type }]);
         setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
     };
@@ -83,13 +83,13 @@ export default function DashboardPage() {
     const fetchStatsAndStatus = async () => {
         try {
             const [statsData, statusData] = await Promise.all([
-                fetchApi('/api/products/stats'),
-                fetchApi('/api/products/crawler/status')
+                fetchApi('/api/products/stats', { silent: true }),
+                fetchApi('/api/products/crawler/status', { silent: true })
             ]);
             if (statsData) setStats(statsData);
             if (statusData) setCrawlerStatus(statusData);
         } catch (err) {
-            console.error('Error fetching dashboard stats:', err);
+            // Transient error during server startup
         } finally {
             setLoading(false);
         }
@@ -97,19 +97,19 @@ export default function DashboardPage() {
 
     const fetchLogs = async () => {
         try {
-            const logsData = await fetchApi('/api/products/crawler/logs');
+            const logsData = await fetchApi('/api/products/crawler/logs', { silent: true });
             if (logsData) setLogs(logsData);
         } catch (err) {
-            console.error('Error fetching logs:', err);
+            // Transient error
         }
     };
 
     const fetchFailed = async () => {
         try {
-            const data = await fetchApi('/api/products/crawler/failed');
+            const data = await fetchApi('/api/products/crawler/failed', { silent: true });
             if (data) setFailedUrls(data);
         } catch (err) {
-            console.error('Error fetching failed URLs:', err);
+            // Transient error
         }
     };
 
@@ -123,11 +123,11 @@ export default function DashboardPage() {
         // Poll status and logs every 2 seconds
         intervalRef.current = setInterval(async () => {
             try {
-                const statusData = await fetchApi('/api/products/crawler/status');
+                const statusData = await fetchApi('/api/products/crawler/status', { silent: true });
                 if (statusData) {
                     setCrawlerStatus(statusData);
                     if (statusData.status === 'Running' || statusData.status === 'Starting') {
-                        const statsData = await fetchApi('/api/products/stats');
+                        const statsData = await fetchApi('/api/products/stats', { silent: true });
                         if (statsData) setStats(statsData);
                     }
                     fetchLogs();
@@ -137,7 +137,7 @@ export default function DashboardPage() {
                         if (!completedTimerRef.current) {
                             completedTimerRef.current = setTimeout(async () => {
                                 try {
-                                    await fetchApi('/api/products/crawler/reset', { method: 'POST' });
+                                    await fetchApi('/api/products/crawler/reset', { method: 'POST', silent: true });
                                     setCrawlerStatus({
                                         status: 'Idle',
                                         progress: 0,
@@ -161,7 +161,7 @@ export default function DashboardPage() {
                     }
                 }
             } catch (err) {
-                console.error(err);
+                // Silently handle transient polling errors during server restarts
             }
         }, 2000);
 

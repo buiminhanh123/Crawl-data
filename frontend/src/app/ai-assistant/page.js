@@ -7,10 +7,21 @@ import {
     PenLine, ChevronDown, Loader2, X, Plus, Play, Square,
     RefreshCw, Save, Check, Zap, FileSpreadsheet, Settings,
     Info, User, AlertCircle, RotateCcw, Bell, CheckCircle2,
-    Pause, Sliders, Layers, ArrowRight, Bookmark, Filter, ShieldCheck, Wand2
+    Pause, Sliders, Layers, ArrowRight, Bookmark, Filter, ShieldCheck, Wand2,
+    BookOpen, CheckCheck
 } from 'lucide-react';
 import { getGlobalAiRunner } from '@/lib/globalAiRunner';
 import ExportExcelModal from '@/components/ExportExcelModal';
+import {
+    fetchGlossary,
+    fetchTranslationMemory,
+    fetchWhitelist,
+    saveGlossaryItem,
+    deleteGlossaryItem,
+    saveWhitelistItem,
+    deleteWhitelistItem,
+    auditTranslation
+} from '@/lib/translationControl';
 
 // ══════════════════════════════════════════════════════
 //  CONSTANTS & DEFAULT PRESETS
@@ -38,8 +49,9 @@ Thông số: {noi-dung}`
         variables: [
             { id: 'dich-1', name: 'noi-dung', label: 'Nội Dung', col: 'C' }
         ],
-        prompt: `Dịch bảng thông số kỹ thuật sau sang tiếng Việt chuyên ngành tự nhiên. Giữ nguyên đơn vị đo lường và định dạng. Không thêm câu chào:
+        prompt: `Dịch bảng thông số kỹ thuật sau sang tiếng Việt chuẩn kỹ thuật (BẮT BUỘC TUÂN THỦ TỪ ĐIỂN THUẬT NGỮ & KHÔNG TỰ Ý DÙNG TỪ ĐỒNG NGHĨA):
 
+Thông tin:
 {noi-dung}`
     },
     {
@@ -307,7 +319,7 @@ function sendDesktopNotification(title, body) {
 export default function AIAssistantPage() {
     const { user, hasPermission } = useAuth();
     
-    // View tab mode: 'config' vs 'monitor'
+    // View tab mode: 'config' vs 'monitor' vs 'glossary'
     const [viewMode, setViewMode] = useState('config'); 
 
     // Profiles & Sheets state
@@ -316,6 +328,108 @@ export default function AIAssistantPage() {
     const [availableSheets, setAvailableSheets] = useState([]);
     const [selectedSheetNames, setSelectedSheetNames] = useState([]);
     const [profileSheetsData, setProfileSheetsData] = useState([]);
+
+    // Glossary, Series Memory & Whitelist State for View Mode 3 ('glossary')
+    const [glossaryItems, setGlossaryItems] = useState([]);
+    const [memoryItems, setMemoryItems] = useState([]);
+    const [whitelistItems, setWhitelistItems] = useState([]);
+    const [newEnTerm, setNewEnTerm] = useState('');
+    const [newViTerm, setNewViTerm] = useState('');
+    const [newNotes, setNewNotes] = useState('');
+    const [newScope, setNewScope] = useState('global');
+    const [newWlTerm, setNewWlTerm] = useState('');
+    const [newWlCategory, setNewWlCategory] = useState('unit');
+    const [auditTestText, setAuditTestText] = useState('');
+    const [auditTestResult, setAuditTestResult] = useState(null);
+    const [auditingTest, setAuditingTest] = useState(false);
+
+    const loadGlossaryTabContent = async () => {
+        try {
+            const [gList, mList, wList] = await Promise.all([
+                fetchGlossary(selectedProfileSlug || null),
+                fetchTranslationMemory(selectedProfileSlug || null),
+                fetchWhitelist()
+            ]);
+            setGlossaryItems(gList || []);
+            setMemoryItems(mList || []);
+            setWhitelistItems(wList || []);
+        } catch (e) {
+            console.error('Failed to load glossary tab data:', e);
+        }
+    };
+
+    useEffect(() => {
+        if (viewMode === 'glossary') {
+            loadGlossaryTabContent();
+        }
+    }, [viewMode, selectedProfileSlug]);
+
+    const handleAddGlossaryTerm = async () => {
+        if (!newEnTerm.trim() || !newViTerm.trim()) {
+            showToast('Từ Tiếng Anh và nghĩa Tiếng Việt không được để trống!', 'warning');
+            return;
+        }
+        try {
+            await saveGlossaryItem({
+                scope: newScope,
+                source_term: newEnTerm.trim(),
+                target_term: newViTerm.trim(),
+                notes: newNotes.trim()
+            });
+            setNewEnTerm('');
+            setNewViTerm('');
+            setNewNotes('');
+            showToast('✅ Đã thêm thuật ngữ cố định vào Thư Viện thành công!', 'success');
+            loadGlossaryTabContent();
+        } catch (e) {
+            showToast('Lỗi thêm thuật ngữ: ' + e.message, 'danger');
+        }
+    };
+
+    const handleDeleteGlossaryTerm = async (id) => {
+        if (!confirm('Bạn có chắc muốn xóa thuật ngữ này khỏi Thư Viện?')) return;
+        await deleteGlossaryItem(id);
+        showToast('Đã xóa thuật ngữ khỏi Thư Viện.', 'info');
+        loadGlossaryTabContent();
+    };
+
+    const handleAddWhitelistTerm = async () => {
+        if (!newWlTerm.trim()) {
+            showToast('Vui lòng nhập từ/đơn vị cần thêm vào Whitelist!', 'warning');
+            return;
+        }
+        try {
+            await saveWhitelistItem(newWlTerm.trim(), newWlCategory);
+            setNewWlTerm('');
+            showToast('✅ Đã thêm vào Whitelist thành công!', 'success');
+            loadGlossaryTabContent();
+        } catch (e) {
+            showToast('Lỗi thêm Whitelist: ' + e.message, 'danger');
+        }
+    };
+
+    const handleDeleteWhitelistTerm = async (id) => {
+        try {
+            await deleteWhitelistItem(id);
+            showToast('Đã xóa khỏi Whitelist.', 'info');
+            loadGlossaryTabContent();
+        } catch (e) {
+            showToast('Lỗi xóa Whitelist: ' + e.message, 'danger');
+        }
+    };
+
+    const handleRunAuditTest = async () => {
+        if (!auditTestText.trim()) return;
+        setAuditingTest(true);
+        try {
+            const res = await auditTranslation(auditTestText, selectedProfileSlug);
+            setAuditTestResult(res);
+        } catch (e) {
+            showToast('Lỗi kiểm tra Việt hóa: ' + e.message, 'danger');
+        } finally {
+            setAuditingTest(false);
+        }
+    };
 
     // Prompt & Preset Config State
     const [savedPromptProfiles, setSavedPromptProfiles] = useState([]);
@@ -923,7 +1037,7 @@ export default function AIAssistantPage() {
                         onClick={() => setViewMode('config')}
                         style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '7px 16px', fontWeight: 600 }}
                     >
-                        <Sliders size={16} /> ⚙️ Cấu Hình Tác Vụ AI
+                        <Sliders size={16} /> Cấu Hình Tác Vụ AI
                     </button>
 
                     <button
@@ -932,7 +1046,16 @@ export default function AIAssistantPage() {
                         onClick={() => setViewMode('monitor')}
                         style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '7px 16px', fontWeight: 600 }}
                     >
-                        <CheckCircle2 size={16} /> 📟 Terminal Log Live
+                        <CheckCircle2 size={16} /> Terminal Log Live
+                    </button>
+
+                    <button
+                        type="button"
+                        className={`btn ${viewMode === 'glossary' ? 'btn-primary' : 'btn-ghost'}`}
+                        onClick={() => setViewMode('glossary')}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '7px 16px', fontWeight: 600 }}
+                    >
+                        <BookOpen size={16} /> Thư Viện Thuật Ngữ
                     </button>
                 </div>
 
@@ -947,7 +1070,7 @@ export default function AIAssistantPage() {
                         boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)'
                     }}
                 >
-                    <FileSpreadsheet size={18} /> 📥 Xuất File Excel (.xlsx)
+                    <FileSpreadsheet size={18} /> Xuất File Excel (.xlsx)
                 </button>
             </div>
 
@@ -962,7 +1085,7 @@ export default function AIAssistantPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 280 }}>
                             <Bookmark size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                                📁 Cấu Hình Prompt Đã Lưu:
+                                Cấu Hình Prompt Đã Lưu:
                             </span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <select
@@ -971,15 +1094,15 @@ export default function AIAssistantPage() {
                                     style={{ width: '100%', padding: '7px 10px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontWeight: 600, outline: 'none', textOverflow: 'ellipsis' }}
                                 >
                                     <option value="">-- Chọn Cấu hình Prompt Đã Lưu --</option>
-                                    <optgroup label="💡 Mẫu Mặc Định">
+                                    <optgroup label="Mẫu Mặc Định">
                                         {DEFAULT_PRESET_PROMPTS.map(p => (
-                                            <option key={p.id} value={p.id}>⭐ {p.name}</option>
+                                            <option key={p.id} value={p.id}>{p.name}</option>
                                         ))}
                                     </optgroup>
                                     {savedPromptProfiles.length > 0 && (
-                                        <optgroup label="💾 Cấu Hình Bạn Đã Lưu">
+                                        <optgroup label="Cấu Hình Bạn Đã Lưu">
                                             {savedPromptProfiles.map(p => (
-                                                <option key={p.id} value={p.id}>⭐ {p.name}</option>
+                                                <option key={p.id} value={p.id}>{p.name}</option>
                                             ))}
                                         </optgroup>
                                     )}
@@ -1047,7 +1170,7 @@ export default function AIAssistantPage() {
                                 style={{ padding: '8px 16px', background: apiTestState.testing ? 'var(--bg-secondary)' : 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: 13, cursor: apiTestState.testing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 12px rgba(99,102,241,0.2)' }}
                             >
                                 {apiTestState.testing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={15} />}
-                                {apiTestState.testing ? 'Đang Kiểm Tra Kết Nối...' : '⚡ Kiểm Tra Kết Nối API AI Ngay'}
+                                {apiTestState.testing ? 'Đang Kiểm Tra Kết Nối...' : 'Kiểm Tra Kết Nối API AI'}
                             </button>
                         </div>
 
@@ -1092,7 +1215,7 @@ export default function AIAssistantPage() {
                                 >
                                     {profiles.map(p => (
                                         <option key={p.id} value={p.slug}>
-                                            📦 {p.name.startsWith('Profile') ? p.name : `Profile ${p.name}`} ({p.brand_name || p.slug})
+                                            {p.name.startsWith('Profile') ? p.name : `Profile ${p.name}`} ({p.brand_name || p.slug})
                                         </option>
                                     ))}
                                 </select>
@@ -1165,7 +1288,7 @@ export default function AIAssistantPage() {
                             <div style={{ background: 'var(--bg-secondary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                                     <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                                        📌 Danh Sách Biến Nguồn (Gắn Tên Biến Với Cột Bảng Sheet):
+                                        Danh Sách Biến Nguồn (Gắn Tên Biến Với Cột Bảng Sheet):
                                     </label>
                                     <div style={{ display: 'flex', gap: 8 }}>
                                         <button
@@ -1173,7 +1296,7 @@ export default function AIAssistantPage() {
                                             onClick={handleAutoMapFromHeader}
                                             style={{ fontSize: 12, padding: '4px 10px', background: 'var(--bg-card)', border: '1px solid #ffedd5', borderRadius: 'var(--radius-sm)', fontWeight: 600, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
                                         >
-                                            <Wand2 size={13} /> ⚡ Tự động map từ Header (Hàng 1)
+                                            <Wand2 size={13} /> Tự động map từ Header (Hàng 1)
                                         </button>
                                         <button
                                             type="button"
@@ -1526,6 +1649,250 @@ export default function AIAssistantPage() {
                             )}
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* ═════════════════════════════════════════════════════════════════ */}
+            {/* VIEW MODE 3: GLOSSARY, SERIES MEMORY & AUDIT CONTROL PANEL       */}
+            {/* ═════════════════════════════════════════════════════════════════ */}
+            {viewMode === 'glossary' && (
+                <div style={{ maxWidth: 1000, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 24 }}>
+                    
+                    {/* Add New Glossary Term Form */}
+                    <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 16, border: '1px solid var(--border-color)' }}>
+                        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
+                            <Plus size={18} style={{ color: 'var(--accent)' }} /> Thêm Thuật Ngữ / Cụm Từ Mới Vào Thư Viện Dịch Cố Định
+                        </h3>
+                        <p style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 14 }}>
+                            Các cụm từ thêm vào đây sẽ được AI **bắt buộc tuân thủ 100%**, tuyệt đối không tự ý suy ra từ đồng nghĩa khác.
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 160px 110px', gap: 12 }}>
+                            <input
+                                type="text"
+                                placeholder="Từ Tiếng Anh gốc (VD: Rated Power)"
+                                value={newEnTerm}
+                                onChange={e => setNewEnTerm(e.target.value)}
+                                style={{ padding: '9px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                            />
+                            <input
+                                type="text"
+                                placeholder="Dịch Tiếng Việt cố định (VD: Công suất định mức)"
+                                value={newViTerm}
+                                onChange={e => setNewViTerm(e.target.value)}
+                                style={{ padding: '9px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                            />
+                            <input
+                                type="text"
+                                placeholder="Ghi chú thuật ngữ (Tùy chọn)"
+                                value={newNotes}
+                                onChange={e => setNewNotes(e.target.value)}
+                                style={{ padding: '9px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                            />
+                            <select
+                                value={newScope}
+                                onChange={e => setNewScope(e.target.value)}
+                                style={{ padding: '9px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontWeight: 600 }}
+                            >
+                                <option value="global">🌐 Toàn Hệ Thống (Global)</option>
+                                {selectedProfileSlug && <option value={selectedProfileSlug}>📁 Profile {selectedProfileSlug}</option>}
+                            </select>
+                            <button
+                                type="button"
+                                onClick={handleAddGlossaryTerm}
+                                style={{ padding: '9px 14px', fontSize: 13, fontWeight: 700, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', boxShadow: '0 4px 12px rgba(99,102,241,0.25)' }}
+                            >
+                                + Thêm Từ
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Fixed Glossary List Table */}
+                    <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 16, border: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                            <h3 style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)', margin: 0 }}>
+                                <BookOpen size={18} style={{ color: 'var(--accent)' }} /> Danh Sách Thuật Ngữ Cố Định ({glossaryItems.length} từ)
+                            </h3>
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Tự động áp dụng ưu tiên khi AI thực hiện dịch</span>
+                        </div>
+                        <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                <thead>
+                                    <tr style={{ background: 'var(--bg-secondary)', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
+                                        <th style={{ padding: '10px 14px' }}>Phạm vi</th>
+                                        <th style={{ padding: '10px 14px' }}>Tiếng Anh (Từ gốc)</th>
+                                        <th style={{ padding: '10px 14px' }}>Tiếng Việt (Khóa 1-1 cố định)</th>
+                                        <th style={{ padding: '10px 14px' }}>Ghi chú</th>
+                                        <th style={{ padding: '10px 14px', textAlign: 'right' }}>Thao tác</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {glossaryItems.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>Chưa có thuật ngữ cố định nào. Hãy thêm từ đầu tiên ở ô bên trên!</td>
+                                        </tr>
+                                    ) : (
+                                        glossaryItems.map(item => (
+                                            <tr key={item.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                <td style={{ padding: '10px 14px' }}>
+                                                    <span style={{ fontSize: 11.5, padding: '3px 8px', borderRadius: 6, background: item.scope === 'global' ? '#e0f2fe' : '#fef3c7', color: item.scope === 'global' ? '#0369a1' : '#b45309', fontWeight: 700 }}>
+                                                        {item.scope === 'global' ? 'Global' : item.scope}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--text-primary)' }}>{item.source_term}</td>
+                                                <td style={{ padding: '10px 14px', fontWeight: 700, color: '#15803d' }}>{item.target_term}</td>
+                                                <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{item.notes || '—'}</td>
+                                                <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleDeleteGlossaryTerm(item.id)}
+                                                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}
+                                                        title="Xóa thuật ngữ này"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Series Memory Cache Table */}
+                    <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 16, border: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                            <h3 style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)', margin: 0 }}>
+                                <ShieldCheck size={18} style={{ color: 'var(--accent)' }} /> Cache Dịch Theo Series / Profile ({memoryItems.length} từ đã tự học)
+                            </h3>
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Tự động học từ bảng 1 để áp dụng nhất quán cho các bảng sau</span>
+                        </div>
+                        <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                <thead>
+                                    <tr style={{ background: 'var(--bg-secondary)', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
+                                        <th style={{ padding: '10px 14px' }}>Series Key</th>
+                                        <th style={{ padding: '10px 14px' }}>Từ Gốc (Tiếng Anh)</th>
+                                        <th style={{ padding: '10px 14px' }}>Nghĩa Đã Khóa (Tiếng Việt)</th>
+                                        <th style={{ padding: '10px 14px' }}>Số lần tái sử dụng</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {memoryItems.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={4} style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>Chưa có bộ nhớ cache nào cho series này. Khi bạn chạy dịch bảng thông số kỹ thuật đầu tiên, hệ thống sẽ tự động trích xuất và khóa nghĩa tại đây!</td>
+                                        </tr>
+                                    ) : (
+                                        memoryItems.map(m => (
+                                            <tr key={m.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text-secondary)' }}>{m.series_key}</td>
+                                                <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text-primary)' }}>{m.source_text}</td>
+                                                <td style={{ padding: '10px 14px', fontWeight: 700, color: '#047857' }}>{m.translated_text}</td>
+                                                <td style={{ padding: '10px 14px', color: 'var(--text-muted)' }}>{m.hit_count} lần</td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Whitelist Units & Acronyms Manager */}
+                    <div className="card" style={{ padding: 20, background: 'var(--bg-card)', borderRadius: 16, border: '1px solid var(--border-color)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 10 }}>
+                            <h3 style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)', margin: 0 }}>
+                                <ShieldCheck size={18} style={{ color: 'var(--accent)' }} /> Whitelist Đơn Vị Đo Lường & Từ Viết Tắt ({whitelistItems.length} từ)
+                            </h3>
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+                            Các từ/đơn vị trong Whitelist (VD: `mm`, `kg`, `V`, `kW`, `bar`, `IP65`, `ISO`...) sẽ được giữ nguyên bản tiếng Anh mà không bị báo lỗi chưa dịch.
+                        </p>
+
+                        {/* Add new Whitelist term form */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px auto', gap: 10, marginBottom: 14 }}>
+                            <input
+                                type="text"
+                                placeholder="Nhập từ / đơn vị (VD: IP67, kVA, PROFIBUS...)"
+                                value={newWlTerm}
+                                onChange={e => setNewWlTerm(e.target.value)}
+                                style={{ padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                            />
+                            <select
+                                value={newWlCategory}
+                                onChange={e => setNewWlCategory(e.target.value)}
+                                style={{ padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontWeight: 600 }}
+                            >
+                                <option value="unit">Đơn vị đo lường</option>
+                                <option value="acronym">Từ viết tắt</option>
+                            </select>
+                            <button
+                                type="button"
+                                onClick={handleAddWhitelistTerm}
+                                style={{ padding: '8px 16px', fontSize: 13, fontWeight: 700, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                            >
+                                <Plus size={15} /> Thêm Whitelist
+                            </button>
+                        </div>
+
+                        {/* Whitelist Tags list with individual delete buttons */}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 130, overflowY: 'auto', padding: 10, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                            {whitelistItems.map(w => (
+                                <span key={w.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, padding: '3px 8px', background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 6, fontWeight: 600 }}>
+                                    <span style={{ fontSize: 9.5, opacity: 0.7, padding: '1px 4px', background: w.category === 'unit' ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)', color: w.category === 'unit' ? '#059669' : '#4f46e5', borderRadius: 4 }}>{w.category}</span>
+                                    {w.term}
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDeleteWhitelistTerm(w.id)}
+                                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 0, marginLeft: 2, display: 'inline-flex', alignItems: 'center' }}
+                                        title="Xóa khỏi Whitelist"
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Live Audit Scanner Tester */}
+                    <div className="card" style={{ padding: 20, background: '#f0fdf4', borderRadius: 16, border: '1px solid #bbf7d0' }}>
+                        <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, color: '#166534' }}>
+                            <CheckCheck size={18} /> Thử Nghiệm Bộ Kiểm Soát Dịch (Audit Scanner Test)
+                        </h3>
+                        <p style={{ fontSize: 12.5, color: '#15803d', marginBottom: 12 }}>
+                            Dán 1 đoạn văn bản bất kỳ vào đây để kiểm tra xem đã Việt hóa 100% chưa hay còn từ tiếng Anh chưa dịch:
+                        </p>
+                        <textarea
+                            rows={3}
+                            placeholder="Dán đoạn văn bản cần kiểm tra tại đây..."
+                            value={auditTestText}
+                            onChange={e => setAuditTestText(e.target.value)}
+                            style={{ width: '100%', padding: '10px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid #86efac', background: '#ffffff', color: '#0f172a', outline: 'none', marginBottom: 10 }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <button
+                                type="button"
+                                onClick={handleRunAuditTest}
+                                disabled={auditingTest}
+                                style={{ padding: '8px 18px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                            >
+                                {auditingTest ? <Loader2 size={16} className="animate-spin" /> : <CheckCheck size={16} />}
+                                {auditingTest ? 'Đang kiểm tra...' : '🔍 Quét Kiểm Tra Ngay'}
+                            </button>
+
+                            {auditTestResult && (
+                                auditTestResult.is100PercentVietnamese ? (
+                                    <span style={{ fontSize: 13, padding: '4px 12px', background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', borderRadius: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <CheckCheck size={16} /> 🎉 100% Đã Việt Hóa Chuẩn Kỹ Thuật!
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: 13, padding: '4px 12px', background: '#fef3c7', color: '#b45309', border: '1px solid #fde047', borderRadius: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        ⚠️ Phát hiện {auditTestResult.count} từ Anh chưa dịch: ({auditTestResult.untranslatedWords?.join(', ')})
+                                    </span>
+                                )
+                            )}
+                        </div>
+                    </div>
+
                 </div>
             )}
 

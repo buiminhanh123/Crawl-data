@@ -174,16 +174,20 @@ export default function GoogleDriveModal({ isOpen, onClose, toast }) {
         setMsg({ text: '', type: '' });
         try {
             const res = await callDriveApi('/create-missing-folders', { method: 'POST' });
-            if (res.createdCount > 0) {
+            if (res?.createdCount > 0) {
                 const names = res.createdProfiles.map(p => p.name).join(', ');
                 setMsg({ text: `🎉 Đã tạo thành công ${res.createdCount} Folder Drive mới cho các Profile: ${names}`, type: 'success' });
                 if (toast) toast(`🎉 Đã tạo ${res.createdCount} Folder Drive mới!`, 'success');
+            } else if (res?.errors && res.errors.length > 0) {
+                setMsg({ text: `❌ Lỗi khi tạo Folder Drive: ${res.errors.join('; ')}`, type: 'error' });
             } else {
                 setMsg({ text: `ℹ️ Tất cả các Profile đều đã có Folder Drive. Không cần tạo thêm!`, type: 'success' });
             }
             await handleCheckFolders();
+            await checkStatus();
         } catch (err) {
             setMsg({ text: '❌ Lỗi khi tạo Folder Drive: ' + (err.message || 'Vui lòng kiểm tra lại kết nối Drive.'), type: 'error' });
+            await checkStatus();
         } finally {
             setCreatingFolders(false);
         }
@@ -340,10 +344,48 @@ export default function GoogleDriveModal({ isOpen, onClose, toast }) {
                                 </label>
                             </div>
 
-                            {/* Step 2: Authenticate via Google */}
+                            {/* Step 2: Parent / Root Folder Link/ID */}
+                            <form onSubmit={handleSaveConfig} style={{ padding: 16, background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0' }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <FolderTree size={15} style={{ color: '#0284c7' }} /> Bước 2: Link / ID Folder Gốc (Folder Mẹ trên Drive - Tùy chọn)
+                                </div>
+                                <p style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
+                                    Dán Link đường dẫn hoặc ID của Folder lớn trên Google Drive. Tất cả các Folder hãng (Newland, Kyoritsu...) khi tạo mới sẽ tự động nằm gọn bên trong Folder gốc này.
+                                </p>
+
+                                <div style={{ marginBottom: 10 }}>
+                                    <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', display: 'block', marginBottom: 4 }}>
+                                        Link Đường Dẫn Trình Duyệt Hoặc ID Folder Mẹ:
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={parentFolderId}
+                                        onChange={e => setParentFolderId(e.target.value)}
+                                        placeholder="Ví dụ: https://drive.google.com/drive/folders/1a2b3c... hoặc 1a2b3c..."
+                                        style={{ width: '100%', padding: '8px 12px', fontSize: 12.5, borderRadius: 8, border: '1px solid #cbd5e1', outline: 'none' }}
+                                    />
+                                    <span style={{ fontSize: 11, color: '#64748b', marginTop: 4, display: 'block' }}>
+                                        💡 Bạn có thể dán thẳng toàn bộ URL trình duyệt (ví dụ: <code>https://drive.google.com/drive/folders/...</code>), hệ thống sẽ tự bóc tách ID.
+                                    </span>
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    disabled={savingConfig}
+                                    style={{
+                                        width: '100%', padding: '8px 16px', background: '#0284c7', color: 'white',
+                                        border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 12.5,
+                                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+                                    }}
+                                >
+                                    <Save size={15} /> {savingConfig ? 'Đang lưu...' : '💾 Lưu Cấu Hình Folder Gốc'}
+                                </button>
+                            </form>
+
+                            {/* Step 3: Authenticate via Google */}
                             <div style={{ padding: 16, background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0' }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <ExternalLink size={15} style={{ color: '#16a34a' }} /> Bước 2: Đăng Nhập & Xác Thực Google Account
+                                    <ExternalLink size={15} style={{ color: '#16a34a' }} /> Bước 3: Đăng Nhập & Xác Thực Google Account
                                 </div>
                                 <p style={{ fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.5 }}>
                                     Bấm nút bên dưới để mở cửa sổ Đăng nhập Google, cấp quyền truy cập Drive & lấy Mã Code xác thực.
@@ -423,17 +465,17 @@ export default function GoogleDriveModal({ isOpen, onClose, toast }) {
 
                                 <div style={{ marginBottom: 12 }}>
                                     <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                                        <FolderTree size={14} style={{ color: '#64748b' }} /> ID Folder Mẹ Trên Drive Cá Nhân (Tùy chọn):
+                                        <FolderTree size={14} style={{ color: '#64748b' }} /> Link Đường Dẫn Hoặc ID Folder Mẹ (Tùy chọn):
                                     </label>
                                     <input
                                         type="text"
                                         value={parentFolderId}
                                         onChange={e => setParentFolderId(e.target.value)}
-                                        placeholder="Ví dụ: 1a2b3c4d5e6f7g8h9i0j... (Lấy từ URL của Folder Mẹ)"
+                                        placeholder="Ví dụ: https://drive.google.com/drive/folders/1a2b3c... hoặc 1a2b3c..."
                                         style={{ width: '100%', padding: '8px 12px', fontSize: 12.5, borderRadius: 8, border: '1px solid #cbd5e1', outline: 'none' }}
                                     />
                                     <span style={{ fontSize: 11, color: '#64748b', marginTop: 2, display: 'block' }}>
-                                        Nhập ID nếu muốn tất cả Folder Hãng tạo ra chui vào đúng 1 Folder Mẹ cụ thể trên Drive của bạn.
+                                        Dán Link URL hoặc ID để tất cả Folder Hãng tự động nằm trong 1 Folder Mẹ cụ thể trên Drive.
                                     </span>
                                 </div>
 
@@ -468,10 +510,10 @@ export default function GoogleDriveModal({ isOpen, onClose, toast }) {
                         </div>
                     )}
 
-                    {/* Step 3: Check & Create Missing Profile Folders */}
+                    {/* Step 3/4: Check & Create Missing Profile Folders */}
                     <div style={{ marginTop: 20, padding: 16, background: '#f8fafc', borderRadius: 12, border: '1px solid #e2e8f0' }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <FolderCheck size={15} style={{ color: '#8b5cf6' }} /> Bước 3: Đồng Bộ & Kiểm Tra Folder Drive Của Profile
+                            <FolderCheck size={15} style={{ color: '#8b5cf6' }} /> Bước {driveMode === 'oauth2' ? '4' : '3'}: Đồng Bộ & Kiểm Tra Folder Drive Của Profile
                         </div>
                         <p style={{ fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.5 }}>
                             Kiểm tra danh sách các Profile xem đã có Folder Drive chưa, hoặc tự động tạo bổ sung cho các Profile chưa có Folder.

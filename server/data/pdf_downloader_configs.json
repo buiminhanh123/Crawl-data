@@ -1,0 +1,75 @@
+{
+  "test": {
+    "mode": "profile",
+    "driveFolderId": "",
+    "concurrency": 20,
+    "deduplicate": true,
+    "selectedProfile": "newland",
+    "categoryFilter": "",
+    "seriesFilter": "",
+    "profMapping": {
+      "profBrand": "profile_slug",
+      "profMainCategory": "main_category",
+      "profSubCategory": "NONE",
+      "profSeries": "NONE",
+      "profModel": "part_number",
+      "resultCol": "Tech1",
+      "pdfFilterMode": "datasheet_only",
+      "keywords": "datasheet, manual, guide, brochure",
+      "filenamePattern": "{model}.pdf"
+    },
+    "sheetCfg": {
+      "sheetInput": "",
+      "sheetName": "",
+      "headerRow": 2,
+      "dataStartRow": 3,
+      "colBrand": "C",
+      "colMainCategory": "B",
+      "colSubCategory": "NONE",
+      "colSeries": "NONE",
+      "colModel": "F",
+      "colPdfUrl": "J",
+      "colResult": "K",
+      "filenamePattern": "{model}.pdf",
+      "batchStart": 1,
+      "batchEnd": 0
+    }
+  },
+  "test 2": {
+    "mode": "profile",
+    "driveFolderId": "1bwZn59kAzB3u2XiHdvphEbuF-B06cmE-",
+    "concurrency": 30,
+    "deduplicate": true,
+    "selectedProfile": "newland",
+    "categoryFilter": "",
+    "seriesFilter": "",
+    "profMapping": {
+      "profBrand": "profile_slug",
+      "profMainCategory": "main_category",
+      "profSubCategory": "NONE",
+      "profSeries": "NONE",
+      "profModel": "ma_san_pham",
+      "profPdfUrl": "URL IMG",
+      "resultCol": "TL_HDSD_Link",
+      "pdfFilterMode": "datasheet_only",
+      "keywords": "datasheet, manual, guide, brochure",
+      "filenamePattern": "{model}.pdf"
+    },
+    "sheetCfg": {
+      "sheetInput": "",
+      "sheetName": "",
+      "headerRow": 2,
+      "dataStartRow": 3,
+      "colBrand": "C",
+      "colMainCategory": "B",
+      "colSubCategory": "NONE",
+      "colSeries": "NONE",
+      "colModel": "F",
+      "colPdfUrl": "J",
+      "colResult": "K",
+      "filenamePattern": "{model}.pdf",
+      "batchStart": 1,
+      "batchEnd": 0
+    }
+  }
+}

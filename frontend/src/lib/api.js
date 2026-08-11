@@ -44,6 +44,7 @@ export async function fetchApi(path, options = {}) {
             headers,
         });
     } catch (netErr) {
+        if (options?.silent) return null;
         throw new Error('Không thể kết nối tới Backend Server (http://localhost:3002). Vui lòng kiểm tra và chạy lại lệnh `node server.js`!');
     }
 

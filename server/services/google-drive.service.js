@@ -15,12 +15,28 @@ const CREDENTIAL_PATHS = [
     path.join(SERVER_DATA_DIR, 'credentials.json')
 ];
 
+function cleanFolderId(input) {
+    if (!input || typeof input !== 'string') return '';
+    let str = input.trim();
+    const matchFolder = str.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    if (matchFolder) return matchFolder[1];
+    const matchId = str.match(/id=([a-zA-Z0-9_-]+)/);
+    if (matchId) return matchId[1];
+    const matchPure = str.match(/([a-zA-Z0-9_-]{10,})/);
+    if (matchPure) return matchPure[1];
+    return str.replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 function getConfig() {
     if (!fs.existsSync(CONFIG_PATH)) {
         return { mode: 'oauth2', parentFolderId: '', shareEmail: '' };
     }
     try {
-        return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        if (cfg.parentFolderId) {
+            cfg.parentFolderId = cleanFolderId(cfg.parentFolderId);
+        }
+        return cfg;
     } catch (e) {
         return { mode: 'oauth2', parentFolderId: '', shareEmail: '' };
     }
@@ -29,6 +45,9 @@ function getConfig() {
 function saveConfig(cfg) {
     fs.mkdirSync(SERVER_DATA_DIR, { recursive: true });
     const current = getConfig();
+    if (cfg.parentFolderId !== undefined) {
+        cfg.parentFolderId = cleanFolderId(cfg.parentFolderId);
+    }
     const updated = { ...current, ...cfg };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2), 'utf8');
     return updated;
@@ -169,6 +188,26 @@ async function handleAuthCode(code) {
     return tokens;
 }
 
+function handleDriveApiError(err) {
+    if (!err) return;
+    const msg = (err.message || err.toString() || '').toLowerCase();
+    const dataErr = (err.response && err.response.data && JSON.stringify(err.response.data)) || '';
+    
+    if (msg.includes('invalid_grant') || msg.includes('expired or revoked') || dataErr.includes('invalid_grant')) {
+        console.warn('[GoogleDriveService] Detected invalid_grant/expired token. Removing token.json...');
+        if (fs.existsSync(TOKEN_PATH)) {
+            try { fs.unlinkSync(TOKEN_PATH); } catch (e) {}
+        }
+        throw new Error('Phiên đăng nhập Google Drive đã hết hạn hoặc bị hủy (invalid_grant). Vui lòng bấm "🔗 Mở Trang Đăng Nhập Xác Thực" ở Bước 3 để đăng nhập lại.');
+    }
+
+    if (msg.includes('file not found') || msg.includes('404') || dataErr.includes('file not found')) {
+        const cfg = getConfig();
+        const parentId = cfg.parentFolderId || '';
+        throw new Error(`Không tìm thấy Folder Mẹ trên Google Drive (ID: ${parentId}). Vui lòng kiểm tra lại Link/ID ở Bước 2 xem đã đúng chưa, hoặc tài khoản Google đăng nhập ở Bước 3 có quyền truy cập Folder này hay không.`);
+    }
+}
+
 async function findExistingProfileFolder(profileName) {
     const authClient = getAuthClient();
     if (!authClient || !isConnected() || !profileName) return null;
@@ -231,6 +270,7 @@ async function findExistingProfileFolder(profileName) {
         }
     } catch (err) {
         console.error('[GoogleDriveService] Error searching existing folder:', err);
+        handleDriveApiError(err);
     }
 
     return null;
@@ -305,7 +345,8 @@ async function createProfileFolders(profileName) {
         };
     } catch (err) {
         console.error('[GoogleDriveService] Failed to create Profile drive folders:', err);
-        return { profileFolderId: null, datasheetFolderId: null };
+        handleDriveApiError(err);
+        throw err;
     }
 }
 
@@ -391,7 +432,8 @@ async function uploadExcelToDrive(profileFolderId, fileName, fileBuffer) {
         const file = await drive.files.create({
             resource: fileMetadata,
             media: media,
-            fields: 'id, name, webViewLink'
+            fields: 'id, name, webViewLink',
+            supportsAllDrives: true
         });
 
         console.log(`[GoogleDriveService] Uploaded Excel file '${fileName}' (${file.data.id}) to Drive.`);
@@ -408,11 +450,141 @@ async function verifyDriveFolderExists(folderId) {
     if (!authClient || !isConnected()) return false;
     try {
         const drive = google.drive({ version: 'v3', auth: authClient });
-        const res = await drive.files.get({ fileId: folderId, fields: 'id, name, trashed' });
+        const res = await drive.files.get({ fileId: folderId, fields: 'id, name, trashed', supportsAllDrives: true });
         return res.data && !res.data.trashed;
     } catch (e) {
         return false;
     }
+}
+
+async function uploadPdfToDrive(parentFolderId, fileName, fileBuffer) {
+    const authClient = getAuthClient();
+    if (!authClient || !isConnected()) {
+        throw new Error('Chưa kết nối Google Drive API. Vui lòng cấu hình tài khoản Google Drive!');
+    }
+
+    const drive = google.drive({ version: 'v3', auth: authClient });
+
+    const bufferStream = new stream.PassThrough();
+    bufferStream.end(fileBuffer);
+
+    const fileMetadata = {
+        name: fileName,
+        mimeType: 'application/pdf'
+    };
+    const cleanedParentId = cleanFolderId(parentFolderId);
+    if (cleanedParentId) {
+        fileMetadata.parents = [cleanedParentId];
+    }
+
+    const media = {
+        mimeType: 'application/pdf',
+        body: bufferStream
+    };
+
+    const file = await drive.files.create({
+        resource: fileMetadata,
+        media: media,
+        fields: 'id, name, webViewLink, webContentLink',
+        supportsAllDrives: true
+    });
+
+    // Make readable by anyone with link
+    try {
+        await drive.permissions.create({
+            fileId: file.data.id,
+            requestBody: {
+                role: 'reader',
+                type: 'anyone'
+            },
+            supportsAllDrives: true
+        });
+    } catch (permErr) {}
+
+    return { fileId: file.data.id, webViewLink: file.data.webViewLink, webContentLink: file.data.webContentLink };
+}
+
+async function writeCellToSheet(spreadsheetId, sheetName, rowNum, colLetter, value) {
+    const authClient = getAuthClient();
+    if (!authClient || !isConnected()) return null;
+
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const rangeStr = `'${sheetName}'!${colLetter}${rowNum}`;
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: rangeStr,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+                values: [[value]]
+            }
+        });
+        return true;
+    } catch (e) {
+        console.error('[GoogleDriveService] Error writing cell to sheet:', e);
+        return false;
+    }
+}
+
+async function findFileInFolder(folderId, fileName) {
+    if (!folderId || !fileName) return null;
+    const authClient = getAuthClient();
+    if (!authClient || !isConnected()) return null;
+
+    try {
+        const drive = google.drive({ version: 'v3', auth: authClient });
+        const escapedName = fileName.replace(/'/g, "\\'");
+        const q = `'${folderId}' in parents and name = '${escapedName}' and trashed = false`;
+        const res = await drive.files.list({
+            q,
+            fields: 'files(id, name, webViewLink)',
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+            pageSize: 1
+        });
+        if (res.data.files && res.data.files.length > 0) {
+            return {
+                fileId: res.data.files[0].id,
+                webViewLink: res.data.files[0].webViewLink
+            };
+        }
+    } catch (e) {
+        console.error('[GoogleDriveService] Error finding file in folder:', e);
+    }
+    return null;
+}
+
+async function listFolderFilesMap(folderId) {
+    const fileMap = new Map(); // fileName -> webViewLink
+    if (!folderId) return fileMap;
+    const authClient = getAuthClient();
+    if (!authClient || !isConnected()) return fileMap;
+
+    try {
+        const drive = google.drive({ version: 'v3', auth: authClient });
+        let pageToken = null;
+        do {
+            const res = await drive.files.list({
+                q: `'${folderId}' in parents and trashed = false`,
+                fields: 'nextPageToken, files(id, name, webViewLink)',
+                supportsAllDrives: true,
+                includeItemsFromAllDrives: true,
+                pageSize: 1000,
+                pageToken: pageToken
+            });
+            if (res.data.files) {
+                for (const f of res.data.files) {
+                    if (f.name && f.webViewLink) {
+                        fileMap.set(f.name, f.webViewLink);
+                    }
+                }
+            }
+            pageToken = res.data.nextPageToken;
+        } while (pageToken);
+    } catch (e) {
+        console.error('[GoogleDriveService] Error listing files in folder:', e);
+    }
+    return fileMap;
 }
 
 module.exports = {
@@ -429,5 +601,9 @@ module.exports = {
     findExistingProfileFolder,
     syncGoogleSheetData,
     uploadExcelToDrive,
-    verifyDriveFolderExists
+    verifyDriveFolderExists,
+    uploadPdfToDrive,
+    writeCellToSheet,
+    findFileInFolder,
+    listFolderFilesMap
 };

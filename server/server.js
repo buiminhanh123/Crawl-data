@@ -33,11 +33,15 @@ const sheetsRoutes = require('./routes/google-sheets.routes');
 const aiRoutes = require('./routes/ai-assistant.routes');
 const localSheetsRoutes = require('./routes/local-sheets.routes');
 const googleDriveRoutes = require('./routes/google-drive.routes');
+const imgDownloaderRoutes = require('./routes/img-downloader.routes');
+const pdfDownloaderRoutes = require('./routes/pdf-downloader.routes');
 app.use('/api/products', requireAuth, productsRoutes);
 app.use('/api/sheets', requireAuth, sheetsRoutes);
 app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api/local-sheets', requireAuth, localSheetsRoutes);
 app.use('/api/google-drive', requireAuth, googleDriveRoutes);
+app.use('/api/img-downloader', requireAuth, imgDownloaderRoutes);
+app.use('/api/pdf-downloader', requireAuth, pdfDownloaderRoutes);
 // ──────────────────────────────────────────────────────────────
 
 // ============================================================

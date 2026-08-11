@@ -430,28 +430,40 @@ router.post('/parse-url', async (req, res) => {
             }
         }
 
-        // 2. Fallback: Public Google Sheet CSV fetch via gviz API with 8s timeout
-        try {
-            const csvUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv`;
-            const resp = await fetch(csvUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                signal: AbortSignal.timeout(8000)
-            });
-            if (resp.ok) {
-                const csvText = await resp.text();
-                if (csvText && !csvText.includes('<!DOCTYPE html>')) {
-                    const workbook = XLSX.read(csvText, { type: 'string' });
-                    const sheetName = workbook.SheetNames[0] || 'Sheet1';
-                    const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
-                    return res.json({
-                        sheets: [{ name: sheetName, data }],
-                        spreadsheetId,
-                        isPublicFallback: true
-                    });
+        // 2. Fallback: Try multiple public export endpoints (including gid parameter if present)
+        const gidMatch = trimmedUrl.match(/[#&?]gid=([0-9]+)/);
+        const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
+
+        const candidateUrls = [
+            `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv${gidParam}`,
+            `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv${gidParam}`,
+            `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv`
+        ];
+
+        for (const csvUrl of candidateUrls) {
+            try {
+                const resp = await fetch(csvUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+                    signal: AbortSignal.timeout(8000)
+                });
+                if (resp.ok) {
+                    const csvText = await resp.text();
+                    if (csvText && !csvText.includes('<!DOCTYPE html>') && csvText.trim().length > 0) {
+                        const workbook = XLSX.read(csvText, { type: 'string' });
+                        const sheetName = workbook.SheetNames[0] || 'Sheet1';
+                        const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+                        if (Array.isArray(data) && data.length > 0) {
+                            return res.json({
+                                sheets: [{ name: sheetName, data }],
+                                spreadsheetId,
+                                isPublicFallback: true
+                            });
+                        }
+                    }
                 }
+            } catch (pubErr) {
+                console.warn('[Sheets Parse URL] Candidate CSV fetch warning:', pubErr.message);
             }
-        } catch (pubErr) {
-            console.warn('[Sheets Parse URL] Public CSV fallback warning:', pubErr.message);
         }
 
         return res.status(400).json({

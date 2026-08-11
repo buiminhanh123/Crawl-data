@@ -1,0 +1,35 @@
+{
+  "test-img": {
+    "mode": "profile",
+    "outputDir": "E:\\sp\\Newland\\Image\\Test-img-download",
+    "concurrency": 30,
+    "linkPattern": "https://daco/san-pham/Newland/{main_category}/{model}.webp",
+    "selectedProfile": "newland",
+    "categoryFilter": "",
+    "seriesFilter": "",
+    "profMapping": {
+      "profBrand": "profile_slug",
+      "profMainCategory": "danh_muc_id",
+      "profSubCategory": "NONE",
+      "profSeries": "NONE",
+      "profModel": "ma_san_pham",
+      "profUrl": "Path",
+      "resultCol": "anh_dai_dien"
+    },
+    "sheetCfg": {
+      "sheetInput": "",
+      "sheetName": "",
+      "headerRow": 2,
+      "dataStartRow": 3,
+      "colBrand": "C",
+      "colMainCategory": "B",
+      "colSubCategory": "NONE",
+      "colSeries": "NONE",
+      "colModel": "F",
+      "colUrl": "I",
+      "colResult": "NONE",
+      "batchStart": 1,
+      "batchEnd": 0
+    }
+  }
+}

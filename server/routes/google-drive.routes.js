@@ -182,7 +182,7 @@ router.get('/check-profile-folders', async (req, res) => {
 router.post('/create-missing-folders', async (req, res) => {
     try {
         if (!googleDriveService.isConnected()) {
-            return res.status(400).json({ error: 'Chưa kết nối Google Drive! Vui lòng hoàn tất cấu hình để kết nối Drive.' });
+            return res.status(400).json({ error: 'Chưa kết nối Google Drive hoặc phiên đăng nhập đã hết hạn! Vui lòng làm theo Bước 3 để đăng nhập lại.' });
         }
 
         const profiles = profileQueries.getAll() || [];
@@ -203,7 +203,7 @@ router.post('/create-missing-folders', async (req, res) => {
             if (needsCreation) {
                 try {
                     const folders = await googleDriveService.createProfileFolders(p.name);
-                    if (folders.profileFolderId) {
+                    if (folders && folders.profileFolderId) {
                         profileQueries.updateDriveInfo(p.slug, folders.profileFolderId, folders.datasheetFolderId, null);
                         createdProfiles.push({
                             name: p.name,
@@ -215,9 +215,16 @@ router.post('/create-missing-folders', async (req, res) => {
                         errors.push(`Không tạo được folder cho Profile '${p.name}'`);
                     }
                 } catch (e) {
-                    errors.push(`Lỗi tạo folder cho Profile '${p.name}': ${e.message}`);
+                    errors.push(`Profile '${p.name}': ${e.message}`);
                 }
             }
+        }
+
+        if (createdProfiles.length === 0 && errors.length > 0) {
+            return res.status(400).json({
+                error: errors.join('\n'),
+                errors
+            });
         }
 
         res.json({
@@ -229,7 +236,7 @@ router.post('/create-missing-folders', async (req, res) => {
         });
     } catch (err) {
         console.error('[GoogleDriveRoute] Error creating missing folders:', err);
-        res.status(500).json({ error: err.message });
+        res.status(400).json({ error: err.message });
     }
 });
 

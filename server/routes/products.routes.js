@@ -5,7 +5,7 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
-const { productQueries, profileQueries, profileSheetQueries } = require('../db');
+const { productQueries, profileQueries, profileSheetQueries, openProductsDb } = require('../db');
 const googleDriveRoutes = require('./google-drive.routes');
 
 router.use('/google-drive', googleDriveRoutes);
@@ -472,6 +472,271 @@ function analyzeHar(harData, profileTargetUrl) {
 
 
 
+// GET /api/products/columns — get actual column names from products table
+router.get('/columns', async (req, res) => {
+    try {
+        const pdb = await openProductsDb();
+        const result = pdb.exec('PRAGMA table_info(products)');
+        pdb.close();
+        if (!result[0]) return res.json({ columns: [] });
+        // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        const cols = result[0].values.map(row => row[1]); // index 1 = name
+        // Filter out internal/meta columns not useful for mapping
+        const excluded = ['id', 'created_at', 'slug'];
+        const columns = cols.filter(c => !excluded.includes(c));
+        res.json({ columns });
+    } catch (err) {
+        console.error('Failed to get product columns:', err);
+        res.status(500).json({ error: 'Failed to get columns', columns: [] });
+    }
+});
+
+// GET /api/products/profile-checklist — audit 8-step workflow completeness for profile
+router.get('/profile-checklist', async (req, res) => {
+    try {
+        const { profile = 'newland' } = req.query;
+        
+        // 1. Crawled products in products.db
+        let crawledCount = 0;
+        try {
+            const pdb = await openProductsDb();
+            const dbRes = pdb.exec("SELECT COUNT(*) as c FROM products WHERE profile_slug = ?", [profile]);
+            pdb.close();
+            if (dbRes[0] && dbRes[0].values && dbRes[0].values[0]) {
+                crawledCount = dbRes[0].values[0][0] || 0;
+            }
+        } catch (e) {
+            console.error('Error fetching crawled count from products.db:', e);
+        }
+
+        // 2. Profile sheet rows
+        const sheets = profileSheetQueries.getBySlug(profile) || [];
+        let totalSheetRows = 0;
+        let sapoCount = 0;
+        let metaCount = 0;
+        let specCount = 0;
+        let imgCount = 0;
+        let pdfCount = 0;
+        let idCount = 0;
+        let mandatoryDoneCount = 0;
+
+        const missingDetails = {
+            mandatory: [],
+            sapo: [],
+            meta: [],
+            dich: [],
+            img: [],
+            pdf: [],
+            ids: []
+        };
+
+        sheets.forEach(s => {
+            if (!s.data || s.data.length <= 1) return;
+            const headers = (s.data[0] || []).map(h => String(h || '').trim().toLowerCase());
+            
+            // Find column indices (including mandatory red headers: ma_san_pham, ten_san_pham, danh_muc_id)
+            const codeAliases = ALIAS_MAP.ma_san_pham;
+            const nameAliases = ALIAS_MAP.ten_san_pham;
+            const catAliases = ALIAS_MAP.danh_muc_id;
+
+            let codeIdx = headers.findIndex((h, idx) => codeAliases.some(a => h === a || h.includes(a)));
+            if (codeIdx === -1) codeIdx = 0;
+
+            let nameIdx = headers.findIndex((h, idx) => nameAliases.some(a => h === a || h.includes(a)));
+            if (nameIdx === -1) nameIdx = 1;
+
+            let catIdx = headers.findIndex((h, idx) => catAliases.some(a => h === a || h.includes(a)));
+            if (catIdx === -1 && headers.length > 17) catIdx = 17;
+
+            const sapoIdx = headers.findIndex(h => h.includes('sapo') || h.includes('mô tả ngắn') || h === 'mo_ta');
+            const metaIdx = headers.findIndex(h => h.includes('meta') || h.includes('tiêu đề trang') || h === 'tieu_de_trang');
+            const specIdx = headers.findIndex(h => h.includes('thông số') || h.includes('table') || h === 'noi_dung');
+            const imgIdx = headers.findIndex(h => h.includes('ảnh') || h.includes('img') || h.includes('drive') || h === 'anh_dai_dien');
+            const pdfIdx = headers.findIndex(h => h.includes('tài liệu') || h.includes('pdf') || h.includes('doc') || h === 'tl_hdsd_link');
+            const catIdIdx = headers.findIndex(h => h.includes('danh_muc') || h.includes('danh mục') || h.includes('cat_id'));
+            const brandIdIdx = headers.findIndex(h => h.includes('thuong_hieu') || h.includes('thương hiệu') || h.includes('brand_id'));
+
+            for (let r = 1; r < s.data.length; r++) {
+                const row = s.data[r];
+                if (!row || row.every(c => c === null || c === undefined || String(c).trim() === '')) continue;
+                totalSheetRows++;
+                
+                const valCode = (codeIdx >= 0 && codeIdx < row.length) ? String(row[codeIdx] || '').trim() : '';
+                const valName = (nameIdx >= 0 && nameIdx < row.length) ? String(row[nameIdx] || '').trim() : '';
+                const valCat = (catIdx >= 0 && catIdx < row.length) ? String(row[catIdx] || '').trim() : '';
+
+                const prodName = valName || valCode || `Hàng ${r+1}`;
+
+                // CHECK 3 MANDATORY RED FIELDS
+                const missingRed = [];
+                if (!valCode) missingRed.push('Mã sản phẩm (ma_san_pham)');
+                if (!valName) missingRed.push('Tên sản phẩm (ten_san_pham)');
+                if (!valCat) missingRed.push('ID Danh mục (danh_muc_id)');
+
+                if (missingRed.length === 0) {
+                    mandatoryDoneCount++;
+                } else {
+                    if (missingDetails.mandatory.length < 100) {
+                        missingDetails.mandatory.push({
+                            sheet: s.name,
+                            row: r + 1,
+                            name: prodName,
+                            missingFields: missingRed
+                        });
+                    }
+                }
+
+                // SAPO
+                if (sapoIdx >= 0 && row[sapoIdx] && String(row[sapoIdx]).trim().length > 10) {
+                    sapoCount++;
+                } else {
+                    if (missingDetails.sapo.length < 50) missingDetails.sapo.push({ sheet: s.name, row: r+1, name: prodName });
+                }
+
+                // META
+                if (metaIdx >= 0 && row[metaIdx] && String(row[metaIdx]).trim().length > 5) {
+                    metaCount++;
+                } else {
+                    if (missingDetails.meta.length < 50) missingDetails.meta.push({ sheet: s.name, row: r+1, name: prodName });
+                }
+
+                // SPEC / TABLE DỊCH
+                if (specIdx >= 0 && row[specIdx] && String(row[specIdx]).trim().length > 10) {
+                    specCount++;
+                } else {
+                    if (missingDetails.dich.length < 50) missingDetails.dich.push({ sheet: s.name, row: r+1, name: prodName });
+                }
+
+                // IMG LINK
+                if (imgIdx >= 0 && row[imgIdx] && String(row[imgIdx]).trim().length > 3) {
+                    imgCount++;
+                } else {
+                    if (missingDetails.img.length < 50) missingDetails.img.push({ sheet: s.name, row: r+1, name: prodName });
+                }
+
+                // PDF LINK
+                if (pdfIdx >= 0 && row[pdfIdx] && String(row[pdfIdx]).trim().length > 3) {
+                    pdfCount++;
+                } else {
+                    if (missingDetails.pdf.length < 50) missingDetails.pdf.push({ sheet: s.name, row: r+1, name: prodName });
+                }
+
+                // CAT & BRAND ID
+                const hasCat = catIdIdx >= 0 && row[catIdIdx] && String(row[catIdIdx]).trim() !== '';
+                const hasBrand = brandIdIdx >= 0 && row[brandIdIdx] && String(row[brandIdIdx]).trim() !== '';
+                if (hasCat && hasBrand) {
+                    idCount++;
+                } else {
+                    if (missingDetails.ids.length < 50) missingDetails.ids.push({ sheet: s.name, row: r+1, name: prodName });
+                }
+            }
+        });
+
+        const totalTarget = totalSheetRows || crawledCount || 1;
+
+        const steps = [
+            {
+                id: 'mandatory',
+                name: 'Trường Bắt Buộc (Mã SP, Tên SP, ID Danh Mục)',
+                desc: '3 trường màu đỏ quy định trong file mẫu Thêm sản phẩm. Cưỡng chế 100% đầy đủ mới được phép xuất Excel.',
+                done: mandatoryDoneCount,
+                total: totalTarget,
+                percent: Math.round((mandatoryDoneCount / totalTarget) * 100),
+                missing: missingDetails.mandatory,
+                isMandatory: true
+            },
+            {
+                id: 'crawl',
+                name: 'Crawl dữ liệu thô',
+                desc: 'Crawl sản phẩm từ website nguồn vào Database',
+                done: crawledCount,
+                total: crawledCount || 1,
+                percent: crawledCount > 0 ? 100 : 0
+            },
+            {
+                id: 'sheet',
+                name: 'Chuyển vào Profile Sheet',
+                desc: 'Đưa sản phẩm vào các Tab trong Sheet của Profile',
+                done: totalSheetRows,
+                total: crawledCount || totalSheetRows || 1,
+                percent: Math.round((totalSheetRows / (crawledCount || totalSheetRows || 1)) * 100)
+            },
+            {
+                id: 'sapo',
+                name: 'Viết SAPO giới thiệu',
+                desc: 'Dùng AI Assistant tạo đoạn SAPO giới thiệu sản phẩm',
+                done: sapoCount,
+                total: totalTarget,
+                percent: Math.round((sapoCount / totalTarget) * 100),
+                missing: missingDetails.sapo
+            },
+            {
+                id: 'meta',
+                name: 'Tạo Meta Title & Description SEO',
+                desc: 'Dùng AI Assistant chuẩn hóa thẻ Meta SEO',
+                done: metaCount,
+                total: totalTarget,
+                percent: Math.round((metaCount / totalTarget) * 100),
+                missing: missingDetails.meta
+            },
+            {
+                id: 'dich',
+                name: 'Dịch thông số kỹ thuật chuẩn 1-1',
+                desc: 'Dịch bảng HTML thông số kỹ thuật sang Tiếng Việt chuẩn',
+                done: specCount,
+                total: totalTarget,
+                percent: Math.round((specCount / totalTarget) * 100),
+                missing: missingDetails.dich
+            },
+            {
+                id: 'img',
+                name: 'Tải ảnh & điền Link ảnh',
+                desc: 'Tải ảnh về máy/Google Drive & điền Link ảnh vào Sheet',
+                done: imgCount,
+                total: totalTarget,
+                percent: Math.round((imgCount / totalTarget) * 100),
+                missing: missingDetails.img
+            },
+            {
+                id: 'pdf',
+                name: 'Tải tài liệu PDF & điền Link',
+                desc: 'Tải file Datasheet/HDSD PDF & điền Link vào Sheet',
+                done: pdfCount,
+                total: totalTarget,
+                percent: Math.round((pdfCount / totalTarget) * 100),
+                missing: missingDetails.pdf
+            },
+            {
+                id: 'ids',
+                name: 'Điền ID Danh Mục & ID Thương Hiệu',
+                desc: 'Điền ID danh mục và ID thương hiệu khớp hệ thống web',
+                done: idCount,
+                total: totalTarget,
+                percent: Math.round((idCount / totalTarget) * 100),
+                missing: missingDetails.ids
+            }
+        ];
+
+        const overallPercent = Math.round(steps.reduce((acc, s) => acc + Math.min(100, s.percent), 0) / steps.length);
+
+        res.json({
+            profile,
+            crawledCount,
+            totalSheetRows,
+            overallPercent,
+            mandatoryMissingCount: missingDetails.mandatory.length,
+            isExportAllowed: missingDetails.mandatory.length === 0,
+            mandatoryMissingRows: missingDetails.mandatory,
+            completedStepsCount: steps.filter(s => s.percent >= 100).length,
+            totalStepsCount: steps.length,
+            steps
+        });
+    } catch (err) {
+        console.error('Failed to calculate profile checklist:', err);
+        res.status(500).json({ error: 'Failed to calculate profile checklist.' });
+    }
+});
+
 // GET /api/products/profile-sheet — get profile sheet data
 router.get('/profile-sheet', (req, res) => {
     try {
@@ -590,6 +855,61 @@ router.post('/export-excel', async (req, res) => {
 
         if (sheetsToExport.length === 0) {
             return res.status(400).json({ error: 'Vui lòng chọn ít nhất 1 Tab Sheet để xuất.' });
+        }
+
+        // STRICT MANDATORY FIELD ENFORCEMENT
+        // 3 red fields in template: ma_san_pham, ten_san_pham, danh_muc_id
+        const mandatoryErrors = [];
+        const codeAliases = ALIAS_MAP.ma_san_pham;
+        const nameAliases = ALIAS_MAP.ten_san_pham;
+        const catAliases = ALIAS_MAP.danh_muc_id;
+
+        sheetsToExport.forEach(sheetObj => {
+            const rawRows = sheetObj.data || [];
+            if (rawRows.length <= 1) return;
+
+            const headerRow = (rawRows[0] || []).map(h => String(h || '').trim().toLowerCase());
+
+            let codeIdx = headerRow.findIndex((h, idx) => codeAliases.some(a => h === a || h.includes(a)));
+            if (codeIdx === -1) codeIdx = 0;
+
+            let nameIdx = headerRow.findIndex((h, idx) => nameAliases.some(a => h === a || h.includes(a)));
+            if (nameIdx === -1) nameIdx = 1;
+
+            let catIdx = headerRow.findIndex((h, idx) => catAliases.some(a => h === a || h.includes(a)));
+            if (catIdx === -1 && headerRow.length > 17) catIdx = 17;
+
+            for (let r = 1; r < rawRows.length; r++) {
+                const rData = rawRows[r] || [];
+                if (rData.every(c => c === undefined || c === null || String(c).trim() === '')) continue;
+
+                const valCode = (codeIdx >= 0 && codeIdx < rData.length) ? String(rData[codeIdx] || '').trim() : '';
+                const valName = (nameIdx >= 0 && nameIdx < rData.length) ? String(rData[nameIdx] || '').trim() : '';
+                const valCat = (catIdx >= 0 && catIdx < rData.length) ? String(rData[catIdx] || '').trim() : '';
+
+                const missing = [];
+                if (!valCode) missing.push('Mã sản phẩm (cột A)');
+                if (!valName) missing.push('Tên sản phẩm (cột B)');
+                if (!valCat) missing.push('ID Danh mục (cột R)');
+
+                if (missing.length > 0) {
+                    mandatoryErrors.push({
+                        sheet: sheetObj.name,
+                        row: r + 1,
+                        productName: valName || valCode || `Hàng ${r + 1}`,
+                        missingFields: missing
+                    });
+                }
+            }
+        });
+
+        if (mandatoryErrors.length > 0) {
+            return res.status(400).json({
+                error: `CƯỠNG CHẾ KHÔNG CHO XUẤT FILE: Có ${mandatoryErrors.length} hàng thiếu dữ liệu ở 3 trường màu đỏ bắt buộc (Mã SP, Tên SP, ID Danh Mục). Vui lòng bổ sung đầy đủ trước khi xuất file.`,
+                code: 'MANDATORY_FIELDS_MISSING',
+                invalidCount: mandatoryErrors.length,
+                missingRows: mandatoryErrors
+            });
         }
 
         const wb = XLSX.utils.book_new();
@@ -1885,6 +2205,97 @@ router.get('/proxy-sitemap', async (req, res) => {
         return res.json({ success: true, xmlText });
     } catch (e) {
         return res.json({ success: false, error: e.message, xmlText: '' });
+    }
+});
+
+// POST /api/products/verify-links
+// Body: { urls: ["https://...", "https://drive.google.com/file/d/123/view"] }
+router.post('/verify-links', async (req, res) => {
+    try {
+        const { urls } = req.body;
+        if (!Array.isArray(urls) || urls.length === 0) {
+            return res.json({ success: true, results: {} });
+        }
+
+        const targetUrls = Array.from(new Set(urls)).slice(0, 100);
+        const results = {};
+
+        // Temporarily bypass strict TLS for internal/company web servers
+        const originalTlsEnv = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+        const checkSingleUrl = async (url) => {
+            const trimmed = String(url || '').trim();
+            if (!trimmed || (!trimmed.startsWith('http://') && !trimmed.startsWith('https://'))) {
+                return { status: 'invalid_format', statusCode: 0, message: 'Đường dẫn không chứa http:// hoặc https://' };
+            }
+
+            try {
+                const isDriveLink = trimmed.includes('drive.google.com') || trimmed.includes('docs.google.com');
+
+                const response = await fetch(trimmed, {
+                    method: 'HEAD',
+                    headers: { 
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': '*/*'
+                    },
+                    redirect: 'follow',
+                    signal: AbortSignal.timeout(10000)
+                });
+
+                if (response.ok || response.status === 200 || response.status === 302 || response.status === 301) {
+                    if (isDriveLink) {
+                        const finalUrl = response.url || '';
+                        if (finalUrl.includes('accounts.google.com') || finalUrl.includes('signin')) {
+                            return { status: 'private_drive', statusCode: 403, message: 'Google Drive riêng tư (Chưa mở Public)' };
+                        }
+                    }
+                    return { status: 'ok', statusCode: response.status, message: 'Link đang hoạt động (HTTP 200 OK)' };
+                } else if (response.status === 404) {
+                    return { status: 'broken', statusCode: 404, message: 'Link lỗi 404 (Không tồn tại trên Server)' };
+                } else if (response.status === 403 || response.status === 401) {
+                    return { status: 'private_drive', statusCode: response.status, message: 'Server từ chối truy cập (HTTP ' + response.status + ')' };
+                } else {
+                    return { status: 'broken', statusCode: response.status, message: 'HTTP Status ' + response.status };
+                }
+            } catch (err) {
+                try {
+                    const getRes = await fetch(trimmed, {
+                        method: 'GET',
+                        headers: { 
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': '*/*'
+                        },
+                        redirect: 'follow',
+                        signal: AbortSignal.timeout(10000)
+                    });
+                    const isDriveLink = trimmed.includes('drive.google.com') || trimmed.includes('docs.google.com');
+                    if (getRes.ok || getRes.status === 200 || getRes.status === 302 || getRes.status === 301) {
+                        const finalUrl = getRes.url || '';
+                        if (isDriveLink && (finalUrl.includes('accounts.google.com') || finalUrl.includes('signin'))) {
+                            return { status: 'private_drive', statusCode: 403, message: 'Google Drive chưa mở quyền Public' };
+                        }
+                        return { status: 'ok', statusCode: getRes.status, message: 'Link hoạt động tốt (HTTP 200)' };
+                    } else {
+                        return { status: 'broken', statusCode: getRes.status, message: 'Server web trả về HTTP ' + getRes.status };
+                    }
+                } catch (getErr) {
+                    return { status: 'broken', statusCode: 0, message: 'Không kết nối được server (' + (getErr.message || 'Timeout/Network error') + ')' };
+                }
+            }
+        };
+
+        await Promise.all(targetUrls.map(async (u) => {
+            results[u] = await checkSingleUrl(u);
+        }));
+
+        if (originalTlsEnv !== undefined) {
+            process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsEnv;
+        }
+
+        return res.json({ success: true, results });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
     }
 });
 

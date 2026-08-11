@@ -152,6 +152,119 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
         return false;
     };
 
+    const TEMPLATE_HEADERS = [
+        "ma_san_pham", "ten_san_pham", "ten_san_pham_en", "url", "url_en",
+        "tieu_de_trang", "tieu_de_trang_en", "mo_ta", "mo_ta_en", "gia",
+        "khuyen_mai", "anh_dai_dien", "anh_1", "anh_2", "anh_3", "anh_4",
+        "nhan", "danh_muc_id", "thuong_hieu_id", "noi_dung", "noi_dung_en",
+        "tl_hdsd_tieu_de", "tl_hdsd_link", "tl_cad_tieu_de", "tl_cad_link",
+        "tl_chungchi_tieu_de", "tl_chungchi_link", "tl_phanmem_tieu_de", "tl_phanmem_link",
+        "tl_tailieu_tieu_de", "tl_tailieu_link"
+    ];
+
+    const ALIAS_MAP = {
+        ma_san_pham: ['ma_san_pham', 'mã sp', 'mã sản phẩm', 'sku', 'model', 'cột a', 'model / mã sp', 'mã sản phẩm / model'],
+        ten_san_pham: ['ten_san_pham', 'tên sản phẩm', 'tên sp', 'ten sp', 'tiêu đề', 'title', 'name', 'cột b'],
+        ten_san_pham_en: ['ten_san_pham_en', 'tên tiếng anh', 'tên sp (en)', 'title (en)'],
+        url: ['url', 'link', 'nguồn', 'cột d', 'url nguồn', 'link sản phẩm', 'link_sp', 'link_san_pham'],
+        url_en: ['url_en', 'link (en)'],
+        tieu_de_trang: ['tieu_de_trang', 'tiêu đề trang'],
+        tieu_de_trang_en: ['tieu_de_trang_en', 'tiêu đề trang (en)'],
+        mo_ta: ['mo_ta', 'mô tả', 'description', 'mô tả ngắn'],
+        mo_ta_en: ['mo_ta_en', 'mô tả (en)'],
+        gia: ['gia', 'giá', 'price'],
+        khuyen_mai: ['khuyen_mai', 'khuyến mãi', 'discount'],
+        anh_dai_dien: ['anh_dai_dien', 'ảnh đại diện', 'image', 'anh dai dien', 'image_url', 'anh_1', 'link hình ảnh', 'link ảnh', 'url img', 'image_drive_link'],
+        anh_1: ['anh_1', 'ảnh 1'],
+        anh_2: ['anh_2', 'ảnh 2'],
+        anh_3: ['anh_3', 'ảnh 3'],
+        anh_4: ['anh_4', 'ảnh 4'],
+        nhan: ['nhan', 'nhãn', 'tags', 'tag'],
+        danh_muc_id: ['danh_muc_id', 'danh mục', 'category', 'danh mục con', 'danh mục lớn', 'main category', 'sub category'],
+        thuong_hieu_id: ['thuong_hieu_id', 'thương hiệu', 'hãng', 'brand', 'vendor'],
+        noi_dung: ['noi_dung', 'nội dung', 'nội dung sp', 'thông số kỹ thuật', 'specs', 'specifications', 'specs_html', 'features'],
+        noi_dung_en: ['noi_dung_en', 'nội dung (en)'],
+        tl_hdsd_tieu_de: ['tl_hdsd_tieu_de', 'tiêu đề hdsd', 'tiêu đề tài liệu'],
+        tl_hdsd_link: ['tl_hdsd_link', 'link hdsd', 'tl_hdsd', 'link tài liệu pdf', 'datasheet', 'link tài liệu', 'drive_link', 'tech1', 'tech 1'],
+        tl_cad_tieu_de: ['tl_cad_tieu_de'],
+        tl_cad_link: ['tl_cad_link'],
+        tl_chungchi_tieu_de: ['tl_chungchi_tieu_de'],
+        tl_chungchi_link: ['tl_chungchi_link'],
+        tl_phanmem_tieu_de: ['tl_phanmem_tieu_de'],
+        tl_phanmem_link: ['tl_phanmem_link'],
+        tl_tailieu_tieu_de: ['tl_tailieu_tieu_de'],
+        tl_tailieu_link: ['tl_tailieu_link']
+    };
+
+    const normalizeSheetData = (sheetData) => {
+        if (!Array.isArray(sheetData) || sheetData.length === 0) return sheetData;
+
+        const rawHeader = sheetData[0] || [];
+        const dataRows = sheetData.slice(1);
+
+        const cleanStr = s => String(s || '').trim().toLowerCase();
+
+        const colMapping = [];
+        const extraHeaders = [];
+        const usedStd = new Set();
+
+        rawHeader.forEach((hCell, colIdx) => {
+            const hText = cleanStr(hCell);
+            if (!hText) return;
+
+            let matchedKey = null;
+            for (const [stdKey, aliases] of Object.entries(ALIAS_MAP)) {
+                if (aliases.some(a => cleanStr(a) === hText || hText.includes(cleanStr(a)))) {
+                    matchedKey = stdKey;
+                    break;
+                }
+            }
+
+            if (matchedKey) {
+                const stdIdx = TEMPLATE_HEADERS.indexOf(matchedKey);
+                if (stdIdx !== -1 && !usedStd.has(stdIdx)) {
+                    usedStd.add(stdIdx);
+                    colMapping[colIdx] = { type: 'standard', idx: stdIdx };
+                    return;
+                }
+            }
+
+            const originalName = String(hCell).trim();
+            let extraIdx = extraHeaders.indexOf(originalName);
+            if (extraIdx === -1) {
+                if (!TEMPLATE_HEADERS.includes(originalName)) {
+                    extraHeaders.push(originalName);
+                    extraIdx = extraHeaders.length - 1;
+                } else {
+                    extraIdx = extraHeaders.push(`${originalName}_custom`) - 1;
+                }
+            }
+            colMapping[colIdx] = { type: 'extra', idx: extraIdx };
+        });
+
+        const finalHeaders = [...TEMPLATE_HEADERS, ...extraHeaders];
+
+        const normalizedRows = dataRows.map(row => {
+            if (!Array.isArray(row)) return Array(finalHeaders.length).fill('');
+            const newRow = Array(finalHeaders.length).fill('');
+
+            row.forEach((val, cI) => {
+                const m = colMapping[cI];
+                if (!m) return;
+                const v = val !== null && val !== undefined ? String(val) : '';
+                if (m.type === 'standard') {
+                    newRow[m.idx] = v;
+                } else if (m.type === 'extra') {
+                    newRow[TEMPLATE_HEADERS.length + m.idx] = v;
+                }
+            });
+
+            return newRow;
+        });
+
+        return [finalHeaders, ...normalizedRows];
+    };
+
     const processSheetRows = (sheetsList, hRow, dStartRow) => {
         const reqHIdx = Math.max(0, (parseInt(hRow) || 1) - 1);
         const reqDStartIdx = Math.max(0, (parseInt(dStartRow) || 2) - 1);
@@ -176,7 +289,7 @@ export default function ImportSheetModal({ isOpen, onClose, profileName = 'Profi
 
             return {
                 ...s,
-                data: [headerLine, ...dataLines]
+                data: normalizeSheetData([headerLine, ...dataLines])
             };
         });
     };

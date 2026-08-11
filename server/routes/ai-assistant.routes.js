@@ -2,8 +2,16 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 
+const {
+    aiPromptProfileQueries,
+    aiGlossaryQueries,
+    aiTranslationMemoryQueries,
+    aiWhitelistQueries
+} = require('../db');
+
 const AI_API_URL = 'https://aidesign.io.vn/api/chatbot/chat';
 const AI_API_KEY = 'chatgpt2api';
+
 
 // Helper function to sleep/delay
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
@@ -93,8 +101,30 @@ router.post('/chat', async (req, res) => {
         });
     }
 
+    let enhancedMessage = finalMessage;
+    if (req.body.seriesKey || req.body.useGlossary) {
+        try {
+            const glossaryTerms = aiGlossaryQueries.getAll(req.body.seriesKey || null).filter(g => g.is_active);
+            let termRules = [];
+            glossaryTerms.forEach(g => {
+                termRules.push(`"${g.source_term}" -> "${g.target_term}"`);
+            });
+            if (req.body.seriesKey) {
+                const memTerms = aiTranslationMemoryQueries.getBySeries(req.body.seriesKey);
+                memTerms.forEach(m => {
+                    termRules.push(`"${m.source_text}" -> "${m.translated_text}"`);
+                });
+            }
+            if (termRules.length > 0) {
+                enhancedMessage += `\n\n[QUY TẮC DỊCH BẮT BUỘC (GLOSSARY & SERIES MEMORY)]:\nBẮT BUỘC dịch chính xác các thuật ngữ sau sang Tiếng Việt (không được dùng từ đồng nghĩa khác):\n` + termRules.slice(0, 50).map(r => `- ${r}`).join('\n');
+            }
+        } catch (e) {
+            console.error('Error attaching glossary rules to chat prompt:', e);
+        }
+    }
+
     const payload = {
-        message: finalMessage,
+        message: enhancedMessage,
         stream: false,
         history: Array.isArray(history) ? history : [],
     };
@@ -287,7 +317,7 @@ router.post('/test-connection', async (req, res) => {
     }
 });
 
-const { aiPromptProfileQueries } = require('../db');
+
 
 // ──────────────────────────────────────────────────────────────
 // GET /api/ai/prompt-profiles
@@ -357,6 +387,248 @@ router.delete('/prompt-profiles/:id', (req, res) => {
     } catch (err) {
         console.error('Failed to delete prompt profile:', err);
         res.status(500).json({ success: false, error: 'Failed to delete prompt profile.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// GLOSSARY APIs (Thư viện Thuật ngữ Tùy chỉnh)
+// ──────────────────────────────────────────────────────────────
+router.get('/glossary', (req, res) => {
+    try {
+        const { scope } = req.query;
+        const items = aiGlossaryQueries.getAll(scope || null);
+        res.json({ success: true, data: items });
+    } catch (err) {
+        console.error('Failed to fetch glossary:', err);
+        res.status(500).json({ success: false, error: 'Failed to fetch glossary items.' });
+    }
+});
+
+router.post('/glossary', (req, res) => {
+    try {
+        const { scope = 'global', source_term, target_term, notes, items } = req.body;
+        if (Array.isArray(items)) {
+            const synced = aiGlossaryQueries.bulkSave(items);
+            return res.json({ success: true, data: synced });
+        }
+        if (!source_term || !target_term) {
+            return res.status(400).json({ success: false, error: 'Từ tiếng Anh và từ dịch tiếng Việt không được để trống.' });
+        }
+        const item = aiGlossaryQueries.create(scope, source_term, target_term, notes);
+        res.json({ success: true, data: item });
+    } catch (err) {
+        console.error('Failed to create glossary term:', err);
+        res.status(500).json({ success: false, error: 'Failed to create glossary item.' });
+    }
+});
+
+router.put('/glossary/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const { scope = 'global', source_term, target_term, notes, is_active } = req.body;
+        if (!source_term || !target_term) {
+            return res.status(400).json({ success: false, error: 'Từ tiếng Anh và từ dịch tiếng Việt không được để trống.' });
+        }
+        const updated = aiGlossaryQueries.update(Number(id), scope, source_term, target_term, notes, is_active);
+        res.json({ success: true, data: updated });
+    } catch (err) {
+        console.error('Failed to update glossary term:', err);
+        res.status(500).json({ success: false, error: 'Failed to update glossary item.' });
+    }
+});
+
+router.delete('/glossary/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        aiGlossaryQueries.delete(Number(id));
+        res.json({ success: true, message: 'Deleted glossary term successfully.' });
+    } catch (err) {
+        console.error('Failed to delete glossary term:', err);
+        res.status(500).json({ success: false, error: 'Failed to delete glossary item.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// TRANSLATION MEMORY APIs (Cache Dịch theo Series / Danh mục)
+// ──────────────────────────────────────────────────────────────
+router.get('/translation-memory', (req, res) => {
+    try {
+        const { seriesKey } = req.query;
+        let items;
+        if (seriesKey) {
+            items = aiTranslationMemoryQueries.getBySeries(seriesKey);
+        } else {
+            items = aiTranslationMemoryQueries.getAll();
+        }
+        res.json({ success: true, data: items });
+    } catch (err) {
+        console.error('Failed to fetch translation memory:', err);
+        res.status(500).json({ success: false, error: 'Failed to fetch translation memory.' });
+    }
+});
+
+router.post('/translation-memory', (req, res) => {
+    try {
+        const { seriesKey, source_text, translated_text, pairs } = req.body;
+        if (!seriesKey) {
+            return res.status(400).json({ success: false, error: 'seriesKey không được để trống.' });
+        }
+        if (Array.isArray(pairs)) {
+            const count = aiTranslationMemoryQueries.bulkUpsert(seriesKey, pairs);
+            return res.json({ success: true, count });
+        }
+        if (!source_text || !translated_text) {
+            return res.status(400).json({ success: false, error: 'source_text và translated_text không được để trống.' });
+        }
+        aiTranslationMemoryQueries.upsert(seriesKey, source_text, translated_text);
+        res.json({ success: true, message: 'Saved translation memory successfully.' });
+    } catch (err) {
+        console.error('Failed to save translation memory:', err);
+        res.status(500).json({ success: false, error: 'Failed to save translation memory.' });
+    }
+});
+
+router.delete('/translation-memory/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        aiTranslationMemoryQueries.delete(Number(id));
+        res.json({ success: true, message: 'Deleted memory entry successfully.' });
+    } catch (err) {
+        console.error('Failed to delete memory entry:', err);
+        res.status(500).json({ success: false, error: 'Failed to delete memory entry.' });
+    }
+});
+
+router.delete('/translation-memory/series/:seriesKey', (req, res) => {
+    try {
+        const { seriesKey } = req.params;
+        aiTranslationMemoryQueries.deleteBySeries(seriesKey);
+        res.json({ success: true, message: `Cleared memory for series ${seriesKey}.` });
+    } catch (err) {
+        console.error('Failed to clear series memory:', err);
+        res.status(500).json({ success: false, error: 'Failed to clear series memory.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// WHITELIST APIs (Đơn vị đo lường & Từ viết tắt)
+// ──────────────────────────────────────────────────────────────
+router.get('/whitelist', (req, res) => {
+    try {
+        const items = aiWhitelistQueries.getAll();
+        res.json({ success: true, data: items });
+    } catch (err) {
+        console.error('Failed to fetch whitelist:', err);
+        res.status(500).json({ success: false, error: 'Failed to fetch whitelist.' });
+    }
+});
+
+router.post('/whitelist', (req, res) => {
+    try {
+        const { term, category = 'unit' } = req.body;
+        if (!term) {
+            return res.status(400).json({ success: false, error: 'Ký tự/từ Whitelist không được để trống.' });
+        }
+        aiWhitelistQueries.add(term, category);
+        res.json({ success: true, message: 'Added whitelist entry successfully.' });
+    } catch (err) {
+        console.error('Failed to add whitelist entry:', err);
+        res.status(500).json({ success: false, error: 'Failed to add whitelist entry.' });
+    }
+});
+
+router.delete('/whitelist/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        aiWhitelistQueries.delete(Number(id));
+        res.json({ success: true, message: 'Deleted whitelist entry successfully.' });
+    } catch (err) {
+        console.error('Failed to delete whitelist entry:', err);
+        res.status(500).json({ success: false, error: 'Failed to delete whitelist entry.' });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// AUDIT TRANSLATION API (Kiểm tra xem 100% đã dịch sang tiếng Việt chưa)
+// ──────────────────────────────────────────────────────────────
+router.post('/audit-translation', (req, res) => {
+    try {
+        const { text, seriesKey } = req.body;
+        if (!text || typeof text !== 'string') {
+            return res.json({ is100PercentVietnamese: true, untranslatedWords: [], count: 0 });
+        }
+
+        // Fetch whitelist terms
+        const whitelistItems = aiWhitelistQueries.getAll();
+        const whitelistSet = new Set(whitelistItems.map(i => i.term.toLowerCase()));
+
+        // Fetch Glossary terms
+        const glossaryItems = aiGlossaryQueries.getAll(seriesKey || null);
+        const glossarySet = new Set();
+        glossaryItems.forEach(g => {
+            if (g.is_active) {
+                glossarySet.add(g.source_term.toLowerCase());
+                glossarySet.add(g.target_term.toLowerCase());
+            }
+        });
+
+        // Fetch Series Memory terms
+        if (seriesKey) {
+            const memoryItems = aiTranslationMemoryQueries.getBySeries(seriesKey);
+            memoryItems.forEach(m => {
+                glossarySet.add(m.source_text.toLowerCase());
+                glossarySet.add(m.translated_text.toLowerCase());
+            });
+        }
+
+        // Clean HTML tags from text
+        let cleanText = text.replace(/<[^>]*>/g, ' ');
+
+        // Tokenize words
+        const words = cleanText.match(/[a-zA-Z0-9_°³/.-]+/g) || [];
+        const untranslatedSet = new Set();
+
+        for (let rawWord of words) {
+            let word = rawWord.trim().replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, '');
+            if (word.length < 2) continue; // Ignore single letters like 'a', 'x', 'y'
+            if (/^\d+$/.test(word)) continue; // Ignore numbers
+
+            const lower = word.toLowerCase();
+
+            // Ignore if in Whitelist or Glossary/Memory
+            if (whitelistSet.has(lower) || whitelistSet.has(word) || glossarySet.has(lower)) {
+                continue;
+            }
+
+            // Common English words detection (that are not Vietnamese words)
+            // Note: Vietnamese words with accents aren't matched by [a-zA-Z]. Non-accented Vietnamese words like 'va', 'la', 'cho', 'voi', 'duoc', 'trong', 'co', 'nay', 'san', 'pham', 'thong', 'so', 'ky', 'thuat', 'dien', 'ap'...
+            // We build a list of common non-accented Vietnamese words to avoid false flagging
+            const nonAccentedViWords = new Set([
+                'va', 'la', 'cho', 'voi', 'duoc', 'trong', 'co', 'nay', 'san', 'pham', 'thong', 'so', 'ky', 'thuat',
+                'dien', 'ap', 'cong', 'suat', 'luu', 'luong', 'kich', 'thuoc', 'trong', 'luong', 'nhiet', 'do', 'hang',
+                'nhap', 'khau', 'chinh', 'hang', 'bao', 'hanh', 'mo', 'ta', 'chi', 'tiet', 'cac', 'nhat', 'dung',
+                'cao', 'thap', 'nho', 'lon', 'dep', 'tot', 'moi', 'cu', 'the', 'khi', 'de', 'tu', 'den', 'vua',
+                'theo', 'dang', 'kieu', 'loai', 'dong', 'bo', 'vat', 'lieu', 'than', 'truc', 'canh', 'dau', 'ra', 'vao',
+                'mau', 'trang', 'den', 'do', 'xanh', 'vang', 'cam', 'tim', 'xam', 'bac', 'dong', 'thep', 'nhom', 'nhua'
+            ]);
+
+            if (nonAccentedViWords.has(lower)) {
+                continue;
+            }
+
+            // High probability of English word
+            untranslatedSet.add(word);
+        }
+
+        const untranslatedWords = Array.from(untranslatedSet);
+        res.json({
+            is100PercentVietnamese: untranslatedWords.length === 0,
+            untranslatedWords,
+            count: untranslatedWords.length
+        });
+    } catch (err) {
+        console.error('Failed to audit translation:', err);
+        res.status(500).json({ success: false, error: 'Failed to audit translation.' });
     }
 });
 

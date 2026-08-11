@@ -1,4 +1,5 @@
 import { fetchApi } from './api';
+import { extractPairsFromTables, saveSeriesMemory } from './translationControl';
 
 function colToIdx(col) {
     if (!col) return 0;
@@ -340,9 +341,15 @@ class GlobalAiRunner {
                         const builtPrompt = substituteRowVariables(taskPrompt, currentRow);
 
                         try {
+                            const seriesKey = selectedProfileSlug || currentSheetName || 'default';
                             const res = await fetchApi('/api/ai/chat', {
                                 method: 'POST',
-                                body: JSON.stringify({ message: builtPrompt, history: [] })
+                                body: JSON.stringify({
+                                    message: builtPrompt,
+                                    history: [],
+                                    seriesKey,
+                                    useGlossary: true
+                                })
                             });
 
                             let rawContent = res.content || '';
@@ -355,6 +362,14 @@ class GlobalAiRunner {
                             if (/^\s*\|.*\|/m.test(cleaned)) {
                                 cleaned = convertMarkdownTableToHtml(cleaned);
                             }
+
+                            // Auto-extract terms to Series Memory Cache
+                            try {
+                                const pairs = extractPairsFromTables(builtPrompt, cleaned);
+                                if (pairs.length > 0) {
+                                    saveSeriesMemory(seriesKey, pairs).catch(() => {});
+                                }
+                            } catch (e) {}
 
                             while (sheetDataRef.data.length <= rowIdx) {
                                 sheetDataRef.data.push([]);
