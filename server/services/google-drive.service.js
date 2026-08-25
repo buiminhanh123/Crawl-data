@@ -201,6 +201,10 @@ function handleDriveApiError(err) {
         throw new Error('Phiên đăng nhập Google Drive đã hết hạn hoặc bị hủy (invalid_grant). Vui lòng bấm "🔗 Mở Trang Đăng Nhập Xác Thực" ở Bước 3 để đăng nhập lại.');
     }
 
+    if (msg.includes('quota') || msg.includes('storage quota') || dataErr.includes('quota')) {
+        throw new Error('Dung lượng Google Drive đã hết hạn mức (403 Quota Exceeded). Vui lòng kiểm tra dung lượng tài khoản Google Drive cá nhân của bạn hoặc đảm bảo Thư Mục Mẹ (Parent Folder) đã được Chia Sẻ quyền "Người chỉnh sửa" (Editor) cho email Service Account.');
+    }
+
     if (msg.includes('file not found') || msg.includes('404') || dataErr.includes('file not found')) {
         const cfg = getConfig();
         const parentId = cfg.parentFolderId || '';
@@ -305,7 +309,8 @@ async function createProfileFolders(profileName) {
 
         const profileFolder = await drive.files.create({
             resource: fileMetadata,
-            fields: 'id, name, webViewLink'
+            fields: 'id, name, webViewLink',
+            supportsAllDrives: true
         });
         const profileFolderId = profileFolder.data.id;
 
@@ -317,7 +322,8 @@ async function createProfileFolders(profileName) {
                         role: 'writer',
                         type: 'user',
                         emailAddress: config.shareEmail.trim()
-                    }
+                    },
+                    supportsAllDrives: true
                 });
                 console.log(`[GoogleDriveService] Shared folder '${profileName}' with ${config.shareEmail}`);
             } catch (sErr) {
@@ -332,7 +338,8 @@ async function createProfileFolders(profileName) {
         };
         const datasheetFolder = await drive.files.create({
             resource: datasheetMetadata,
-            fields: 'id, name, webViewLink'
+            fields: 'id, name, webViewLink',
+            supportsAllDrives: true
         });
         const datasheetFolderId = datasheetFolder.data.id;
 

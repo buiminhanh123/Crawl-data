@@ -5,6 +5,9 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const cheerio = require('cheerio');
+const xpath = require('xpath');
+const { DOMParser } = require('@xmldom/xmldom');
 const { productQueries, profileQueries, profileSheetQueries, openProductsDb } = require('../db');
 const googleDriveRoutes = require('./google-drive.routes');
 
@@ -2297,6 +2300,625 @@ router.post('/verify-links', async (req, res) => {
     } catch (e) {
         return res.status(500).json({ success: false, error: e.message });
     }
+});
+
+// ============================================================
+//  EXTRACTION SCHEMA — In-memory crawl job tracker
+// ============================================================
+const activeCrawlJobs = new Map(); // slug -> { running, processed, total, found, errors, stopFlag }
+
+/**
+ * Apply a single schema rule to a cheerio-loaded HTML page.
+ * Returns extracted string value or null.
+ */
+function resolveFullUrl(val, baseUrl) {
+    if (!val) return '';
+    try { return new URL(val, baseUrl).href; } catch(e) { return val; }
+}
+
+function applySchemaRule(rule, $, baseUrl, context) {
+    if (!rule || !rule.type || rule.type === 'skip') return null;
+    try {
+        const attr = rule.attr || 'text';
+
+        if (rule.type === 'css') {
+            const sel = rule.selector || '';
+            if (!sel) return null;
+            const els = $(sel).toArray();
+            if (!els.length) return null;
+
+            if (attr === 'href_all') {
+                const links = els.map(el => resolveFullUrl($(el).attr('href') || $(el).attr('data-filename') || $(el).attr('src'), baseUrl)).filter(Boolean);
+                return links.length ? links.join('\n') : null;
+            }
+            if (attr === 'src_all') {
+                const srcs = els.map(el => resolveFullUrl($(el).attr('src') || $(el).attr('data-src') || $(el).attr('href'), baseUrl)).filter(Boolean);
+                return srcs.length ? srcs.join('\n') : null;
+            }
+            if (attr === 'text_all') {
+                const texts = els.map(el => $(el).text().trim()).filter(Boolean);
+                return texts.length ? texts.join('\n') : null;
+            }
+            if (attr === 'links_with_title') {
+                const pairs = els.map(el => {
+                    const title = $(el).text().trim();
+                    const val = $(el).attr('href') || $(el).attr('data-filename');
+                    const fullUrl = resolveFullUrl(val, baseUrl);
+                    return title && fullUrl ? `${title}: ${fullUrl}` : (fullUrl || title || '');
+                }).filter(Boolean);
+                return pairs.length ? pairs.join('\n') : null;
+            }
+
+            const el = $(els[0]);
+            if (attr === 'text') return el.text().trim() || null;
+            if (attr === 'html') return el.html()?.trim() || null;
+            const val = el.attr(attr)?.trim();
+            return (attr === 'href' || attr === 'src') ? resolveFullUrl(val, baseUrl) : (val || null);
+        }
+        if (rule.type === 'jsonld') {
+            const path = rule.selector || '';
+            if (!path) return null;
+            const ldBlocks = [];
+            $('script[type="application/ld+json"]').each((_, el) => {
+                try { ldBlocks.push(JSON.parse($(el).html())); } catch(e) {}
+            });
+            // path format: "TypeName.key" or "TypeName.key.subkey"
+            const [typeName, ...keys] = path.split('.');
+            for (const block of ldBlocks) {
+                const items = Array.isArray(block) ? block : [block];
+                for (const item of items) {
+                    const itemType = (item['@type'] || '').toLowerCase();
+                    if (itemType !== typeName.toLowerCase()) continue;
+                    let val = item;
+                    for (const k of keys) {
+                        if (val == null) break;
+                        // Support numeric index like BreadcrumbList.itemListElement.1.item.name
+                        val = Array.isArray(val) ? val[parseInt(k)] : val[k];
+                    }
+                    if (val != null && typeof val !== 'object') return String(val).trim();
+                    if (typeof val === 'object' && val?.name) return String(val.name).trim();
+                }
+            }
+            return null;
+        }
+        if (rule.type === 'jsonpath') {
+            // Parse first JSON block in page (for SPA pages with embedded JSON)
+            const path = rule.selector || '';
+            const jsonMatch = $('script:not([type]):not([src])').toArray().map(el => {
+                try { return JSON.parse($(el).html()); } catch(e) { return null; }
+            }).find(j => j != null);
+            if (!jsonMatch) return null;
+            const keys = path.split('.');
+            let val = jsonMatch;
+            for (const k of keys) {
+                if (val == null) break;
+                val = val[k];
+            }
+            return val != null ? String(val).trim() : null;
+        }
+        if (rule.type === 'xpath' || rule.type === 'xpath_full') {
+            const expr = (rule.selector || '').trim();
+            if (!expr) return null;
+            let doc = context?.xmlDoc;
+            if (!doc) {
+                const xml = $.xml();
+                doc = new DOMParser({ onError: () => {} }).parseFromString(xml, 'text/xml');
+                if (context) context.xmlDoc = doc;
+            }
+            let nodes;
+            try {
+                nodes = xpath.select(expr, doc);
+            } catch(e) {
+                nodes = [];
+            }
+            if (!nodes || nodes.length === 0) return null;
+
+            if (attr === 'href_all') {
+                const links = nodes.map(node => {
+                    const val = node.getAttribute ? (node.getAttribute('href') || node.getAttribute('data-filename') || node.getAttribute('src')) : node.nodeValue;
+                    return resolveFullUrl((val || '').trim(), baseUrl);
+                }).filter(Boolean);
+                return links.length ? links.join('\n') : null;
+            }
+            if (attr === 'src_all') {
+                const srcs = nodes.map(node => {
+                    const val = node.getAttribute ? (node.getAttribute('src') || node.getAttribute('data-src') || node.getAttribute('href')) : node.nodeValue;
+                    return resolveFullUrl((val || '').trim(), baseUrl);
+                }).filter(Boolean);
+                return srcs.length ? srcs.join('\n') : null;
+            }
+            if (attr === 'text_all') {
+                const texts = nodes.map(node => (node.textContent || node.nodeValue || '').trim()).filter(Boolean);
+                return texts.length ? texts.join('\n') : null;
+            }
+            if (attr === 'links_with_title') {
+                const pairs = nodes.map(node => {
+                    const title = (node.textContent || node.nodeValue || '').trim();
+                    const val = node.getAttribute ? (node.getAttribute('href') || node.getAttribute('data-filename') || node.getAttribute('src')) : '';
+                    const fullUrl = resolveFullUrl((val || '').trim(), baseUrl);
+                    return title && fullUrl ? `${title}: ${fullUrl}` : (fullUrl || title || '');
+                }).filter(Boolean);
+                return pairs.length ? pairs.join('\n') : null;
+            }
+
+            const node = nodes[0];
+            if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') {
+                return String(node).trim() || null;
+            }
+            // nodeType 3: Text node (e.g. //h1/text())
+            // nodeType 2: Attribute node (e.g. //img/@src)
+            if (node.nodeType === 3 || node.nodeType === 2) {
+                const val = (node.nodeValue || '').trim();
+                return (attr === 'href' || attr === 'src') ? resolveFullUrl(val, baseUrl) : val;
+            }
+            if (attr === 'text') {
+                const text = node.textContent || node.nodeValue || '';
+                return text.trim() || null;
+            }
+            if (attr === 'html') {
+                return node.toString?.()?.trim() || null;
+            }
+            // attribute (src, href, content, alt, value...)
+            const attrVal = (node.getAttribute?.(attr) || node.nodeValue || '').trim();
+            return (attr === 'href' || attr === 'src') ? resolveFullUrl(attrVal, baseUrl) : (attrVal || null);
+        }
+        if (rule.type === 'regex') {
+            const pattern = rule.selector || '';
+            if (!pattern) return null;
+            const html = $.html();
+            const match = html.match(new RegExp(pattern, 'i'));
+            return match?.[1]?.trim() || null;
+        }
+        if (rule.type === 'meta') {
+            const name = rule.selector || '';
+            const val = $(`meta[name="${name}"]`).attr('content')
+                     || $(`meta[property="${name}"]`).attr('content')
+                     || $(`meta[property="og:${name}"]`).attr('content');
+            return val?.trim() || null;
+        }
+    } catch (e) {}
+    return null;
+}
+
+/**
+ * Fetch a URL and apply the full schema. Returns { fieldKey: extractedValue }
+ */
+async function fetchAndApplySchema(url, schema) {
+    const response = await fetch(url, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'cross-site',
+            'Sec-Fetch-User': '?1'
+        },
+        signal: AbortSignal.timeout(20000),
+        redirect: 'follow'
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const context = {};
+    const result = {};
+    for (const [fieldKey, rule] of Object.entries(schema || {})) {
+        result[fieldKey] = applySchemaRule(rule, $, url, context);
+    }
+    return result;
+}
+
+/**
+ * Parse sitemap XML (including sitemap index) and return all product-like URLs.
+ */
+async function parseSitemapUrls(sitemapUrl, sitemapXml, maxUrls = 2000) {
+    const allUrls = [];
+
+    const parseXmlText = (xmlText) => {
+        const urls = [];
+        // Sitemap index: <sitemapindex> with <loc> entries
+        const isSitemapIndex = xmlText.includes('<sitemapindex');
+        const locMatches = xmlText.match(/<loc[^>]*>([^<]+)<\/loc>/gi) || [];
+        for (const m of locMatches) {
+            const url = m.replace(/<loc[^>]*>/i, '').replace(/<\/loc>/i, '').trim();
+            if (url) urls.push({ url, isSitemapIndex });
+        }
+        return urls;
+    };
+
+    const fetchXml = async (url) => {
+        const r = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 Chrome/120.0.0.0' },
+            signal: AbortSignal.timeout(15000)
+        });
+        return await r.text();
+    };
+
+    let rootXml = sitemapXml;
+    if (!rootXml && sitemapUrl) {
+        rootXml = await fetchXml(sitemapUrl);
+    }
+    if (!rootXml) return allUrls;
+
+    const rootEntries = parseXmlText(rootXml);
+
+    // Check if it's a sitemap index
+    const isIndex = rootXml.includes('<sitemapindex');
+    if (isIndex) {
+        // Fetch each sub-sitemap
+        for (const entry of rootEntries.slice(0, 20)) {
+            try {
+                const subXml = await fetchXml(entry.url);
+                const subEntries = parseXmlText(subXml);
+                for (const e of subEntries) {
+                    if (!e.isSitemapIndex) allUrls.push(e.url);
+                    if (allUrls.length >= maxUrls) break;
+                }
+            } catch(e) {}
+            if (allUrls.length >= maxUrls) break;
+        }
+    } else {
+        for (const e of rootEntries) {
+            allUrls.push(e.url);
+        }
+    }
+
+    return allUrls.slice(0, maxUrls);
+}
+
+// ──────────────────────────────────────────────────────────────
+// GET /api/products/profiles/:slug/schema — get saved extraction schema
+// ──────────────────────────────────────────────────────────────
+router.get('/profiles/:slug/schema', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const schema = profileQueries.getExtractionSchema(slug);
+        res.json({ schema: schema || {} });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/products/profiles/:slug/schema — save extraction schema
+// ──────────────────────────────────────────────────────────────
+router.post('/profiles/:slug/schema', (req, res) => {
+    try {
+        const { slug } = req.params;
+        const { schema } = req.body;
+        if (!schema || typeof schema !== 'object') {
+            return res.status(400).json({ error: 'Schema không hợp lệ.' });
+        }
+        profileQueries.saveExtractionSchema(slug, schema);
+        res.json({ message: 'Đã lưu Schema trích xuất thành công!', schema });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+function executePlaywrightTest(url, schema) {
+    return new Promise((resolve, reject) => {
+        const pythonCmd = getPythonCmd();
+        const scriptPath = path.resolve(__dirname, '../playwright_schema_worker.py');
+        const child = spawn(pythonCmd, [scriptPath, '--mode', 'test', '--url', url], {
+            cwd: path.resolve(__dirname, '..'),
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        
+        let stdoutData = '';
+        let stderrData = '';
+        
+        child.stdout.on('data', (d) => { stdoutData += d.toString('utf8'); });
+        child.stderr.on('data', (d) => { stderrData += d.toString('utf8'); });
+        
+        child.on('close', (code) => {
+            if (code === 0) {
+                try {
+                    const parsed = JSON.parse(stdoutData.trim());
+                    return resolve(parsed);
+                } catch(e) {
+                    return reject(new Error('Lỗi parse kết quả từ Playwright: ' + stdoutData));
+                }
+            } else {
+                return reject(new Error(stderrData || `Playwright exited with code ${code}`));
+            }
+        });
+        
+        child.stdin.write(JSON.stringify({ schema }));
+        child.stdin.end();
+    });
+}
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/products/profiles/:slug/schema/test
+// Body: { url, schema, useBrowser }
+// Fetch URL → apply schema → return preview results
+// ──────────────────────────────────────────────────────────────
+router.post('/profiles/:slug/schema/test', async (req, res) => {
+    const { url, schema, useBrowser = true } = req.body;
+    if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+        return res.status(400).json({ error: 'URL không hợp lệ.' });
+    }
+    if (!schema || typeof schema !== 'object') {
+        return res.status(400).json({ error: 'Schema không hợp lệ.' });
+    }
+    
+    // 1. Try Playwright Headless Browser first (if requested or by default)
+    if (useBrowser) {
+        try {
+            const pwResult = await executePlaywrightTest(url, schema);
+            if (pwResult && pwResult.success) {
+                return res.json(pwResult);
+            }
+        } catch (pwErr) {
+            console.warn('[Schema Test] Playwright failed, falling back to Fast HTTP:', pwErr.message);
+        }
+    }
+    
+    // 2. Fallback / Fast HTTP method
+    try {
+        const result = await fetchAndApplySchema(url, schema);
+        const preview = {};
+        for (const [fieldKey, value] of Object.entries(result)) {
+            preview[fieldKey] = {
+                value: value,
+                status: value ? 'ok' : 'empty'
+            };
+        }
+        res.json({ success: true, url, preview });
+    } catch (err) {
+        res.status(500).json({ success: false, error: `Không thể fetch URL: ${err.message}` });
+    }
+});
+
+// ──────────────────────────────────────────────────────────────
+// GET /api/products/profiles/:slug/crawl-status
+// Return current crawl job progress
+// ──────────────────────────────────────────────────────────────
+router.get('/profiles/:slug/crawl-status', (req, res) => {
+    const { slug } = req.params;
+    const job = activeCrawlJobs.get(slug);
+    if (!job) {
+        return res.json({ running: false, processed: 0, total: 0, found: 0, errors: 0, done: false });
+    }
+    res.json({ ...job, stopFlag: undefined });
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/products/profiles/:slug/crawl-schema/stop
+// Stop a running crawl job
+// ──────────────────────────────────────────────────────────────
+router.post('/profiles/:slug/crawl-schema/stop', (req, res) => {
+    const { slug } = req.params;
+    const job = activeCrawlJobs.get(slug);
+    if (job) {
+        job.stopFlag = true;
+        job.running = false;
+    }
+    res.json({ success: true, message: 'Đã gửi lệnh dừng crawl.' });
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/products/profiles/:slug/crawl-schema
+// Body: { maxUrls, concurrency, delay, useBrowser }
+// Crawl all sitemap URLs using the saved schema, merge into HAR report
+// ──────────────────────────────────────────────────────────────
+router.post('/profiles/:slug/crawl-schema', async (req, res) => {
+    const { slug } = req.params;
+
+    // Only one crawl per profile at a time
+    if (activeCrawlJobs.get(slug)?.running) {
+        return res.status(409).json({ error: 'Đang có một crawl job đang chạy cho Profile này. Vui lòng đợi hoặc dừng lại trước.' });
+    }
+
+    const profile = profileQueries.getBySlug(slug);
+    if (!profile) return res.status(404).json({ error: 'Không tìm thấy Profile.' });
+
+    const schema = profileQueries.getExtractionSchema(slug);
+    if (!schema || Object.keys(schema).length === 0) {
+        return res.status(400).json({ error: 'Profile này chưa có Schema trích xuất. Vui lòng định nghĩa Schema trước.' });
+    }
+
+    const sitemap = profileQueries.getSitemap(slug);
+    if (!sitemap?.sitemapUrl && !sitemap?.sitemapXml && !profile.sitemap_url) {
+        return res.status(400).json({ error: 'Chưa cấu hình Sitemap cho Profile này.' });
+    }
+
+    const maxUrls = Math.min(parseInt(req.body?.maxUrls) || 500, 2000);
+    const concurrency = Math.min(parseInt(req.body?.concurrency) || 3, 8);
+    const delayMs = Math.max(parseInt(req.body?.delay) || 300, 0);
+    const useBrowser = req.body?.useBrowser !== false; // default true for high fidelity
+
+    // Initialize job tracker
+    const job = { running: true, processed: 0, total: 0, found: 0, errors: 0, done: false, stopFlag: false, startedAt: new Date().toISOString() };
+    activeCrawlJobs.set(slug, job);
+
+    // Respond immediately - crawl runs in background
+    res.json({ success: true, message: 'Đã bắt đầu crawl schema. Theo dõi tiến độ qua /crawl-status.' });
+
+    // Run crawl asynchronously
+    (async () => {
+        try {
+            const sitemapUrl = sitemap?.sitemapUrl || profile.sitemap_url || '';
+            const sitemapXml = sitemap?.sitemapXml || '';
+
+            // Step 1: Get all URLs from sitemap
+            const allUrls = await parseSitemapUrls(sitemapUrl, sitemapXml, maxUrls);
+            job.total = allUrls.length;
+
+            if (allUrls.length === 0) {
+                job.running = false;
+                job.done = true;
+                job.error = 'Sitemap không có URL nào.';
+                return;
+            }
+
+            // Step 2: Crawl
+            const crawlResults = []; // Array of { url, ...fieldValues }
+
+            if (useBrowser) {
+                // High-performance Playwright batch crawler
+                const pythonCmd = getPythonCmd();
+                const scriptPath = path.resolve(__dirname, '../playwright_schema_worker.py');
+                const tmpUrlsFile = path.resolve(__dirname, `../data/tmp_urls_${slug}_${Date.now()}.txt`);
+                
+                // Write URLs to temporary file
+                fs.writeFileSync(tmpUrlsFile, allUrls.join('\n'), 'utf8');
+                
+                const child = spawn(pythonCmd, [
+                    scriptPath,
+                    '--mode', 'crawl',
+                    '--urls-file', tmpUrlsFile,
+                    '--concurrency', String(concurrency),
+                    '--delay', String(delayMs)
+                ], {
+                    cwd: path.resolve(__dirname, '..'),
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+                
+                child.stdin.write(JSON.stringify({ schema }));
+                child.stdin.end();
+                
+                let lineBuffer = '';
+                child.stdout.on('data', (chunk) => {
+                    lineBuffer += chunk.toString('utf8');
+                    const lines = lineBuffer.split('\n');
+                    lineBuffer = lines.pop(); // keep remainder
+                    
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        try {
+                            const msg = JSON.parse(line.trim());
+                            if (msg.type === 'progress') {
+                                job.processed = msg.processed;
+                                job.total = msg.total;
+                                job.found = msg.found;
+                                job.errors = msg.errors;
+                            } else if (msg.type === 'item') {
+                                crawlResults.push(msg.data);
+                            }
+                        } catch(e) {}
+                    }
+                });
+                
+                await new Promise((resolve) => {
+                    child.on('close', () => {
+                        try { if (fs.existsSync(tmpUrlsFile)) fs.unlinkSync(tmpUrlsFile); } catch(e) {}
+                        resolve();
+                    });
+                });
+            } else {
+                // Fast HTTP Crawler
+                const crawlUrl = async (url) => {
+                    if (job.stopFlag) return;
+                    try {
+                        const result = await fetchAndApplySchema(url, schema);
+                        const hasData = Object.values(result).some(v => v != null && v !== '');
+                        if (hasData) {
+                            crawlResults.push({ url, ...result });
+                            job.found++;
+                        }
+                    } catch (e) {
+                        job.errors++;
+                    }
+                    job.processed++;
+                };
+
+                // Process in batches of `concurrency`
+                for (let i = 0; i < allUrls.length; i += concurrency) {
+                    if (job.stopFlag) break;
+                    const batch = allUrls.slice(i, i + concurrency);
+                    await Promise.all(batch.map(crawlUrl));
+                    if (i + concurrency < allUrls.length && !job.stopFlag) {
+                        await new Promise(r => setTimeout(r, delayMs));
+                    }
+                }
+            }
+
+            // Step 3: Insert / Upsert into Products Table (for Danh Sách Sản Phẩm Crawler tab)
+            if (crawlResults.length > 0) {
+                try {
+                    await productQueries.bulkUpsertProducts(slug, crawlResults);
+                } catch(e) {
+                    console.error('[crawl-schema] Error saving to products table:', e.message);
+                }
+
+                let report = profileQueries.getHarReport(slug) || { profileSlug: slug, fields: [], summary: {}, notableEndpoints: [] };
+
+                // Build fieldKey -> samples map from crawlResults
+                const newSamples = {};
+                for (const row of crawlResults) {
+                    for (const [fieldKey, value] of Object.entries(row)) {
+                        if (fieldKey === 'url' || !value) continue;
+                        if (!newSamples[fieldKey]) newSamples[fieldKey] = [];
+                        if (!newSamples[fieldKey].some(s => s.value === value) && newSamples[fieldKey].length < 500) {
+                            newSamples[fieldKey].push({ path: 'Schema Crawl', value: String(value).slice(0, 200) });
+                        }
+                    }
+                    // Always add detail_url if we have URL from crawl
+                    if (row.url) {
+                        if (!newSamples['detail_url']) newSamples['detail_url'] = [];
+                        if (!newSamples['detail_url'].some(s => s.value === row.url) && newSamples['detail_url'].length < 500) {
+                            newSamples['detail_url'].push({ path: 'Schema Crawl URL', value: row.url });
+                        }
+                    }
+                }
+
+                // Merge into existing report fields
+                const FIELD_KEYS = Object.keys(FIELD_PATTERNS);
+                for (const fieldKey of [...FIELD_KEYS, ...Object.keys(newSamples)]) {
+                    if (!newSamples[fieldKey] || newSamples[fieldKey].length === 0) continue;
+                    let existingField = report.fields?.find(f => f.fieldKey === fieldKey);
+                    if (!existingField) {
+                        const pat = FIELD_PATTERNS[fieldKey];
+                        existingField = { fieldKey, label: pat?.label || fieldKey, icon: pat?.icon || '📌', confidence: 0, occurrences: 0, samples: [], endpoints: [] };
+                        if (!report.fields) report.fields = [];
+                        report.fields.push(existingField);
+                    }
+                    // Merge samples (avoid duplicates)
+                    const existingSampleValues = new Set((existingField.samples || []).map(s => s.value));
+                    let added = 0;
+                    for (const s of newSamples[fieldKey]) {
+                        if (!existingSampleValues.has(s.value)) {
+                            existingField.samples.push(s);
+                            existingSampleValues.add(s.value);
+                            added++;
+                        }
+                    }
+                    existingField.occurrences = existingField.samples.length;
+                    existingField.confidence = Math.min(100, Math.max(existingField.confidence, added > 0 ? 95 : existingField.confidence));
+                }
+
+                // Update summary
+                if (!report.summary) report.summary = {};
+                report.summary.lastSchemaCrawlAt = new Date().toISOString();
+                report.summary.schemaCrawlTotal = allUrls.length;
+                report.summary.schemaCrawlFound = crawlResults.length;
+                report.summary.detectableFieldsCount = (report.fields || []).filter(f => f.occurrences > 0).length;
+                report.summary.highConfidenceFieldsCount = (report.fields || []).filter(f => f.confidence >= 50).length;
+
+                profileQueries.saveHarReport(slug, report);
+            }
+
+            // Save crawl stats
+            profileQueries.saveCrawlStats(slug, {
+                lastCrawlAt: new Date().toISOString(),
+                totalUrls: allUrls.length,
+                processedUrls: job.processed,
+                foundProducts: crawlResults.length,
+                errors: job.errors
+            });
+
+            job.running = false;
+            job.done = true;
+        } catch (err) {
+            console.error('[crawl-schema] Error:', err);
+            job.running = false;
+            job.done = true;
+            job.error = err.message;
+        }
+    })();
 });
 
 module.exports = router;

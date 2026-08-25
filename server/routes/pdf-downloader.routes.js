@@ -59,7 +59,7 @@ async function writeLinkToProductDb(productId, columnName, driveLink) {
     }
 }
 
-function writeLinkToProfileSheet(profileSlug, columnName, partNumber, linkValue) {
+function writeLinkToProfileSheet(profileSlug, columnName, partNumber, linkValue, rowIndex = null) {
     if (!profileSlug || !columnName || columnName.toUpperCase() === 'NONE' || !linkValue) return;
     try {
         const { profileSheetQueries } = require('../db');
@@ -68,8 +68,7 @@ function writeLinkToProfileSheet(profileSlug, columnName, partNumber, linkValue)
 
         const cleanStr = s => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]/gi, '');
         const targetColClean = cleanStr(columnName);
-        const targetModelClean = cleanStr(partNumber);
-        if (!targetColClean || !targetModelClean) return;
+        if (!targetColClean) return;
 
         let modified = false;
 
@@ -100,22 +99,37 @@ function writeLinkToProfileSheet(profileSlug, columnName, partNumber, linkValue)
                 modified = true;
             }
 
-            // Update matching data rows
-            for (let r = headerRowIdx + 1; r < sheet.data.length; r++) {
-                const row = sheet.data[r];
-                if (!Array.isArray(row)) continue;
-
-                const isMatch = row.some(cell => {
-                    const cClean = cleanStr(cell);
-                    return cClean && (cClean === targetModelClean || cClean.includes(targetModelClean) || targetModelClean.includes(cClean));
-                });
-
-                if (isMatch) {
-                    while (row.length <= colIdx) {
-                        row.push('');
-                    }
+            // 1. Prioritize exact rowIndex
+            if (rowIndex !== null && rowIndex !== undefined && rowIndex > headerRowIdx && rowIndex < sheet.data.length) {
+                const row = sheet.data[rowIndex];
+                if (Array.isArray(row)) {
+                    while (row.length <= colIdx) row.push('');
                     row[colIdx] = linkValue;
                     modified = true;
+                    continue;
+                }
+            }
+
+            // 2. Fallback matching by partNumber
+            const targetModelClean = cleanStr(partNumber);
+            if (targetModelClean) {
+                const headerRow = sheet.data[headerRowIdx] || [];
+                let modelColIdx = headerRow.findIndex(h => {
+                    const ch = cleanStr(h);
+                    return ch.includes('model') || ch.includes('masanpham') || ch.includes('masp') || ch.includes('partnumber') || ch.includes('sku') || ch === 'url';
+                });
+                if (modelColIdx === -1) modelColIdx = 0;
+
+                for (let r = headerRowIdx + 1; r < sheet.data.length; r++) {
+                    const row = sheet.data[r];
+                    if (!Array.isArray(row)) continue;
+
+                    const cellVal = cleanStr(row[modelColIdx]);
+                    if (cellVal && (cellVal === targetModelClean || cellVal.includes(targetModelClean) || targetModelClean.includes(cellVal))) {
+                        while (row.length <= colIdx) row.push('');
+                        row[colIdx] = linkValue;
+                        modified = true;
+                    }
                 }
             }
         }
@@ -283,32 +297,56 @@ function parseCSV(csvText) {
 }
 
 /**
- * Fetch PDF buffer from URL
+ * Fetch PDF buffer from URL with redirect support
  */
-function fetchPdfBuffer(url) {
+function fetchPdfBuffer(url, maxRedirects = 5) {
     return new Promise((resolve, reject) => {
-        const parsedUrl = new URL(url);
+        if (maxRedirects <= 0) {
+            return reject(new Error('Quá nhiều lượt chuyển hướng (Too many redirects)'));
+        }
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(url);
+        } catch (err) {
+            return reject(new Error(`URL không hợp lệ: ${url}`));
+        }
         const proto = parsedUrl.protocol === 'https:' ? https : http;
         const options = {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/pdf,*/*'
+                'Accept': 'application/pdf,application/octet-stream,*/*'
             },
             timeout: 60000
         };
         const req = proto.get(url, options, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                fetchPdfBuffer(res.headers.location).then(resolve).catch(reject);
+                try {
+                    const nextUrl = new URL(res.headers.location, url).href;
+                    res.resume();
+                    fetchPdfBuffer(nextUrl, maxRedirects - 1).then(resolve).catch(reject);
+                    return;
+                } catch (err) {
+                    res.resume();
+                    return reject(new Error(`Chuyển hướng không hợp lệ: ${res.headers.location}`));
+                }
+            }
+            if (res.statusCode !== 200) {
+                reject(new Error(`HTTP ${res.statusCode}`));
                 res.resume();
                 return;
             }
-            if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); res.resume(); return; }
+            const contentType = (res.headers['content-type'] || '').toLowerCase();
+            const contentDisp = (res.headers['content-disposition'] || '').toLowerCase();
+            if (contentType.includes('text/html') && !contentDisp.includes('.pdf') && !contentDisp.includes('filename=')) {
+                res.resume();
+                return reject(new Error('URL trả về trang web HTML, không phải file tài liệu PDF'));
+            }
             const chunks = [];
             res.on('data', chunk => chunks.push(chunk));
             res.on('end', () => resolve(Buffer.concat(chunks)));
         });
         req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout kết nối')); });
     });
 }
 
@@ -333,7 +371,7 @@ async function runDownloadJob(tasks, concurrency, options = {}) {
             if (activeJob.stopped) break;
             const taskIdx = idx++;
             const task = tasks[taskIdx];
-            const { url, fileName, driveFolderId, spreadsheetId, sheetName, rowNum, resultCol, productId, partNumber, profileSlug, label } = task;
+            const { url, fileName, driveFolderId, spreadsheetId, sheetName, rowNum, resultCol, productId, partNumber, profileSlug, rowIndex, label } = task;
 
             try {
                 let driveLink = '';
@@ -374,7 +412,7 @@ async function runDownloadJob(tasks, concurrency, options = {}) {
                         await writeLinkToProductDb(productId, resultCol, finalLink);
                     }
                     if (profileSlug) {
-                        writeLinkToProfileSheet(profileSlug, resultCol, partNumber, finalLink);
+                        writeLinkToProfileSheet(profileSlug, resultCol, partNumber, finalLink, rowIndex);
                     }
                 }
 
@@ -406,7 +444,7 @@ async function runDownloadJob(tasks, concurrency, options = {}) {
                         try { await writeLinkToProductDb(productId, resultCol, fallbackLink); } catch (err) {}
                     }
                     if (profileSlug) {
-                        try { writeLinkToProfileSheet(profileSlug, resultCol, partNumber, fallbackLink); } catch (err) {}
+                        try { writeLinkToProfileSheet(profileSlug, resultCol, partNumber, fallbackLink, rowIndex); } catch (err) {}
                     }
                     if (spreadsheetId && sheetName && rowNum) {
                         try { await writeCellToSheet(spreadsheetId, sheetName, rowNum, resultCol.toUpperCase(), fallbackLink); } catch (err) {}
@@ -436,7 +474,186 @@ async function runDownloadJob(tasks, concurrency, options = {}) {
     }
 }
 
-// ─── Build tasks from DB products for PDF ──────────────────────────────────
+// ─── Build tasks from Profile Sheets & DB products for PDF ─────────────────
+
+function findPdfLinksInRow(row, profPdfUrl = 'ALL') {
+    const pdfLinks = [];
+    const seenUrls = new Set();
+
+    const isDocUrl = (u) => {
+        if (!u || typeof u !== 'string') return false;
+        const low = u.trim().toLowerCase();
+        if (!low.startsWith('http://') && !low.startsWith('https://')) return false;
+        // Filter out HTML pages and web navigation routes
+        if (low.endsWith('.html') || low.endsWith('.htm') || low.endsWith('.shtml') || low.endsWith('.jsp') || low.endsWith('.asp') || low.endsWith('.aspx')) return false;
+        if (low.includes('applicable_model') || low.includes('applicable-model')) return false;
+        if (low.endsWith('.png') || low.endsWith('.jpg') || low.endsWith('.jpeg') || low.endsWith('.webp') || low.endsWith('.gif') || low.endsWith('.svg')) return false;
+        return true;
+    };
+
+    const addLink = (title, url, sourceCol = '') => {
+        if (!url || typeof url !== 'string') return;
+        const cleanUrl = url.trim();
+        if (!isDocUrl(cleanUrl)) return;
+        if (seenUrls.has(cleanUrl)) return;
+        seenUrls.add(cleanUrl);
+        pdfLinks.push({
+            name: title || 'Tài liệu',
+            url: cleanUrl,
+            sourceCol
+        });
+    };
+
+    const targetCol = String(profPdfUrl || '').trim();
+
+    // 1. If NONE is selected, return empty
+    if (targetCol.toUpperCase() === 'NONE') {
+        return [];
+    }
+
+    // 2. If explicit column requested (anything other than 'ALL' / empty)
+    if (targetCol && targetCol.toUpperCase() !== 'ALL') {
+        const cleanTarget = targetCol.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const targetKey = Object.keys(row).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanTarget);
+
+        if (targetKey && row[targetKey]) {
+            const val = String(row[targetKey]).trim();
+            const baseKey = targetKey.replace(/_link$/i, '').replace(/_url$/i, '');
+            const titleKey = Object.keys(row).find(k => k.toLowerCase() === `${baseKey}_tieu_de`.toLowerCase() || k.toLowerCase() === `${baseKey}_name`.toLowerCase());
+            let docTitle = titleKey && row[titleKey] ? String(row[titleKey]).trim() : '';
+            if (!docTitle) {
+                const lk = targetKey.toLowerCase();
+                if (lk.includes('hdsd')) docTitle = 'Hướng dẫn sử dụng';
+                else if (lk.includes('cad')) docTitle = 'Bản vẽ CAD';
+                else if (lk.includes('chungchi')) docTitle = 'Chứng chỉ';
+                else if (lk.includes('phanmem')) docTitle = 'Phần mềm';
+                else if (lk.includes('datasheet')) docTitle = 'Datasheet';
+                else if (lk.includes('tailieu')) docTitle = 'Tài liệu liên quan';
+                else docTitle = targetKey;
+            }
+
+            if (val.startsWith('[')) {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (Array.isArray(parsed)) {
+                        parsed.forEach(item => addLink(item.name || item.title || docTitle, item.url || item.href || item, targetKey));
+                    }
+                } catch (e) {}
+            } else {
+                val.split(/[\n,]+/).forEach(u => addLink(docTitle, u, targetKey));
+            }
+        }
+        // STRICT: Return only links from this column, do NOT fall through to scan other columns
+        return pdfLinks;
+    }
+
+    // 3. If profPdfUrl === 'ALL' (or empty): Scan all columns for document / PDF links
+    for (const [k, v] of Object.entries(row)) {
+        if (!v || typeof v !== 'string') continue;
+        if (k === 'url' || k === 'url_en' || k === 'anh_dai_dien' || k.startsWith('anh_')) continue;
+        const lk = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const isDocCol = lk.includes('pdf') || lk.includes('datasheet') || lk.includes('hdsd') ||
+                         lk.includes('manual') || lk.includes('cad') || lk.includes('tailieu') ||
+                         lk.includes('chungchi') || lk.includes('phanmem') || lk.includes('document') ||
+                         lk.includes('download') || lk.endsWith('link') || lk.endsWith('url');
+
+        if (!isDocCol && !v.includes('.pdf') && !v.includes('/download/')) continue;
+
+        // Find corresponding title column if available (e.g. tl_hdsd_tieu_de for tl_hdsd_link)
+        const baseKey = k.replace(/_link$/i, '').replace(/_url$/i, '');
+        const titleKey = Object.keys(row).find(k2 => k2.toLowerCase() === `${baseKey}_tieu_de`.toLowerCase() || k2.toLowerCase() === `${baseKey}_name`.toLowerCase());
+        let docTitle = titleKey && row[titleKey] ? String(row[titleKey]).trim() : '';
+
+        if (!docTitle) {
+            if (lk.includes('hdsd')) docTitle = 'Hướng dẫn sử dụng';
+            else if (lk.includes('cad')) docTitle = 'Bản vẽ CAD';
+            else if (lk.includes('chungchi')) docTitle = 'Chứng chỉ';
+            else if (lk.includes('phanmem')) docTitle = 'Phần mềm';
+            else if (lk.includes('datasheet')) docTitle = 'Datasheet';
+            else if (lk.includes('tailieu')) docTitle = 'Tài liệu liên quan';
+            else docTitle = k;
+        }
+
+        const lines = String(v).split(/[\n,]+/);
+        lines.forEach(l => {
+            const trimL = l.trim();
+            if (trimL.includes('http')) {
+                const matchUrl = trimL.match(/(https?:\/\/[^\s"',]+)/);
+                if (matchUrl) {
+                    addLink(docTitle, matchUrl[1], k);
+                }
+            }
+        });
+    }
+
+    return pdfLinks;
+}
+
+function extractPdfRowsFromProfileSheets(profileSlug) {
+    try {
+        const { profileSheetQueries } = require('../db');
+        const sheets = profileSheetQueries.getBySlug(profileSlug);
+        const rows = [];
+        if (!Array.isArray(sheets) || sheets.length === 0) return rows;
+
+        for (const sheet of sheets) {
+            const sheetRows = sheet.data || [];
+            if (!Array.isArray(sheetRows) || sheetRows.length < 2) continue;
+
+            let headerIdx = -1;
+            for (let i = 0; i < Math.min(4, sheetRows.length); i++) {
+                const r = sheetRows[i];
+                if (Array.isArray(r) && r.filter(c => c && typeof c === 'string' && !c.startsWith('http') && isNaN(c)).length >= 2) {
+                    headerIdx = i;
+                    break;
+                }
+            }
+            if (headerIdx === -1) headerIdx = 0;
+
+            const header = sheetRows[headerIdx].map(h => String(h || '').trim());
+            for (let i = headerIdx + 1; i < sheetRows.length; i++) {
+                const r = sheetRows[i];
+                if (!Array.isArray(r) || r.length === 0 || r.every(c => !c || String(c).trim() === '')) continue;
+
+                const rowObj = {};
+                header.forEach((h, idx) => {
+                    if (h && r[idx] !== undefined && r[idx] !== null) {
+                        rowObj[h] = String(r[idx]).trim();
+                    }
+                });
+
+                let model = '';
+                for (const [k, v] of Object.entries(rowObj)) {
+                    const lk = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (!model && (lk.includes('model') || lk.includes('masanpham') || lk.includes('masp') || lk.includes('sku') || lk.includes('partnumber'))) {
+                        model = v;
+                    }
+                }
+                if (!model) model = r[0] ? String(r[0]).trim() : `Item_${i}`;
+
+                const pdfLinks = findPdfLinksInRow(rowObj, 'ALL');
+
+                rows.push({
+                    _rowIndex: i,
+                    _sheetName: sheet.name || '',
+                    id: i,
+                    part_number: model,
+                    name: rowObj.ten_san_pham || rowObj.name || model,
+                    download_links: JSON.stringify(pdfLinks),
+                    category: rowObj.danh_muc_id || rowObj.category || sheet.name || '',
+                    main_category: rowObj.danh_muc_id || rowObj.category || sheet.name || '',
+                    series: rowObj.Series || rowObj.series || '',
+                    profile_slug: profileSlug,
+                    ...rowObj
+                });
+            }
+        }
+        return rows;
+    } catch (e) {
+        console.error('[pdf-downloader] Error extracting PDF rows from sheet:', e);
+        return [];
+    }
+}
 
 async function buildPdfTasksFromProfile(profileSlug, categoryFilter, seriesFilter, driveFolderId, options = {}) {
     const {
@@ -445,32 +662,61 @@ async function buildPdfTasksFromProfile(profileSlug, categoryFilter, seriesFilte
         profSubCategory = 'NONE',
         profSeries = 'NONE',
         profModel = 'part_number',
-        profPdfUrl = 'download_links',
-        pdfFilterMode = 'datasheet_only', // 'datasheet_only' | 'all_pdfs' | 'keywords'
+        profPdfUrl = 'ALL',
+        pdfFilterMode = 'all_pdfs', // 'all_pdfs' | 'datasheet_only' | 'keywords'
         keywords = '',
-        filenamePattern = '{model}.pdf',
+        filenamePattern = '{model}_{doc_type}.pdf',
         resultCol = 'NONE'
     } = options;
 
-    const pdb = await openProductsDb();
-    if (!pdb) throw new Error('Không tìm thấy products.db');
+    // 1. First extract rows from Profile Sheets (most comprehensive column structure)
+    let sheetRows = extractPdfRowsFromProfileSheets(profileSlug);
 
-    let query = `SELECT * FROM products WHERE profile_slug = ?`;
-    const params = [profileSlug];
+    // 2. Also check DB products for any additional products or DB IDs
+    let dbProducts = [];
+    try {
+        const pdb = await openProductsDb();
+        if (pdb) {
+            const res = pdb.exec(`SELECT * FROM products WHERE profile_slug = ?`, [profileSlug]);
+            pdb.close();
+            if (res[0]) {
+                const cols = res[0].columns;
+                dbProducts = res[0].values.map(row => {
+                    const obj = {};
+                    cols.forEach((c, i) => { obj[c] = row[i]; });
+                    return obj;
+                });
+            }
+        }
+    } catch (e) {}
 
-    if (categoryFilter) { query += ' AND (main_category = ? OR category = ?)'; params.push(categoryFilter, categoryFilter); }
-    if (seriesFilter)   { query += ' AND series = ?'; params.push(seriesFilter); }
+    // Map DB products by model code for fast lookup of DB product ID
+    const dbProductMap = new Map();
+    dbProducts.forEach(p => {
+        if (p.part_number) dbProductMap.set(String(p.part_number).trim().toLowerCase(), p);
+        if (p.name) dbProductMap.set(String(p.name).trim().toLowerCase(), p);
+    });
 
-    const res = pdb.exec(query, params);
-    pdb.close();
+    let combinedRows = [];
+    if (sheetRows.length > 0) {
+        combinedRows = sheetRows.map(r => {
+            const dbMatch = dbProductMap.get(String(r.part_number || '').trim().toLowerCase()) ||
+                            dbProductMap.get(String(r.name || '').trim().toLowerCase());
+            return {
+                ...r,
+                id: dbMatch ? dbMatch.id : r.id,
+                ...(dbMatch?.download_links && !r.download_links ? { download_links: dbMatch.download_links } : {})
+            };
+        });
+    } else if (dbProducts.length > 0) {
+        combinedRows = dbProducts;
+    }
 
-    if (!res[0]) return [];
-
-    const cols = res[0].columns;
-    const rows = res[0].values.map(row => {
-        const obj = {};
-        cols.forEach((c, i) => { obj[c] = row[i]; });
-        return obj;
+    // Apply category & series filters
+    let filteredRows = combinedRows.filter(r => {
+        if (categoryFilter && r.main_category !== categoryFilter && r.category !== categoryFilter) return false;
+        if (seriesFilter && r.series !== seriesFilter) return false;
+        return true;
     });
 
     const getVal = (row, field) => {
@@ -484,56 +730,30 @@ async function buildPdfTasksFromProfile(profileSlug, categoryFilter, seriesFilte
     };
 
     const tasks = [];
-    for (const row of rows) {
-        // Read PDF URL column (specified by profPdfUrl or default download_links)
-        let pdfSource = '';
-        if (profPdfUrl && profPdfUrl.toUpperCase() !== 'NONE') {
-            const foundKey = Object.keys(row).find(k => k.toLowerCase() === profPdfUrl.trim().toLowerCase());
-            if (foundKey && row[foundKey]) pdfSource = row[foundKey];
-        }
-        if (!pdfSource && row.download_links) pdfSource = row.download_links;
-
-        if (!pdfSource) continue;
-
-        let rawLinks = [];
-        try {
-            if (typeof pdfSource === 'string' && pdfSource.trim().startsWith('[')) {
-                rawLinks = JSON.parse(pdfSource);
-            } else if (typeof pdfSource === 'string') {
-                rawLinks = pdfSource.split(',').map(u => ({ name: 'Datasheet', url: u.trim() }));
-            }
-        } catch (e) {
-            continue;
-        }
-
+    for (const row of filteredRows) {
+        const rawLinks = findPdfLinksInRow(row, profPdfUrl);
         if (!Array.isArray(rawLinks) || rawLinks.length === 0) continue;
 
-        // Filter PDF links
-        const pdfLinks = rawLinks.filter(item => {
-            const u = (item.url || item.href || '').toLowerCase();
-            const n = (item.name || item.title || '').toLowerCase();
-            return u.includes('.pdf') || u.includes('download') || n.includes('datasheet') || n.includes('pdf') || n.includes('user guide') || n.includes('manual') || n.includes('brochure');
-        });
-
-        if (pdfLinks.length === 0) continue;
-
-        let selectedPdfs = [];
-        if (pdfFilterMode === 'datasheet_only') {
-            const datasheetItem = pdfLinks.find(item => {
+        // Filter PDF links based on filter mode
+        let selectedPdfs = rawLinks;
+        // If a specific column was chosen (e.g. tl_tailieu_link, tl_hdsd_link), keep all valid links from that column
+        if (profPdfUrl && profPdfUrl !== 'ALL' && profPdfUrl !== 'NONE') {
+            selectedPdfs = rawLinks;
+        } else if (pdfFilterMode === 'datasheet_only') {
+            const datasheetItem = rawLinks.find(item => {
                 const n = (item.name || item.title || '').toLowerCase();
                 const u = (item.url || item.href || '').toLowerCase();
                 return n.includes('datasheet') || u.includes('datasheet');
             });
-            selectedPdfs = [datasheetItem || pdfLinks[0]];
+            selectedPdfs = [datasheetItem || rawLinks[0]];
         } else if (pdfFilterMode === 'keywords' && keywords.trim()) {
-            const kwList = keywords.toLowerCase().split(',').map(k => k.trim()).filter(Boolean);
-            selectedPdfs = pdfLinks.filter(item => {
-                const n = (item.name || item.title || '').toLowerCase();
+            const norm = s => String(s || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+            const kwList = keywords.split(',').map(k => norm(k.trim())).filter(Boolean);
+            selectedPdfs = rawLinks.filter(item => {
+                const n = norm(item.name || item.title || '');
                 const u = (item.url || item.href || '').toLowerCase();
                 return kwList.some(kw => n.includes(kw) || u.includes(kw));
             });
-        } else {
-            selectedPdfs = pdfLinks;
         }
 
         const rawModel  = getVal(row, profModel) || row.part_number || row.name || String(row.id);
@@ -563,10 +783,11 @@ async function buildPdfTasksFromProfile(profileSlug, categoryFilter, seriesFilte
                 url: pdfUrl,
                 fileName,
                 driveFolderId,
-                resultCol,
+                resultCol: (resultCol && resultCol !== 'NONE') ? resultCol : (pdfItem.sourceCol || 'NONE'),
                 productId: row.id,
                 partNumber: model,
                 profileSlug,
+                rowIndex: row._rowIndex,
                 docLabel: docType,
                 scopeInfo,
                 label: `[${profileSlug}] ${model} (${docType})`
@@ -735,27 +956,60 @@ router.post('/reset', (req, res) => {
 // GET /api/pdf-downloader/profile-stats — profile stats for PDF
 router.get('/profile-stats', async (req, res) => {
     try {
-        const pdb = await openProductsDb();
-        if (!pdb) return res.json({ stats: [] });
+        const { profileQueries, profileSheetQueries } = require('../db');
+        const allProfiles = profileQueries.getAll();
 
-        const result = pdb.exec(`
-            SELECT profile_slug,
-                   COUNT(*) as total_products,
-                   SUM(CASE WHEN download_links IS NOT NULL AND trim(download_links) != '' AND download_links != '[]' THEN 1 ELSE 0 END) as with_pdf
-            FROM products
-            GROUP BY profile_slug
-            ORDER BY total_products DESC
-        `);
-        pdb.close();
+        const dbStatsMap = new Map();
+        try {
+            const pdb = await openProductsDb();
+            if (pdb) {
+                const result = pdb.exec(`
+                    SELECT profile_slug,
+                           COUNT(*) as total_products,
+                           SUM(CASE WHEN download_links IS NOT NULL AND trim(download_links) != '' AND download_links != '[]' THEN 1 ELSE 0 END) as with_pdf
+                    FROM products
+                    GROUP BY profile_slug
+                `);
+                pdb.close();
+                if (result[0]) {
+                    const cols = result[0].columns;
+                    result[0].values.forEach(r => {
+                        const slug = r[cols.indexOf('profile_slug')];
+                        const total = r[cols.indexOf('total_products')] || 0;
+                        const withPdf = r[cols.indexOf('with_pdf')] || 0;
+                        dbStatsMap.set(slug, { total, withPdf });
+                    });
+                }
+            }
+        } catch (e) {}
 
-        if (!result[0]) return res.json({ stats: [] });
+        const stats = allProfiles.map(p => {
+            const dbStat = dbStatsMap.get(p.slug) || { total: 0, withPdf: 0 };
+            let total = dbStat.total;
+            let withPdf = dbStat.withPdf;
 
-        const cols = result[0].columns;
-        const stats = result[0].values.map(r => ({
-            profile_slug: r[cols.indexOf('profile_slug')],
-            total_products: r[cols.indexOf('total_products')],
-            with_pdf: r[cols.indexOf('with_pdf')]
-        }));
+            // Check profile sheet data
+            const sheetRows = extractPdfRowsFromProfileSheets(p.slug);
+            if (sheetRows.length > 0) {
+                total = Math.max(total, sheetRows.length);
+                const sheetWithPdf = sheetRows.filter(r => {
+                    try {
+                        const arr = JSON.parse(r.download_links || '[]');
+                        return Array.isArray(arr) && arr.length > 0;
+                    } catch (e) {
+                        return false;
+                    }
+                }).length;
+                withPdf = Math.max(withPdf, sheetWithPdf);
+            }
+
+            return {
+                profile_slug: p.slug,
+                profile_name: p.name || p.slug,
+                total_products: total,
+                with_pdf: withPdf
+            };
+        });
 
         res.json({ stats });
     } catch (e) {

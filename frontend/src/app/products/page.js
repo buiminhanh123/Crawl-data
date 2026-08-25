@@ -423,6 +423,221 @@ function ProductsContent() {
     const [harFieldMappings, setHarFieldMappings] = useState(DEFAULT_HAR_FIELD_MAPPINGS);
     const [savingHarMapping, setSavingHarMapping] = useState(false);
 
+    // Extraction Schema state
+    const SCHEMA_FIELD_LABELS = {
+        name:         '📝 Tên Sản Phẩm',
+        model:        '🔢 Model / Mã SP',
+        image_url:    '🖼️ Hình Ảnh',
+        description:  '📖 Mô Tả SP',
+        specs_json:   '📊 Thông Số Kỹ Thuật',
+        document_url: '📄 Link Tài Liệu / PDF',
+        detail_url:   '🌐 Link Sản Phẩm',
+        category:     '📂 Danh Mục',
+        series:       '📌 Series / Dòng SP',
+        brand:        '🏷️ Hãng / Thương Hiệu',
+        price:        '💰 Giá (nếu có)',
+    };
+    const SCHEMA_FIELD_KEYS = Object.keys(SCHEMA_FIELD_LABELS);
+    const SCHEMA_TYPES = [
+        { value: 'skip',       label: '— Bỏ Qua —' },
+        { value: 'css',        label: 'CSS Selector' },
+        { value: 'xpath',      label: 'XPath (Copy XPath)' },
+        { value: 'xpath_full', label: 'Full XPath (Copy full XPath)' },
+        { value: 'jsonld',     label: 'JSON-LD (Structured Data)' },
+        { value: 'jsonpath',   label: 'JSON Path (Embedded JSON)' },
+        { value: 'meta',       label: 'Meta Tag (name/property)' },
+        { value: 'regex',      label: 'Regex (capture group 1)' },
+    ];
+    const SCHEMA_ATTRS = [
+        { value: 'text',             label: 'Nội dung text' },
+        { value: 'html',             label: 'HTML bên trong' },
+        { value: 'href',             label: 'Link href (1 link đầu)' },
+        { value: 'href_all',         label: '🔗 Tất cả link href (danh sách)' },
+        { value: 'links_with_title', label: '📋 Danh sách Tên + Link (PDF/Docs)' },
+        { value: 'src',              label: 'Link ảnh src (1 ảnh đầu)' },
+        { value: 'src_all',          label: '🖼️ Tất cả link ảnh (danh sách)' },
+        { value: 'text_all',         label: '📝 Tất cả text (danh sách)' },
+        { value: 'content',          label: 'Thuộc tính content' },
+        { value: 'alt',              label: 'Thuộc tính alt' },
+        { value: 'value',            label: 'Thuộc tính value' },
+    ];
+    const [extractionSchema, setExtractionSchema] = useState({});
+    const [schemaLoaded, setSchemaLoaded] = useState(false);
+    const [savingSchema, setSavingSchema] = useState(false);
+    // Custom extra fields (beyond defaults)
+    const [customSchemaFields, setCustomSchemaFields] = useState([]); // [{key, label}]
+    const [showAddFieldModal, setShowAddFieldModal] = useState(false);
+    const [newFieldLabel, setNewFieldLabel] = useState('');
+    const [newFieldKey, setNewFieldKey] = useState('');
+    const [hiddenDefaultFields, setHiddenDefaultFields] = useState([]); // keys of hidden default fields
+    // Test URL
+    const [schemaTestUrl, setSchemaTestUrl] = useState('');
+    const [schemaTestResult, setSchemaTestResult] = useState(null);
+    const [schemaTestLoading, setSchemaTestLoading] = useState(false);
+    const [schemaTestError, setSchemaTestError] = useState('');
+    // Crawl
+    const [crawlSchemaRunning, setCrawlSchemaRunning] = useState(false);
+    const [crawlSchemaProgress, setCrawlSchemaProgress] = useState(null);
+    const [crawlSchemaOptions, setCrawlSchemaOptions] = useState({ maxUrls: 500, concurrency: 3, delay: 300, useBrowser: true });
+    const crawlPollRef = useRef(null);
+
+    const fetchExtractionSchema = async (slug) => {
+        try {
+            const data = await fetchApi(`/api/products/profiles/${slug}/schema`);
+            if (data?.schema) {
+                const { _customFields, _hiddenDefaults, ...schemaRules } = data.schema;
+                setExtractionSchema(schemaRules || {});
+                setCustomSchemaFields(Array.isArray(_customFields) ? _customFields : []);
+                setHiddenDefaultFields(Array.isArray(_hiddenDefaults) ? _hiddenDefaults : []);
+            } else {
+                setExtractionSchema({});
+                setCustomSchemaFields([]);
+                setHiddenDefaultFields([]);
+            }
+            setSchemaLoaded(true);
+        } catch (e) {
+            setSchemaLoaded(true);
+        }
+    };
+
+    const handleSaveSchema = async () => {
+        try {
+            setSavingSchema(true);
+            const schemaToSave = {
+                ...extractionSchema,
+                ...(customSchemaFields.length > 0 ? { _customFields: customSchemaFields } : {}),
+                ...(hiddenDefaultFields.length > 0 ? { _hiddenDefaults: hiddenDefaultFields } : {})
+            };
+            await fetchApi(`/api/products/profiles/${profileSlug}/schema`, {
+                method: 'POST',
+                body: JSON.stringify({ schema: schemaToSave })
+            });
+            toast('✅ Đã lưu Schema trích xuất thành công!', 'success');
+        } catch (e) {
+            toast('❌ ' + (e.message || 'Lỗi khi lưu Schema'), 'danger');
+        } finally {
+            setSavingSchema(false);
+        }
+    };
+
+    const handleAddCustomField = () => {
+        const label = newFieldLabel.trim();
+        const key = (newFieldKey.trim() || label.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_')).replace(/^_+|_+$/g, '');
+        if (!label || !key) { toast('⚠️ Nhập nhãn trường dữ liệu!', 'warning'); return; }
+        const allKeys = [...SCHEMA_FIELD_KEYS, ...customSchemaFields.map(f => f.key)];
+        if (allKeys.includes(key)) { toast('⚠️ Key "' + key + '" đã tồn tại!', 'warning'); return; }
+        setCustomSchemaFields(prev => [...prev, { key, label }]);
+        setNewFieldLabel('');
+        setNewFieldKey('');
+        setShowAddFieldModal(false);
+        toast('✅ Đã thêm trường "' + label + '"', 'success');
+    };
+
+    const handleDeleteCustomField = (key) => {
+        setCustomSchemaFields(prev => prev.filter(f => f.key !== key));
+        setExtractionSchema(prev => { const n = { ...prev }; delete n[key]; return n; });
+        toast('🗑️ Đã xóa trường "' + key + '"', 'success');
+    };
+
+    const handleDeleteDefaultField = (fieldKey) => {
+        const fieldLabel = SCHEMA_FIELD_LABELS[fieldKey] || fieldKey;
+        const confirmed = window.confirm(
+            `⚠️ CẢNH BÁO: Xóa trường "${fieldLabel}" khỏi schema!\n\n• Trường này sẽ bị xóa khỏi bảng Schema của profile này.\n• Profile khác hoặc khi tạo profile mới vẫn có đầy đủ các trường mặc định.\n• Dữ liệu sản phẩm cũ đã crawl trong database không bị mất.\n• Bạn có thể khôi phục lại bất kỳ lúc nào bằng nút "Khôi phục mặc định".\n\nBạn có chắc chắn muốn xóa không?`
+        );
+        if (!confirmed) return;
+        setHiddenDefaultFields(prev => [...prev, fieldKey]);
+        setExtractionSchema(prev => {
+            const n = { ...prev };
+            delete n[fieldKey];
+            return n;
+        });
+        toast('🗑️ Đã xóa trường "' + fieldLabel + '" khỏi schema (Nhớ bấm Lưu Schema)', 'success');
+    };
+
+    const handleRestoreDefaultField = (fieldKey) => {
+        setHiddenDefaultFields(prev => prev.filter(k => k !== fieldKey));
+        toast('✅ Đã khôi phục trường "' + (SCHEMA_FIELD_LABELS[fieldKey] || fieldKey) + '"', 'success');
+    };
+
+    const handleTestSchema = async () => {
+        if (!schemaTestUrl || !schemaTestUrl.startsWith('http')) {
+            toast('⚠️ Nhập URL hợp lệ bắt đầu bằng http(s)://', 'warning');
+            return;
+        }
+        const activeSchema = Object.fromEntries(
+            Object.entries(extractionSchema).filter(([, rule]) => rule?.type && rule.type !== 'skip')
+        );
+        if (Object.keys(activeSchema).length === 0) {
+            toast('⚠️ Chưa định nghĩa rule nào trong Schema. Nhập ít nhất 1 field.', 'warning');
+            return;
+        }
+        setSchemaTestLoading(true);
+        setSchemaTestResult(null);
+        setSchemaTestError('');
+        try {
+            const res = await fetchApi(`/api/products/profiles/${profileSlug}/schema/test`, {
+                method: 'POST',
+                body: JSON.stringify({ url: schemaTestUrl, schema: activeSchema })
+            });
+            if (res?.success) {
+                setSchemaTestResult(res.preview);
+            } else {
+                setSchemaTestError(res?.error || 'Lỗi không xác định');
+            }
+        } catch (e) {
+            setSchemaTestError(e.message || 'Lỗi kết nối server');
+        } finally {
+            setSchemaTestLoading(false);
+        }
+    };
+
+    const startCrawlSchema = async () => {
+        try {
+            const res = await fetchApi(`/api/products/profiles/${profileSlug}/crawl-schema`, {
+                method: 'POST',
+                body: JSON.stringify(crawlSchemaOptions)
+            });
+            if (res?.success) {
+                setCrawlSchemaRunning(true);
+                setCrawlSchemaProgress({ running: true, processed: 0, total: 0, found: 0, errors: 0 });
+                toast('🚀 Đã bắt đầu crawl Schema! Đang theo dõi tiến độ...', 'success');
+                // Start polling
+                crawlPollRef.current = setInterval(async () => {
+                    try {
+                        const status = await fetchApi(`/api/products/profiles/${profileSlug}/crawl-status`);
+                        setCrawlSchemaProgress(status);
+                        if (!status?.running && status?.done) {
+                            clearInterval(crawlPollRef.current);
+                            setCrawlSchemaRunning(false);
+                            toast(`✅ Crawl xong! ${status.found} sản phẩm tìm thấy từ ${status.processed} URLs.`, 'success');
+                            // Reload HAR report & Products list with new merged data
+                            fetchHarReport(profileSlug);
+                            fetchProducts();
+                        }
+                    } catch(e) {}
+                }, 2000);
+            } else {
+                toast('❌ ' + (res?.error || 'Không thể bắt đầu crawl'), 'danger');
+            }
+        } catch (e) {
+            toast('❌ ' + (e.message || 'Lỗi khi bắt đầu crawl'), 'danger');
+        }
+    };
+
+    const stopCrawlSchema = async () => {
+        try {
+            await fetchApi(`/api/products/profiles/${profileSlug}/crawl-schema/stop`, { method: 'POST' });
+            clearInterval(crawlPollRef.current);
+            setCrawlSchemaRunning(false);
+            toast('⏹ Đã dừng crawl.', 'info');
+        } catch (e) {}
+    };
+
+    // Cleanup polling on unmount
+    useEffect(() => {
+        return () => { if (crawlPollRef.current) clearInterval(crawlPollRef.current); };
+    }, []);
+
     const fetchHarReport = async (slug) => {
         setHarReportLoading(true);
         try {
@@ -441,6 +656,7 @@ function ProductsContent() {
             setHarReportLoading(false);
         }
     };
+
 
     const handleSaveHarMapping = async () => {
         try {
@@ -505,12 +721,28 @@ function ProductsContent() {
                 localStorage.removeItem('open_har_tab_for');
                 fetchHarReport(profileSlug);
                 fetchProfileMeta(profileSlug);
+                fetchExtractionSchema(profileSlug);
                 setViewMode('har');
             }
         } catch (e) {}
 
         return () => window.removeEventListener('har_analysis_ready', handleHarReady);
     }, [profileSlug, fetchProfileMeta]);
+
+    // Load schema when switching to HAR tab
+    useEffect(() => {
+        if (viewMode === 'har' && !schemaLoaded) {
+            fetchExtractionSchema(profileSlug);
+        }
+    }, [viewMode, profileSlug, schemaLoaded]);
+
+    // Reset schemaLoaded when profile changes
+    useEffect(() => {
+        setSchemaLoaded(false);
+        setSchemaTestResult(null);
+        setCrawlSchemaProgress(null);
+        setCrawlSchemaRunning(false);
+    }, [profileSlug]);
 
 
     const maxPageCols = useMemo(() => {
@@ -1017,6 +1249,13 @@ function ProductsContent() {
     const [showIncompleteRowsModal, setShowIncompleteRowsModal] = useState(false);
     const [auditModalTab, setAuditModalTab] = useState('mandatory');
     const [showAuditMenuDropdown, setShowAuditMenuDropdown] = useState(false);
+    // Spec Field Analyzer modal state
+    const [showSpecAnalyzerModal, setShowSpecAnalyzerModal] = useState(false);
+    const [specAnalyzerColIdx, setSpecAnalyzerColIdx] = useState(-1); // -1 = not selected
+    const [specAnalyzerCatColIdx, setSpecAnalyzerCatColIdx] = useState(-1); // -1 = not selected
+    const [specAnalyzerSelectedCat, setSpecAnalyzerSelectedCat] = useState('ALL'); // 'ALL' or specific category name/id
+    const [specAnalyzerResult, setSpecAnalyzerResult] = useState(null); // { fields: [{name, count, rows}] }
+    const [specAnalyzerRunning, setSpecAnalyzerRunning] = useState(false);
     const [aiTaskState, setAiTaskState] = useState({
         isRunning: false,
         tabName: '',
@@ -1227,6 +1466,121 @@ function ProductsContent() {
             idx = Math.floor(idx / 26) - 1;
         }
         return letter;
+    };
+
+    // ============================================================
+    // Spec Field Analyzer: parse HTML <td>Field</td><td>Value</td>
+    // from a selected column across all rows of current sheet tab,
+    // optionally filtered by category column & value,
+    // then count occurrences of each field name.
+    // ============================================================
+    const runSpecAnalyzer = () => {
+        if (specAnalyzerColIdx < 0) return;
+        setSpecAnalyzerRunning(true);
+        setSpecAnalyzerResult(null);
+
+        try {
+            const activeSheet = profileSheets.find(s => s.name === activeSheetTabName);
+            if (!activeSheet || !activeSheet.data || activeSheet.data.length < 2) {
+                setSpecAnalyzerResult({ error: 'Không có dữ liệu trong tab hiện tại.' });
+                return;
+            }
+
+            const rows = activeSheet.data;
+            // rows[0] is header row — skip it
+            const fieldMap = {}; // fieldName -> { count, exampleRows: [] }
+
+            let totalCategoryRows = 0;
+            let scannedCategoryRows = 0;
+
+            for (let rIdx = 1; rIdx < rows.length; rIdx++) {
+                const row = rows[rIdx];
+                if (!Array.isArray(row)) continue;
+
+                // Category filter
+                if (specAnalyzerCatColIdx >= 0 && specAnalyzerSelectedCat && specAnalyzerSelectedCat !== 'ALL') {
+                    const rowCat = String(row[specAnalyzerCatColIdx] || '').trim();
+                    const targetCat = specAnalyzerSelectedCat === '(Trống / Chưa phân loại)' ? '' : specAnalyzerSelectedCat;
+                    if (rowCat !== targetCat) {
+                        continue; // Skip rows that don't match the selected category
+                    }
+                }
+
+                totalCategoryRows++;
+
+                const cellVal = row[specAnalyzerColIdx];
+                if (!cellVal || String(cellVal).trim() === '') continue;
+
+                scannedCategoryRows++;
+                const htmlStr = String(cellVal);
+
+                // Parse pairs: <td>Field</td><td>Value</td>  (or <th> variants)
+                // Use a simple regex to extract consecutive td/th pairs
+                const tdRegex = /<(?:td|th)[^>]*>([\s\S]*?)<\/(?:td|th)>/gi;
+                const cells = [];
+                let m;
+                while ((m = tdRegex.exec(htmlStr)) !== null) {
+                    // Strip inner HTML tags and decode basic HTML entities
+                    const text = m[1]
+                        .replace(/<[^>]+>/g, '')
+                        .replace(/&amp;/g, '&')
+                        .replace(/&lt;/g, '<')
+                        .replace(/&gt;/g, '>')
+                        .replace(/&nbsp;/g, ' ')
+                        .replace(/&#160;/g, ' ')
+                        .trim();
+                    cells.push(text);
+                }
+
+                // Group cells into pairs: cells[0]=field, cells[1]=value, cells[2]=field, ...
+                for (let i = 0; i < cells.length - 1; i += 2) {
+                    const fieldName = cells[i];
+                    if (!fieldName) continue;
+
+                    // Normalize: remove trailing colon, collapse whitespace
+                    const normalized = fieldName.replace(/:\s*$/, '').replace(/\s+/g, ' ').trim();
+                    if (!normalized) continue;
+
+                    if (!fieldMap[normalized]) {
+                        fieldMap[normalized] = { count: 0, exampleRows: [] };
+                    }
+                    fieldMap[normalized].count += 1;
+                    if (fieldMap[normalized].exampleRows.length < 3) {
+                        fieldMap[normalized].exampleRows.push(rIdx); // store 1-based display row index
+                    }
+                }
+            }
+
+            // Sort by count desc
+            const sorted = Object.entries(fieldMap)
+                .map(([name, info]) => ({ name, count: info.count, exampleRows: info.exampleRows }))
+                .sort((a, b) => b.count - a.count);
+
+            const colHeader = rows[0] && rows[0][specAnalyzerColIdx]
+                ? String(rows[0][specAnalyzerColIdx])
+                : `Cột #${specAnalyzerColIdx + 1}`;
+
+            const catColHeader = specAnalyzerCatColIdx >= 0 && rows[0] && rows[0][specAnalyzerCatColIdx]
+                ? String(rows[0][specAnalyzerCatColIdx])
+                : (specAnalyzerCatColIdx >= 0 ? `Cột #${specAnalyzerCatColIdx + 1}` : null);
+
+            const isFiltered = specAnalyzerCatColIdx >= 0 && specAnalyzerSelectedCat && specAnalyzerSelectedCat !== 'ALL';
+
+            setSpecAnalyzerResult({
+                fields: sorted,
+                totalRows: totalCategoryRows,
+                scannedRows: scannedCategoryRows,
+                colHeader,
+                catColHeader,
+                categoryFilter: isFiltered ? specAnalyzerSelectedCat : 'Tất cả danh mục',
+                isFiltered,
+                sheetName: activeSheetTabName
+            });
+        } catch (err) {
+            setSpecAnalyzerResult({ error: `Lỗi phân tích: ${err.message}` });
+        } finally {
+            setSpecAnalyzerRunning(false);
+        }
     };
 
     const handleAddPageRows = async (defaultCount = 1) => {
@@ -1526,6 +1880,74 @@ function ProductsContent() {
         }
     };
 
+    // RFC 4180 compliant TSV parser that supports multi-line quoted cells from Google Sheets & Excel
+    const parseClipboardTsv = (text) => {
+        if (!text || typeof text !== 'string') return [];
+        const rows = [];
+        let currentRow = [];
+        let currentCell = '';
+        let inQuotes = false;
+        const str = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            const nextChar = str[i + 1];
+
+            if (inQuotes) {
+                if (char === '"') {
+                    if (nextChar === '"') {
+                        currentCell += '"';
+                        i++;
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    currentCell += char;
+                }
+            } else {
+                if (char === '"') {
+                    inQuotes = true;
+                } else if (char === '\t') {
+                    currentRow.push(currentCell);
+                    currentCell = '';
+                } else if (char === '\n') {
+                    currentRow.push(currentCell);
+                    rows.push(currentRow);
+                    currentRow = [];
+                    currentCell = '';
+                } else {
+                    currentCell += char;
+                }
+            }
+        }
+        if (currentCell.length > 0 || currentRow.length > 0) {
+            currentRow.push(currentCell);
+            rows.push(currentRow);
+        }
+        if (rows.length > 0) {
+            const lastRow = rows[rows.length - 1];
+            if (lastRow.length === 1 && lastRow[0] === '') {
+                rows.pop();
+            }
+        }
+        return rows;
+    };
+
+    // RFC 4180 compliant TSV formatter for system clipboard
+    const formatClipboardTsv = (matrix) => {
+        if (!Array.isArray(matrix)) return '';
+        return matrix.map(row => {
+            if (!Array.isArray(row)) return '';
+            return row.map(cell => {
+                const str = cell !== undefined && cell !== null ? String(cell) : '';
+                if (str.includes('\t') || str.includes('\n') || str.includes('\r') || str.includes('"')) {
+                    return `"${str.replace(/"/g, '""')}"`;
+                }
+                return str;
+            }).join('\t');
+        }).join('\n');
+    };
+
     // 2D Cell Range Operations (Copy, Cut, Paste, Clear)
     const handleCopyRangeContent = (minRow, maxRow, minCol, maxCol) => {
         if (!activePageSheetData || activePageSheetData.length === 0) return;
@@ -1542,7 +1964,7 @@ function ProductsContent() {
         cellClipboardRef.current = { type: 'copy', data: copiedRows };
 
         // Copy TSV string to System Clipboard for Google Sheets / Excel interoperability
-        const tsvText = copiedRows.map(r => r.join('\t')).join('\n');
+        const tsvText = formatClipboardTsv(copiedRows);
         navigator.clipboard.writeText(tsvText).catch(() => {});
 
         const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
@@ -1609,7 +2031,7 @@ function ProductsContent() {
         try {
             const text = await navigator.clipboard.readText();
             if (text && text.trim()) {
-                pasteMatrix = text.split('\n').map(line => line.split('\t'));
+                pasteMatrix = parseClipboardTsv(text);
             }
         } catch (err) {}
 
@@ -1638,7 +2060,7 @@ function ProductsContent() {
 
                 pasteRow.forEach((val, cOffset) => {
                     const targetC = startCol + cOffset;
-                    existingData[targetR][targetC] = val !== undefined ? String(val).trim() : '';
+                    existingData[targetR][targetC] = val !== undefined ? String(val) : '';
                 });
             });
 
@@ -2258,6 +2680,40 @@ function ProductsContent() {
                     )}
                 </button>
 
+                {/* Spec Field Analyzer Button */}
+                <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                        const activeSheet = profileSheets.find(s => s.name === activeSheetTabName);
+                        const headers = (activeSheet?.data?.[0] || []).map(h => String(h || '').trim().toLowerCase());
+                        
+                        // Auto-detect spec column
+                        let autoSpecIdx = headers.findIndex(h => h.includes('noi_dung') || h.includes('thông số') || h.includes('thong_so') || h.includes('specs') || h.includes('nội dung'));
+                        
+                        // Auto-detect category column
+                        let autoCatIdx = headers.findIndex(h => h.includes('danh_muc') || h.includes('danh mục') || h.includes('category') || h.includes('cat_id') || h.includes('danh_muc_id'));
+                        if (autoCatIdx === -1 && headers.length > 17) autoCatIdx = 17; // standard col R
+
+                        setSpecAnalyzerResult(null);
+                        setSpecAnalyzerColIdx(autoSpecIdx >= 0 ? autoSpecIdx : -1);
+                        setSpecAnalyzerCatColIdx(autoCatIdx >= 0 ? autoCatIdx : -1);
+                        setSpecAnalyzerSelectedCat('ALL');
+                        setShowSpecAnalyzerModal(true);
+                    }}
+                    style={{
+                        display: 'flex', alignItems: 'center', gap: 7,
+                        fontSize: 13.5, padding: '8px 15px', fontWeight: 700,
+                        background: 'linear-gradient(135deg, #6d28d9, #4f46e5)', color: '#ffffff',
+                        border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(109, 40, 217, 0.3)'
+                    }}
+                    title="Thống kê tần suất xuất hiện của từng trường (field) trong bảng thông số HTML"
+                >
+                    <span style={{ fontSize: 15 }}>📊</span>
+                    <span>Phân Tích Trường TTS</span>
+                </button>
+
                 {/* Unified Data Audit Center Menu Dropdown Button */}
                 <div style={{ position: 'relative', marginLeft: 'auto' }}>
                     <button
@@ -2515,7 +2971,7 @@ function ProductsContent() {
                                         type="button"
                                         onClick={handleUndo}
                                         style={{ padding: '5px 8px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 4, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                        title="Hoàn tác (Ctrl+Z)"
+                                        title="Ho�n t�c (Ctrl+Z)"
                                     >
                                         <Undo2 size={14} />
                                     </button>
@@ -3106,8 +3562,8 @@ function ProductsContent() {
                                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                         {/* Quick Add Rows & Columns */}
                                         <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginRight: 8, borderRight: '1px solid var(--border-color)', paddingRight: 8 }}>
-                                            <button type="button" onClick={() => handleAddPageRows(1)} style={{ padding: '3px 8px', fontSize: 11.5, background: 'var(--bg-card)', border: '1px solid #bbf7d0', borderRadius: 3, cursor: 'pointer', color: '#15803d', fontWeight: 600 }} title="Thêm hàng mới vào cuối Tab">+ Hàng</button>
-                                            <button type="button" onClick={() => handleAddPageColumn(1)} style={{ padding: '3px 8px', fontSize: 11.5, background: 'var(--bg-card)', border: '1px solid #bfdbfe', borderRadius: 3, cursor: 'pointer', color: '#1d4ed8', fontWeight: 600 }} title="Thêm Cột mới vào Tab">+ Cột Mới</button>
+                                            <button type="button" onClick={() => handleAddPageRows(1)} style={{ padding: '3px 8px', fontSize: 11.5, background: 'var(--bg-card)', border: '1px solid #bbf7d0', borderRadius: 3, cursor: 'pointer', color: '#15803d', fontWeight: 600 }} title="Th�m h�ng m�i v�o cu�i Tab">+ Hàng</button>
+                                            <button type="button" onClick={() => handleAddPageColumn(1)} style={{ padding: '3px 8px', fontSize: 11.5, background: 'var(--bg-card)', border: '1px solid #bfdbfe', borderRadius: 3, cursor: 'pointer', color: '#1d4ed8', fontWeight: 600 }} title="Th�m C�t m�i v�o Tab">+ Cột Mới</button>
                                         </div>
 
                                         {activePageSheetData.length > pageRowLimit && (
@@ -3286,28 +3742,51 @@ function ProductsContent() {
                             )}
 
                             {/* Specifications Grid */}
-                            <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12 }}>Technical Specifications</h5>
+                            <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12 }}>Thông Số Kỹ Thuật (Specifications)</h5>
                             {(() => {
+                                const rawSpecs = selectedProduct.specifications || selectedProduct.specs_json;
+                                if (!rawSpecs) {
+                                    return (
+                                        <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 16 }}>
+                                            Chưa có thông số kỹ thuật cho sản phẩm này.
+                                        </p>
+                                    );
+                                }
+                                // If rawSpecs is an HTML table or HTML block
+                                if (typeof rawSpecs === 'string' && (rawSpecs.includes('<table') || rawSpecs.includes('<div') || rawSpecs.includes('<tr'))) {
+                                    return (
+                                        <div 
+                                            style={{ overflowX: 'auto', background: 'var(--bg-primary)', padding: 14, borderRadius: 8, border: '1px solid var(--border-color)', fontSize: 12.5, lineHeight: 1.5, maxHeight: 400, overflowY: 'auto' }}
+                                            dangerouslySetInnerHTML={{ __html: rawSpecs }}
+                                        />
+                                    );
+                                }
                                 let specsObj = {};
                                 if (selectedProduct.parsedSpecs && typeof selectedProduct.parsedSpecs === 'object') {
                                     specsObj = selectedProduct.parsedSpecs;
-                                } else if (typeof selectedProduct.specifications === 'string') {
-                                    try { specsObj = JSON.parse(selectedProduct.specifications) || {}; } catch (e) {}
-                                } else if (selectedProduct.specifications && typeof selectedProduct.specifications === 'object') {
-                                    specsObj = selectedProduct.specifications;
+                                } else if (typeof rawSpecs === 'string') {
+                                    try { specsObj = JSON.parse(rawSpecs) || {}; } catch (e) {
+                                        return (
+                                            <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--text-secondary)', background: 'var(--bg-primary)', padding: 12, borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                                                {rawSpecs}
+                                            </div>
+                                        );
+                                    }
+                                } else if (rawSpecs && typeof rawSpecs === 'object') {
+                                    specsObj = rawSpecs;
                                 }
                                 const entries = Object.entries(specsObj);
                                 if (entries.length === 0) {
                                     return (
-                                        <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 20 }}>
-                                            No technical specifications parsed for this item.
+                                        <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 16 }}>
+                                            Chưa có thông số kỹ thuật cho sản phẩm này.
                                         </p>
                                     );
                                 }
                                 return (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
                                         {entries.map(([key, val]) => (
-                                            <div key={key} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: '10px 12px', borderBottom: '1px solid var(--border-color)', fontSize: 13, alignItems: 'start' }}>
+                                            <div key={key} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: '8px 12px', borderBottom: '1px solid var(--border-color)', fontSize: 13, alignItems: 'start' }}>
                                                 <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{key}</span>
                                                 <span style={{ color: 'var(--text-secondary)' }}>{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>
                                             </div>
@@ -3316,56 +3795,84 @@ function ProductsContent() {
                                 );
                             })()}
 
-                            {/* Download Links */}
+                            {/* Download Links & Documents */}
                             {(() => {
+                                let downloadsArr = [];
+                                
+                                // Helper to add links from text (single or multi-line "Title: URL" or "URL")
+                                const addFromText = (txt, defaultLabel = 'Tài Liệu') => {
+                                    if (!txt || typeof txt !== 'string') return;
+                                    const lines = txt.split('\n').map(l => l.trim()).filter(Boolean);
+                                    for (const line of lines) {
+                                        const colonIdx = line.indexOf(': http');
+                                        if (colonIdx > 0) {
+                                            const title = line.slice(0, colonIdx).trim();
+                                            const u = line.slice(colonIdx + 2).trim();
+                                            downloadsArr.push({ name: title || defaultLabel, url: u });
+                                        } else if (line.startsWith('http')) {
+                                            downloadsArr.push({ name: defaultLabel, url: line });
+                                        }
+                                    }
+                                };
+
+                                if (selectedProduct.document_url) addFromText(selectedProduct.document_url, 'Catalog / Tài Liệu PDF');
+                                if (selectedProduct.hdsd) addFromText(selectedProduct.hdsd, 'Sách Hướng Dẫn Sử Dụng (HDSD)');
+
+                                // From parsed custom_data
+                                if (selectedProduct.custom_data) {
+                                    try {
+                                        const cdata = typeof selectedProduct.custom_data === 'string' ? JSON.parse(selectedProduct.custom_data) : selectedProduct.custom_data;
+                                        if (cdata && typeof cdata === 'object') {
+                                            Object.entries(cdata).forEach(([k, v]) => {
+                                                if (k !== 'url' && k !== 'image_url' && typeof v === 'string' && (v.includes('http') || v.includes('.pdf'))) {
+                                                    addFromText(v, SCHEMA_FIELD_LABELS[k] || k);
+                                                }
+                                            });
+                                        }
+                                    } catch(e) {}
+                                }
+
+                                // From legacy fields
                                 let rawDl = selectedProduct?.parsedDownloads || selectedProduct?.download_links;
                                 if (typeof rawDl === 'string') {
                                     try { rawDl = JSON.parse(rawDl); } catch (e) { rawDl = []; }
                                 }
-
-                                let downloadsArr = [];
                                 if (Array.isArray(rawDl)) {
-                                    downloadsArr = rawDl.map(item => {
-                                        if (typeof item === 'string') return { name: 'Download File', url: item };
-                                        if (item && typeof item === 'object') {
-                                            return { name: item.name || item.title || 'Download File', url: item.url || item.href || item.link || '' };
-                                        }
-                                        return null;
-                                    }).filter(d => d && d.url);
-                                } else if (rawDl && typeof rawDl === 'object') {
-                                    downloadsArr = Object.entries(rawDl).map(([key, val]) => {
-                                        if (typeof val === 'string') {
-                                            const titleMap = { catalogue: 'Catalogue PDF', manual: 'Sách Hướng Dẫn PDF', datasheet: 'Datasheet PDF' };
-                                            const name = titleMap[key.toLowerCase()] || (key.charAt(0).toUpperCase() + key.slice(1));
-                                            return { name, url: val };
-                                        } else if (val && typeof val === 'object') {
-                                            return { name: val.name || val.title || key, url: val.url || val.href || '' };
-                                        }
-                                        return null;
-                                    }).filter(d => d && d.url);
+                                    rawDl.forEach(item => {
+                                        if (typeof item === 'string' && item.startsWith('http')) downloadsArr.push({ name: 'Download File', url: item });
+                                        else if (item?.url) downloadsArr.push({ name: item.name || item.title || 'Download File', url: item.url });
+                                    });
                                 }
 
-                                if (!Array.isArray(downloadsArr) || downloadsArr.length === 0) {
+                                // Deduplicate downloadsArr by URL
+                                const seenUrls = new Set();
+                                downloadsArr = downloadsArr.filter(d => {
+                                    if (!d.url || seenUrls.has(d.url)) return false;
+                                    seenUrls.add(d.url);
+                                    return true;
+                                });
+
+                                if (downloadsArr.length === 0) {
                                     return (
-                                        <div style={{ marginTop: 28 }}>
+                                        <div style={{ marginTop: 24 }}>
                                             <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                <Download size={15} style={{ color: 'var(--text-muted)' }} /> Downloads
+                                                <Download size={15} style={{ color: 'var(--text-muted)' }} /> Tài Liệu & File Tải Về (Downloads)
                                             </h5>
-                                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No download files found for this product.</p>
+                                            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Chưa có file tải về cho sản phẩm này.</p>
                                         </div>
                                     );
                                 }
                                 return (
-                                    <div style={{ marginTop: 28 }}>
+                                    <div style={{ marginTop: 24 }}>
                                         <h5 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <Download size={15} style={{ color: 'var(--accent)' }} /> Downloads ({downloadsArr.length} files)
+                                            <Download size={15} style={{ color: 'var(--accent)' }} /> Tài Liệu & File Tải Về ({downloadsArr.length} files)
                                         </h5>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                             {downloadsArr.map((dl, idx) => {
                                                 const url = dl.url || '';
                                                 const ext = url.split('?')[0].split('.').pop().toLowerCase();
                                                 const extColors = { pdf: '#ef4444', zip: '#f59e0b', exe: '#8b5cf6', apk: '#10b981', fw: '#0ea5e9', bin: '#64748b' };
-                                                const color = extColors[ext] || '#64748b';
+                                                const color = extColors[ext] || '#ef4444';
                                                 return (
                                                     <a
                                                         key={idx}
@@ -4096,7 +4603,7 @@ function ProductsContent() {
                                                                     }
                                                                 }}
                                                                 style={{ padding: '6px 8px', background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}
-                                                                title="Xóa sản phẩm này"
+                                                                title="X�a s�n ph�m n�y"
                                                             >
                                                                 <Trash2 size={13} />
                                                             </button>
@@ -4445,7 +4952,7 @@ function ProductsContent() {
                                                                     }));
                                                                 }}
                                                                 style={{
-                                                                    padding: '6px 10px',
+                                     padding: '6px 10px',
                                                                     fontSize: 12,
                                                                     fontWeight: 600,
                                                                     borderRadius: 6,
@@ -4469,6 +4976,382 @@ function ProductsContent() {
                                             })}
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+
+                            {/* ══════════════════════════════════════════════════════ */}
+                            {/* Section: Schema Trích Xuất Chính Xác                  */}
+                            {/* ══════════════════════════════════════════════════════ */}
+                            <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
+                                <div style={{ padding: '14px 20px', background: 'linear-gradient(135deg, #0f2027 0%, #1a3a4a 100%)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                                    <div>
+                                        <h4 style={{ margin: '0 0 3px', fontSize: 14, fontWeight: 700, color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <span>🎯</span> Schema Trích Xuất Chính Xác
+                                        </h4>
+                                        <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.6)' }}>
+                                            Định nghĩa 1 lần, dùng mãi. App dùng schema này để crawl đúng từng field thay vì đoán từ HAR.
+                                        </span>
+                                    </div>
+                                    <button
+                                         type="button"
+                                        onClick={handleSaveSchema}
+                                        disabled={savingSchema}
+                                        style={{ padding: '8px 18px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: 13, cursor: savingSchema ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 7, boxShadow: '0 2px 8px rgba(14,165,233,0.4)', whiteSpace: 'nowrap' }}
+                                    >
+                                        {savingSchema ? <Loader2 size={14} className="spin" /> : <span>💾</span>} Lưu Schema
+                                    </button>
+                                </div>
+                                <div style={{ overflowX: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                                        <thead>
+                                            <tr style={{ background: 'var(--bg-secondary)', borderBottom: '2px solid var(--border-color)' }}>
+                                                <th style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 700, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', width: 170 }}>Trường Dữ Liệu</th>
+                                                <th style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 700, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', width: 200 }}>Loại Trích Xuất</th>
+                                                <th style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 700, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Selector / Path / Pattern</th>
+                                                <th style={{ padding: '9px 14px', textAlign: 'left', fontWeight: 700, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', width: 160 }}>Lấy Thuộc Tính</th>
+                                                <th style={{ padding: '9px 14px', textAlign: 'center', fontWeight: 700, fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', width: 48 }}></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {SCHEMA_FIELD_KEYS.filter(k => !hiddenDefaultFields.includes(k)).map((fieldKey) => {
+                                                const rule = extractionSchema[fieldKey] || {};
+                                                const isActive = rule.type && rule.type !== 'skip';
+                                                return (
+                                                    <tr key={fieldKey} style={{ borderBottom: '1px solid var(--border-color)', background: isActive ? 'rgba(14,165,233,0.04)' : 'var(--bg-card)' }}>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <div style={{ fontWeight: 600, fontSize: 13, color: isActive ? '#0ea5e9' : 'var(--text-secondary)' }}>{SCHEMA_FIELD_LABELS[fieldKey]}</div>
+                                                            <div style={{ fontSize: 10.5, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{fieldKey}</div>
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <select
+                                                                value={rule.type || 'skip'}
+                                                                onChange={e => setExtractionSchema(prev => ({ ...prev, [fieldKey]: { ...prev[fieldKey], type: e.target.value, selector: prev[fieldKey]?.selector || '', attr: prev[fieldKey]?.attr || 'text' } }))}
+                                                                style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: isActive ? '1.5px solid #0ea5e9' : '1px solid var(--border-color)', background: 'var(--bg-primary)', color: isActive ? '#0ea5e9' : 'var(--text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                                                            >
+                                                                {SCHEMA_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                                                            </select>
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <input
+                                                                type="text"
+                                                                value={rule.selector || ''}
+                                                                placeholder={
+                                                                    rule.type === 'css' ? 'vd: h1.product-title' :
+                                                                    rule.type === 'xpath' ? 'vd: //*[@id="title"] hoặc //h1' :
+                                                                    rule.type === 'xpath_full' ? 'vd: /html/body/div[1]/main/h1' :
+                                                                    rule.type === 'jsonld' ? 'vd: Product.name' :
+                                                                    rule.type === 'meta' ? 'vd: description' :
+                                                                    rule.type === 'regex' ? 'vd: SKU:\\s*(\\w+)' : 'Nhập selector...'
+                                                                }
+                                                                disabled={!isActive}
+                                                                onChange={e => setExtractionSchema(prev => ({ ...prev, [fieldKey]: { ...prev[fieldKey], selector: e.target.value } }))}
+                                                                style={{ width: '100%', padding: '5px 10px', borderRadius: 5, border: '1px solid var(--border-color)', background: isActive ? 'var(--bg-primary)' : 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'monospace', opacity: isActive ? 1 : 0.5, boxSizing: 'border-box' }}
+                                                            />
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <select
+                                                                value={rule.attr || 'text'}
+                                                                disabled={!isActive || rule.type === 'jsonld' || rule.type === 'jsonpath' || rule.type === 'meta' || rule.type === 'regex'}
+                                                                onChange={e => setExtractionSchema(prev => ({ ...prev, [fieldKey]: { ...prev[fieldKey], attr: e.target.value } }))}
+                                                                style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', opacity: (isActive && (rule.type === 'css' || rule.type === 'xpath' || rule.type === 'xpath_full')) ? 1 : 0.4 }}
+                                                            >
+                                                                {SCHEMA_ATTRS.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+                                                            </select>
+                                                        </td>
+                                                        <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                                            <button
+                                                                type="button"
+                                                                title="Xóa trường này khỏi schema"
+                                                                onClick={() => handleDeleteDefaultField(fieldKey)}
+                                                                style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 5, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}
+                                                            >🗑️</button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                            {customSchemaFields.map((cf) => {
+                                                const fieldKey = cf.key;
+                                                const rule = extractionSchema[fieldKey] || {};
+                                                const isActive = rule.type && rule.type !== 'skip';
+                                                return (
+                                                    <tr key={fieldKey} style={{ borderBottom: '1px solid var(--border-color)', background: isActive ? 'rgba(168,85,247,0.05)' : 'rgba(168,85,247,0.02)' }}>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <div style={{ fontWeight: 600, fontSize: 13, color: isActive ? '#a855f7' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                                                <span style={{ fontSize: 10, background: '#f3e8ff', color: '#7c3aed', padding: '1px 5px', borderRadius: 4, fontWeight: 700 }}>TUỲ CHỈNH</span>
+                                                                {cf.label}
+                                                            </div>
+                                                            <div style={{ fontSize: 10.5, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{fieldKey}</div>
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <select
+                                                                value={rule.type || 'skip'}
+                                                                onChange={e => setExtractionSchema(prev => ({ ...prev, [fieldKey]: { ...prev[fieldKey], type: e.target.value, selector: prev[fieldKey]?.selector || '', attr: prev[fieldKey]?.attr || 'text' } }))}
+                                                                style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: isActive ? '1.5px solid #a855f7' : '1px solid var(--border-color)', background: 'var(--bg-primary)', color: isActive ? '#a855f7' : 'var(--text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                                                            >
+                                                                {SCHEMA_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                                                            </select>
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <input
+                                                                type="text"
+                                                                value={rule.selector || ''}
+                                                                placeholder={rule.type === 'css' ? 'vd: h1.product-title' : rule.type === 'jsonld' ? 'vd: Product.name' : rule.type === 'meta' ? 'vd: description' : rule.type === 'regex' ? 'vd: SKU:\\s*(\\w+)' : 'Nhap selector...'}
+                                                                disabled={!isActive}
+                                                                onChange={e => setExtractionSchema(prev => ({ ...prev, [fieldKey]: { ...prev[fieldKey], selector: e.target.value } }))}
+                                                                style={{ width: '100%', padding: '5px 10px', borderRadius: 5, border: '1px solid var(--border-color)', background: isActive ? 'var(--bg-primary)' : 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'monospace', opacity: isActive ? 1 : 0.5, boxSizing: 'border-box' }}
+                                                            />
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px' }}>
+                                                            <select
+                                                                value={rule.attr || 'text'}
+                                                                disabled={!isActive || rule.type === 'jsonld' || rule.type === 'jsonpath' || rule.type === 'meta' || rule.type === 'regex'}
+                                                                onChange={e => setExtractionSchema(prev => ({ ...prev, [fieldKey]: { ...prev[fieldKey], attr: e.target.value } }))}
+                                                                style={{ width: '100%', padding: '5px 8px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', opacity: (isActive && rule.type === 'css') ? 1 : 0.4 }}
+                                                            >
+                                                                {SCHEMA_ATTRS.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+                                                            </select>
+                                                        </td>
+                                                        <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                                            <button
+                                                                type="button"
+                                                                title="Xóa trường này"
+                                                                onClick={() => handleDeleteCustomField(fieldKey)}
+                                                                style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 5, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}
+                                                            >🗑️</button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                {showAddFieldModal && (
+                                    <div style={{ padding: '14px 20px', background: 'rgba(124,58,237,0.06)', borderTop: '2px dashed rgba(124,58,237,0.35)', display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 180px' }}>
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed' }}>Tên hiển thị <span style={{ color: '#ef4444' }}>*</span></label>
+                                            <input
+                                                autoFocus
+                                                type="text"
+                                                value={newFieldLabel}
+                                                onChange={e => setNewFieldLabel(e.target.value)}
+                                                placeholder="vd: Màu Sắc"
+                                                style={{ padding: '6px 10px', borderRadius: 6, border: '1.5px solid #a855f7', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13 }}
+                                            />
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed' }}>Key (tùy chọn — tự sinh nếu trống)</label>
+                                            <input
+                                                type="text"
+                                                value={newFieldKey}
+                                                onChange={e => setNewFieldKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+                                                placeholder="vd: mau_sac"
+                                                onKeyDown={e => e.key === 'Enter' && handleAddCustomField()}
+                                                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace' }}
+                                            />
+                                        </div>
+                                        <button type="button" onClick={handleAddCustomField}
+                                            style={{ padding: '7px 16px', background: '#7c3aed', color: 'white', border: 'none', borderRadius: 6, fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                            ＋ Thêm
+                                        </button>
+                                        <button type="button" onClick={() => { setShowAddFieldModal(false); setNewFieldLabel(''); setNewFieldKey(''); }}
+                                            style={{ padding: '7px 12px', background: 'var(--bg-secondary)', color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                                            Hủy
+                                        </button>
+                                    </div>
+                                )}
+                                <div style={{ padding: '10px 16px', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                                    <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                                        💡 Tip: Dùng <code style={{ fontSize: 11, background: 'var(--bg-primary)', padding: '1px 5px', borderRadius: 3 }}>CSS Selector</code> cho hầu hết website. Dùng <code style={{ fontSize: 11, background: 'var(--bg-primary)', padding: '1px 5px', borderRadius: 3 }}>JSON-LD</code> nếu website có structured data.
+                                    </div>
+                                    {hiddenDefaultFields.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setHiddenDefaultFields([]);
+                                                toast('✅ Đã khôi phục tất cả các trường mặc định!', 'success');
+                                            }}
+                                            title="Khôi phục tất cả trường mặc định đã xóa"
+                                            style={{ padding: '5px 12px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.4)', color: '#b45309', borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                        >
+                                            ↩ Khôi phục mặc định ({hiddenDefaultFields.length})
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => { setShowAddFieldModal(v => !v); setNewFieldLabel(''); setNewFieldKey(''); }}
+                                        style={{ padding: '6px 14px', background: showAddFieldModal ? 'var(--bg-primary)' : 'linear-gradient(135deg,#7c3aed,#a855f7)', color: showAddFieldModal ? 'var(--text-muted)' : 'white', border: showAddFieldModal ? '1px solid var(--border-color)' : 'none', borderRadius: 6, fontWeight: 700, fontSize: 12.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+                                    >
+                                        {showAddFieldModal ? '✕ Đóng' : '＋ Thêm Trường'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* ══════════════════════════════════════════════════════ */}
+                            {/* Section: Test Schema trên URL Mẫu                    */}
+                            {/* ══════════════════════════════════════════════════════ */}
+                            <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
+                                <div style={{ padding: '14px 20px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
+                                    <h4 style={{ margin: '0 0 3px', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span>🧪</span> Test Schema Trên URL Mẫu
+                                    </h4>
+                                    <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Nhập 1 URL sản phẩm cụ thể → xem kết quả trích xuất ngay trước khi crawl đại trà.</span>
+                                </div>
+                                <div style={{ padding: '16px 20px' }}>
+                                    <div style={{ display: 'flex', gap: 10, marginBottom: 14, alignItems: 'center' }}>
+                                        <input
+                                            type="url"
+                                            value={schemaTestUrl}
+                                            onChange={e => setSchemaTestUrl(e.target.value)}
+                                            placeholder="https://vi.kew-ltd.co.jp/products-detail/abc123"
+                                            style={{ flex: 1, padding: '9px 14px', borderRadius: 7, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace' }}
+                                            onKeyDown={e => e.key === 'Enter' && handleTestSchema()}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={handleTestSchema}
+                                            disabled={schemaTestLoading}
+                                            style={{ padding: '9px 20px', background: '#7c3aed', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: 13, cursor: schemaTestLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(124,58,237,0.4)' }}
+                                        >
+                                            {schemaTestLoading ? <Loader2 size={14} className="spin" /> : <span>▶</span>} Test
+                                        </button>
+                                    </div>
+
+                                    {schemaTestError && (
+                                        <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 7, fontSize: 12.5, color: '#dc2626', marginBottom: 10 }}>
+                                            ❌ {schemaTestError}
+                                        </div>
+                                    )}
+
+                                    {schemaTestResult && (
+                                        <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden' }}>
+                                            <div style={{ padding: '8px 14px', background: 'var(--bg-secondary)', fontSize: 11.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--border-color)' }}>Kết Quả Trích Xuất</div>
+                                            {Object.entries(schemaTestResult).map(([fieldKey, info], ri) => (
+                                                <div key={fieldKey} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px', borderBottom: '1px solid var(--border-color)', background: ri % 2 === 0 ? 'var(--bg-card)' : 'var(--bg-secondary)' }}>
+                                                    <span style={{ fontSize: 14, minWidth: 20, marginTop: 1 }}>{info.status === 'ok' ? '✅' : '⚠️'}</span>
+                                                    <div style={{ minWidth: 140, fontWeight: 600, fontSize: 12.5, color: 'var(--text-secondary)' }}>{SCHEMA_FIELD_LABELS[fieldKey] || fieldKey}</div>
+                                                    <div style={{ flex: 1, fontSize: 12.5, fontFamily: 'monospace', color: info.status === 'ok' ? 'var(--text-primary)' : 'var(--text-muted)', fontStyle: info.status === 'ok' ? 'normal' : 'italic', wordBreak: 'break-all', maxHeight: 60, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                        {info.status === 'ok' ? (info.value?.length > 200 ? info.value.slice(0, 200) + '...' : info.value) : '(trống — kiểm tra lại selector)'}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {!schemaTestResult && !schemaTestLoading && !schemaTestError && (
+                                        <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+                                            🔍 Nhập URL sản phẩm mẫu và bấm <strong>Test</strong> để xem kết quả trích xuất.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* ══════════════════════════════════════════════════════ */}
+                            {/* Section: Crawl Tự Động Từ Sitemap                    */}
+                            {/* ══════════════════════════════════════════════════════ */}
+                            <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
+                                <div style={{ padding: '14px 20px', background: 'linear-gradient(135deg, #052e16 0%, #14532d 100%)', borderBottom: '1px solid var(--border-color)' }}>
+                                    <h4 style={{ margin: '0 0 3px', fontSize: 14, fontWeight: 700, color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span>🚀</span> Crawl Toàn Bộ Từ Sitemap Với Schema
+                                    </h4>
+                                    <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,0.6)' }}>Dùng Sitemap đã cấu hình + Schema bên trên để crawl tự động tất cả URLs sản phẩm.</span>
+                                </div>
+                                <div style={{ padding: '16px 20px' }}>
+                                    {/* Options row */}
+                                    <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>Chế Độ Crawl</label>
+                                            <select
+                                                value={crawlSchemaOptions.useBrowser ? 'playwright' : 'fast'}
+                                                onChange={e => setCrawlSchemaOptions(p => ({ ...p, useBrowser: e.target.value === 'playwright' }))}
+                                                disabled={crawlSchemaRunning}
+                                                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                                            >
+                                                <option value="playwright">🌐 Trình duyệt ảo (Playwright - Tiếng Việt)</option>
+                                                <option value="fast">⚡ HTTP Nhanh (Fast Fetch)</option>
+                                            </select>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>Giới Hạn URLs</label>
+                                            <input type="number" min="10" max="2000" value={crawlSchemaOptions.maxUrls}
+                                                onChange={e => setCrawlSchemaOptions(p => ({ ...p, maxUrls: parseInt(e.target.value) || 500 }))}
+                                                disabled={crawlSchemaRunning}
+                                                style={{ width: 90, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }} />
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>Đồng Thời</label>
+                                            <input type="number" min="1" max="8" value={crawlSchemaOptions.concurrency}
+                                                onChange={e => setCrawlSchemaOptions(p => ({ ...p, concurrency: parseInt(e.target.value) || 3 }))}
+                                                disabled={crawlSchemaRunning}
+                                                style={{ width: 70, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }} />
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>Delay (ms)</label>
+                                            <input type="number" min="0" max="5000" step="100" value={crawlSchemaOptions.delay}
+                                                onChange={e => setCrawlSchemaOptions(p => ({ ...p, delay: parseInt(e.target.value) || 300 }))}
+                                                disabled={crawlSchemaRunning}
+                                                style={{ width: 90, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 600 }} />
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 'auto' }}>
+                                            <label style={{ fontSize: 11, fontWeight: 700, color: 'transparent' }}>.</label>
+                                            {!crawlSchemaRunning ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={startCrawlSchema}
+                                                    style={{ padding: '9px 22px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 2px 10px rgba(22,163,74,0.4)', whiteSpace: 'nowrap' }}
+                                                >
+                                                    <Play size={15} /> Bắt Đầu Crawl
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={stopCrawlSchema}
+                                                    style={{ padding: '9px 22px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: 13.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 2px 10px rgba(220,38,38,0.4)', whiteSpace: 'nowrap' }}
+                                                >
+                                                    <span>⏹</span> Dừng Lại
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Crawl Prerequisite Check */}
+                                    {!sitemapInfo?.sitemapUrl && !sitemapInfo?.sitemapXml && !currentProfile?.sitemap_url && (
+                                        <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 7, fontSize: 12.5, color: '#b45309', marginBottom: 10 }}>
+                                            ⚠️ <strong>Chưa cấu hình Sitemap.</strong> Vào mục "Nạp / Cấu Hình Sitemap XML" ở trên để thêm sitemap trước khi crawl.
+                                        </div>
+                                    )}
+
+                                    {/* Progress Bar */}
+                                    {crawlSchemaProgress && (
+                                        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '14px 16px', marginTop: 4 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                                <span style={{ fontSize: 13, fontWeight: 700, color: crawlSchemaRunning ? '#16a34a' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                                                    {crawlSchemaRunning ? <Loader2 size={14} className="spin" style={{ color: '#16a34a' }} /> : <span>✅</span>}
+                                                    {crawlSchemaRunning ? 'Đang crawl...' : (crawlSchemaProgress.done ? 'Hoàn tất!' : 'Đã dừng')}
+                                                </span>
+                                                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                                    {crawlSchemaProgress.processed || 0} / {crawlSchemaProgress.total || '?'} URLs
+                                                </span>
+                                            </div>
+                                            {crawlSchemaProgress.total > 0 && (
+                                                <div style={{ height: 10, background: 'var(--bg-primary)', borderRadius: 5, overflow: 'hidden', marginBottom: 8 }}>
+                                                    <div style={{ height: '100%', width: `${Math.round((crawlSchemaProgress.processed / crawlSchemaProgress.total) * 100)}%`, background: 'linear-gradient(90deg, #16a34a, #4ade80)', borderRadius: 5, transition: 'width 0.5s ease' }} />
+                                                </div>
+                                            )}
+                                            <div style={{ display: 'flex', gap: 18, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                                                <span>🟢 Tìm thấy: <strong style={{ color: '#16a34a' }}>{crawlSchemaProgress.found || 0}</strong> sản phẩm</span>
+                                                <span>❌ Lỗi: <strong style={{ color: crawlSchemaProgress.errors > 0 ? '#dc2626' : 'var(--text-muted)' }}>{crawlSchemaProgress.errors || 0}</strong></span>
+                                                {crawlSchemaProgress.total > 0 && <span>📊 Tiến độ: <strong>{Math.round((crawlSchemaProgress.processed / crawlSchemaProgress.total) * 100)}%</strong></span>}
+                                            </div>
+                                            {crawlSchemaProgress.error && (
+                                                <div style={{ marginTop: 8, fontSize: 12, color: '#dc2626' }}>⚠️ {crawlSchemaProgress.error}</div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Stats from last crawl in report */}
+                                    {harReport?.summary?.lastSchemaCrawlAt && !crawlSchemaProgress && (
+                                        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '8px 0' }}>
+                                            ✅ Lần crawl cuối: <strong>{new Date(harReport.summary.lastSchemaCrawlAt).toLocaleString('vi-VN')}</strong> — tìm thấy <strong>{harReport.summary.schemaCrawlFound}</strong> / <strong>{harReport.summary.schemaCrawlTotal}</strong> URLs
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -5365,6 +6248,403 @@ function ProductsContent() {
                     toast(`💾 Đã cập nhật Tab "${sheetName}" - Hàng #${rowIndex}!`, 'success');
                 }}
             />
+
+            {/* ================================================================
+                Modal: Phân Tích Trường Thông Số (Spec Field Frequency Analyzer)
+                ================================================================ */}
+            {showSpecAnalyzerModal && (() => {
+                // Get headers of current active sheet tab
+                const activeSheet = profileSheets.find(s => s.name === activeSheetTabName);
+                const headerRow = (activeSheet?.data?.[0] || []);
+                const totalFieldCount = specAnalyzerResult?.fields?.length || 0;
+                const maxCount = specAnalyzerResult?.fields?.[0]?.count || 1;
+
+                // Compute distinct categories in the chosen category column
+                const distinctCategories = (() => {
+                    if (specAnalyzerCatColIdx < 0 || !activeSheet?.data || activeSheet.data.length < 2) return [];
+                    const catCounts = {};
+                    for (let r = 1; r < activeSheet.data.length; r++) {
+                        const row = activeSheet.data[r];
+                        if (!Array.isArray(row)) continue;
+                        const val = String(row[specAnalyzerCatColIdx] || '').trim();
+                        const key = val || '(Trống / Chưa phân loại)';
+                        catCounts[key] = (catCounts[key] || 0) + 1;
+                    }
+                    return Object.entries(catCounts)
+                        .map(([name, count]) => ({ name, count }))
+                        .sort((a, b) => b.count - a.count);
+                })();
+
+                const selectedCatInfo = distinctCategories.find(c => c.name === specAnalyzerSelectedCat);
+
+                return (
+                    <div
+                        style={{
+                            position: 'fixed', inset: 0, zIndex: 2000,
+                            background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            padding: 16
+                        }}
+                        onClick={(e) => { if (e.target === e.currentTarget) setShowSpecAnalyzerModal(false); }}
+                    >
+                        <div style={{
+                            background: '#ffffff', borderRadius: 16,
+                            boxShadow: '0 25px 60px rgba(0,0,0,0.25)',
+                            width: '100%', maxWidth: 860,
+                            maxHeight: '92vh', display: 'flex', flexDirection: 'column',
+                            overflow: 'hidden'
+                        }}>
+                            {/* Header */}
+                            <div style={{
+                                padding: '18px 24px', borderBottom: '1px solid #e2e8f0',
+                                background: 'linear-gradient(135deg, #6d28d9 0%, #4f46e5 100%)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+                            }}>
+                                <div>
+                                    <div style={{ fontSize: 16, fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span style={{ fontSize: 20 }}>📊</span>
+                                        Phân Tích Trường Thông Số Kỹ Thuật (Lọc Theo Danh Mục)
+                                    </div>
+                                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 3 }}>
+                                        Thống kê tần suất xuất hiện của từng trường (field) trong bảng thông số HTML theo từng danh mục sản phẩm
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => setShowSpecAnalyzerModal(false)}
+                                    style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 8, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 18 }}
+                                >×</button>
+                            </div>
+
+                            {/* Config Panel */}
+                            <div style={{ padding: '16px 24px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
+                                    {/* Tab Info */}
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em', height: 18, display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                            Tab Đang Xem
+                                        </div>
+                                        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#1e293b', background: '#e2e8f0', padding: '8px 12px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 6, height: 38, boxSizing: 'border-box' }}>
+                                            <span>📋</span>
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeSheetTabName || '(chưa chọn tab)'}</span>
+                                            <span style={{ fontSize: 11, color: '#64748b', fontWeight: 500, flexShrink: 0 }}>
+                                                ({(activeSheet?.data?.length || 1) - 1} SP)
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    {/* Column selector for Specs */}
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em', height: 18, display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                            1. Cột Bảng Thông Số <span style={{ color: '#ef4444', marginLeft: 4 }}>*</span>
+                                        </div>
+                                        <select
+                                            value={specAnalyzerColIdx}
+                                            onChange={e => {
+                                                setSpecAnalyzerColIdx(Number(e.target.value));
+                                                setSpecAnalyzerResult(null);
+                                            }}
+                                            style={{
+                                                width: '100%', height: 38, padding: '6px 10px', borderRadius: 8,
+                                                border: specAnalyzerColIdx < 0 ? '2px solid #f59e0b' : '2px solid #6d28d9',
+                                                background: '#ffffff', fontSize: 12.5, color: '#1e293b',
+                                                fontWeight: 600, outline: 'none', cursor: 'pointer', boxSizing: 'border-box'
+                                            }}
+                                        >
+                                            <option value={-1}>— Chọn cột HTML thông số —</option>
+                                            {headerRow.map((h, i) => (
+                                                <option key={i} value={i}>
+                                                    {getColLetter(i)} — {h ? String(h) : `(Cột ${i + 1})`}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Column selector for Category */}
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em', height: 18, display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                            2. Cột Danh Mục
+                                        </div>
+                                        <select
+                                            value={specAnalyzerCatColIdx}
+                                            onChange={e => {
+                                                setSpecAnalyzerCatColIdx(Number(e.target.value));
+                                                setSpecAnalyzerSelectedCat('ALL');
+                                                setSpecAnalyzerResult(null);
+                                            }}
+                                            style={{
+                                                width: '100%', height: 38, padding: '6px 10px', borderRadius: 8,
+                                                border: specAnalyzerCatColIdx >= 0 ? '2px solid #0d9488' : '1px solid #cbd5e1',
+                                                background: '#ffffff', fontSize: 12.5, color: '#1e293b',
+                                                fontWeight: 600, outline: 'none', cursor: 'pointer', boxSizing: 'border-box'
+                                            }}
+                                        >
+                                            <option value={-1}>— Không lọc theo danh mục —</option>
+                                            {headerRow.map((h, i) => (
+                                                <option key={i} value={i}>
+                                                    {getColLetter(i)} — {h ? String(h) : `(Cột ${i + 1})`}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Specific Category Value Filter */}
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em', height: 18, display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                            3. Lọc Danh Mục Cụ Thể
+                                        </div>
+                                        <select
+                                            value={specAnalyzerSelectedCat}
+                                            onChange={e => {
+                                                setSpecAnalyzerSelectedCat(e.target.value);
+                                                setSpecAnalyzerResult(null);
+                                            }}
+                                            disabled={specAnalyzerCatColIdx < 0}
+                                            style={{
+                                                width: '100%', height: 38, padding: '6px 10px', borderRadius: 8,
+                                                border: specAnalyzerCatColIdx >= 0 && specAnalyzerSelectedCat !== 'ALL' ? '2px solid #0d9488' : '1px solid #cbd5e1',
+                                                background: specAnalyzerCatColIdx < 0 ? '#f1f5f9' : '#ffffff',
+                                                fontSize: 12.5, color: specAnalyzerCatColIdx < 0 ? '#94a3b8' : '#1e293b',
+                                                fontWeight: 600, outline: 'none',
+                                                cursor: specAnalyzerCatColIdx < 0 ? 'not-allowed' : 'pointer',
+                                                boxSizing: 'border-box'
+                                            }}
+                                        >
+                                            <option value="ALL">🌟 Tất cả danh mục ({((activeSheet?.data?.length || 1) - 1)} SP)</option>
+                                            {distinctCategories.map((c, i) => (
+                                                <option key={i} value={c.name}>
+                                                    📁 {c.name} ({c.count} SP)
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                                    <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        {specAnalyzerCatColIdx >= 0 && specAnalyzerSelectedCat !== 'ALL' ? (
+                                            <span style={{ color: '#0d9488', fontWeight: 700, background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '4px 10px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                                <span>🎯</span> Đang chọn danh mục: <strong>{specAnalyzerSelectedCat}</strong> ({selectedCatInfo?.count || 0} SP)
+                                            </span>
+                                        ) : specAnalyzerCatColIdx >= 0 ? (
+                                            <span style={{ color: '#6d28d9', fontWeight: 600, background: '#faf5ff', border: '1px solid #e9d5ff', padding: '4px 10px', borderRadius: 6 }}>
+                                                📂 Tìm thấy {distinctCategories.length} nhóm danh mục trong cột {headerRow[specAnalyzerCatColIdx] ? `"${headerRow[specAnalyzerCatColIdx]}"` : `Cột ${getColLetter(specAnalyzerCatColIdx)}`}.
+                                            </span>
+                                        ) : (
+                                            <span>💡 Chọn cột danh mục và chọn 1 danh mục cụ thể để phân tích các trường đặc thù của dòng SP đó.</span>
+                                        )}
+                                    </div>
+
+                                    {/* Run button */}
+                                    <button
+                                        onClick={runSpecAnalyzer}
+                                        disabled={specAnalyzerColIdx < 0 || specAnalyzerRunning}
+                                        style={{
+                                            padding: '8px 24px', borderRadius: 8, fontWeight: 800, fontSize: 13.5,
+                                            border: 'none', cursor: specAnalyzerColIdx < 0 ? 'not-allowed' : 'pointer',
+                                            background: specAnalyzerColIdx < 0
+                                                ? '#e2e8f0'
+                                                : 'linear-gradient(135deg, #6d28d9, #4f46e5)',
+                                            color: specAnalyzerColIdx < 0 ? '#94a3b8' : '#ffffff',
+                                            display: 'flex', alignItems: 'center', gap: 8,
+                                            boxShadow: specAnalyzerColIdx < 0 ? 'none' : '0 4px 12px rgba(109,40,217,0.3)',
+                                            flexShrink: 0, whiteSpace: 'nowrap'
+                                        }}
+                                    >
+                                        {specAnalyzerRunning
+                                            ? <><Loader2 size={15} className="spin" /> Đang phân tích...</>
+                                            : <><span style={{ fontSize: 15 }}>🔍</span> Chạy Phân Tích</>
+                                        }
+                                    </button>
+                                </div>
+
+                                {specAnalyzerColIdx < 0 && (
+                                    <div style={{ marginTop: 10, fontSize: 12, color: '#b45309', display: 'flex', alignItems: 'center', gap: 6, background: '#fef3c7', padding: '6px 12px', borderRadius: 6 }}>
+                                        <span>⚠️</span> Vui lòng chọn cột chứa HTML bảng thông số (thường là cột <strong>noi_dung / thông số kỹ thuật</strong>) rồi nhấn Chạy Phân Tích.
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Results */}
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
+                                {specAnalyzerRunning && (
+                                    <div style={{ padding: 40, textAlign: 'center' }}>
+                                        <Loader2 size={36} className="spin" style={{ color: '#6d28d9', margin: '0 auto 12px' }} />
+                                        <div style={{ fontSize: 14, color: '#64748b', fontWeight: 600 }}>Đang quét và phân tích bảng thông số...</div>
+                                    </div>
+                                )}
+
+                                {!specAnalyzerRunning && specAnalyzerResult?.error && (
+                                    <div style={{ padding: 32, textAlign: 'center', color: '#dc2626' }}>
+                                        <div style={{ fontSize: 28, marginBottom: 8 }}>❌</div>
+                                        <div style={{ fontWeight: 700, fontSize: 14 }}>{specAnalyzerResult.error}</div>
+                                    </div>
+                                )}
+
+                                {!specAnalyzerRunning && specAnalyzerResult && !specAnalyzerResult.error && (
+                                    <>
+                                        {/* Summary bar */}
+                                        <div style={{
+                                            padding: '12px 24px', background: 'linear-gradient(135deg, #ede9fe, #eef2ff)',
+                                            borderBottom: '1px solid #e2e8f0',
+                                            display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap'
+                                        }}>
+                                            <div style={{ fontSize: 13, color: '#4c1d95', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <span>📋</span> Cột TTS: <span style={{ color: '#6d28d9' }}>{specAnalyzerResult.colHeader}</span>
+                                            </div>
+                                            {specAnalyzerResult.isFiltered && (
+                                                <div style={{ fontSize: 13, color: '#0f766e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, background: '#ccfbf1', padding: '2px 8px', borderRadius: 6 }}>
+                                                    <span>🎯</span> Danh mục: <span>{specAnalyzerResult.categoryFilter}</span>
+                                                </div>
+                                            )}
+                                            <div style={{ fontSize: 13, color: '#4c1d95', fontWeight: 600 }}>
+                                                🗂 Tổng SP {specAnalyzerResult.isFiltered ? 'trong danh mục' : 'quét'}: <strong>{specAnalyzerResult.totalRows}</strong>
+                                            </div>
+                                            <div style={{ fontSize: 13, color: '#4c1d95', fontWeight: 600 }}>
+                                                ✅ SP có thông số: <strong>{specAnalyzerResult.scannedRows}</strong>
+                                            </div>
+                                            <div style={{ fontSize: 13, color: '#4c1d95', fontWeight: 600 }}>
+                                                🏷 Trường unique: <strong>{totalFieldCount}</strong>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    const lines = [
+                                                        `Báo cáo Phân Tích Trường Thông Số`,
+                                                        `Tab: ${specAnalyzerResult.sheetName} | Cột: ${specAnalyzerResult.colHeader}`,
+                                                        specAnalyzerResult.isFiltered ? `Lọc Danh Mục: ${specAnalyzerResult.categoryFilter}` : `Lọc Danh Mục: Tất cả`,
+                                                        `Tổng SP: ${specAnalyzerResult.totalRows} | SP có TTS: ${specAnalyzerResult.scannedRows} | Unique fields: ${totalFieldCount}`,
+                                                        ``,
+                                                        `STT\tTrường\tSố lần xuất hiện\tTỉ lệ (%)`,
+                                                        ...specAnalyzerResult.fields.map((f, i) =>
+                                                            `${i + 1}\t${f.name}\t${f.count}\t${((f.count / (specAnalyzerResult.scannedRows || 1)) * 100).toFixed(1)}%`
+                                                        )
+                                                    ];
+                                                    navigator.clipboard.writeText(lines.join('\n'));
+                                                    toast('📋 Đã copy báo cáo vào clipboard!', 'success');
+                                                }}
+                                                style={{
+                                                    marginLeft: 'auto', padding: '6px 14px', background: '#6d28d9',
+                                                    color: 'white', border: 'none', borderRadius: 6,
+                                                    fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                                                    display: 'flex', alignItems: 'center', gap: 5
+                                                }}
+                                            >
+                                                <span>📋</span> Copy Báo Cáo
+                                            </button>
+                                        </div>
+
+                                        {/* Table */}
+                                        {specAnalyzerResult.fields.length === 0 ? (
+                                            <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                                                <div style={{ fontSize: 32, marginBottom: 10 }}>🔎</div>
+                                                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>
+                                                    Không tìm thấy cặp &lt;td&gt;Field&lt;/td&gt;&lt;td&gt;Value&lt;/td&gt; nào
+                                                    {specAnalyzerResult.isFiltered ? ` trong danh mục "${specAnalyzerResult.categoryFilter}"` : ''}
+                                                </div>
+                                                <div style={{ fontSize: 12 }}>Kiểm tra lại cột đã chọn hoặc thử chọn danh mục khác.</div>
+                                            </div>
+                                        ) : (
+                                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                <thead>
+                                                    <tr style={{ background: '#f1f5f9', position: 'sticky', top: 0, zIndex: 1 }}>
+                                                        <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0', width: 44 }}>#</th>
+                                                        <th style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0' }}>TÊN TRƯỜNG (FIELD)</th>
+                                                        <th style={{ padding: '10px 14px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0', width: 90 }}>SỐ LẦN</th>
+                                                        <th style={{ padding: '10px 14px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0', width: 70 }}>TỈ LỆ</th>
+                                                        <th style={{ padding: '10px 20px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0' }}>MỨC ĐỘ PHỦ</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {specAnalyzerResult.fields.map((field, idx) => {
+                                                        const pct = specAnalyzerResult.scannedRows > 0
+                                                            ? (field.count / specAnalyzerResult.scannedRows) * 100
+                                                            : 0;
+                                                        const barPct = maxCount > 0 ? (field.count / maxCount) * 100 : 0;
+                                                        const barColor = pct >= 80 ? '#10b981' : pct >= 50 ? '#f59e0b' : pct >= 20 ? '#6d28d9' : '#94a3b8';
+                                                        const isTop = idx === 0;
+                                                        return (
+                                                            <tr
+                                                                key={idx}
+                                                                style={{
+                                                                    background: isTop ? '#faf5ff' : idx % 2 === 0 ? '#ffffff' : '#f8fafc',
+                                                                    borderBottom: '1px solid #f1f5f9',
+                                                                    transition: 'background 0.12s'
+                                                                }}
+                                                                onMouseEnter={e => e.currentTarget.style.background = '#ede9fe'}
+                                                                onMouseLeave={e => e.currentTarget.style.background = isTop ? '#faf5ff' : idx % 2 === 0 ? '#ffffff' : '#f8fafc'}
+                                                            >
+                                                                <td style={{ padding: '9px 14px', fontSize: 12, color: '#94a3b8', fontWeight: 700 }}>
+                                                                    {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : idx + 1}
+                                                                </td>
+                                                                <td style={{ padding: '9px 14px' }}>
+                                                                    <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{field.name}</span>
+                                                                </td>
+                                                                <td style={{ padding: '9px 14px', textAlign: 'right' }}>
+                                                                    <span style={{
+                                                                        fontSize: 14, fontWeight: 800,
+                                                                        color: pct >= 80 ? '#10b981' : pct >= 50 ? '#d97706' : '#6d28d9'
+                                                                    }}>{field.count}</span>
+                                                                    <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 2 }}>SP</span>
+                                                                </td>
+                                                                <td style={{ padding: '9px 14px', textAlign: 'right' }}>
+                                                                    <span style={{
+                                                                        fontSize: 12, fontWeight: 700, padding: '2px 8px',
+                                                                        borderRadius: 20,
+                                                                        background: pct >= 80 ? '#dcfce7' : pct >= 50 ? '#fef3c7' : pct >= 20 ? '#ede9fe' : '#f1f5f9',
+                                                                        color: pct >= 80 ? '#15803d' : pct >= 50 ? '#92400e' : pct >= 20 ? '#6d28d9' : '#64748b'
+                                                                    }}>
+                                                                        {pct.toFixed(1)}%
+                                                                    </span>
+                                                                </td>
+                                                                <td style={{ padding: '9px 20px' }}>
+                                                                    <div style={{ background: '#e2e8f0', borderRadius: 999, height: 8, overflow: 'hidden', width: '100%' }}>
+                                                                        <div style={{
+                                                                            height: '100%', width: `${barPct}%`,
+                                                                            background: barColor,
+                                                                            borderRadius: 999,
+                                                                            transition: 'width 0.4s ease'
+                                                                        }} />
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        )}
+                                    </>
+                                )}
+
+                                {!specAnalyzerRunning && !specAnalyzerResult && (
+                                    <div style={{ padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+                                        <div style={{ fontSize: 48, marginBottom: 14 }}>📊</div>
+                                        <div style={{ fontWeight: 700, fontSize: 15, color: '#64748b', marginBottom: 8 }}>
+                                            Chọn cột và nhấn "Chạy Phân Tích"
+                                        </div>
+                                        <div style={{ fontSize: 13, lineHeight: 1.6, color: '#94a3b8', maxWidth: 450, margin: '0 auto' }}>
+                                            Công cụ sẽ quét toàn bộ HTML trong cột được chọn (có thể kết hợp lọc riêng cho từng Danh mục),<br />
+                                            trích xuất các cặp <code style={{ background: '#f1f5f9', padding: '1px 5px', borderRadius: 4 }}>&lt;td&gt;Field&lt;/td&gt;&lt;td&gt;Value&lt;/td&gt;</code><br />
+                                            và thống kê tần suất xuất hiện của mỗi tên trường.
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Footer */}
+                            <div style={{
+                                padding: '12px 24px', borderTop: '1px solid #e2e8f0',
+                                background: '#f8fafc', display: 'flex', justifyContent: 'flex-end'
+                            }}>
+                                <button
+                                    onClick={() => setShowSpecAnalyzerModal(false)}
+                                    style={{ padding: '8px 22px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', fontSize: 13, fontWeight: 600, color: '#64748b', cursor: 'pointer' }}
+                                >
+                                    Đóng
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Modal Google Drive Setup & Auth */}
             <GoogleDriveModal

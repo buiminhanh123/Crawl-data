@@ -9,8 +9,8 @@ const {
     aiWhitelistQueries
 } = require('../db');
 
-const AI_API_URL = 'https://aidesign.io.vn/api/chatbot/chat';
-const AI_API_KEY = 'chatgpt2api';
+const AI_API_URL = process.env.AI_API_URL || 'https://aidesign.io.vn/api/chatbot/chat';
+const AI_API_KEY = process.env.AI_API_KEY || 'chatgpt2api';
 
 
 // Helper function to sleep/delay
@@ -24,10 +24,15 @@ function getCacheKey(msg) {
     return crypto.createHash('md5').update(String(msg || '').trim()).digest('hex');
 }
 
+function isRefusalText(text) {
+    if (!text || typeof text !== 'string') return false;
+    return /chia (kết quả|thành nhiều phần)|bảng (dữ liệu )?rất dài|Phần 1:|tránh bị cắt/i.test(text) && !text.includes('<table');
+}
+
 function getFromCache(key) {
     const cached = responseCache.get(key);
     if (!cached) return null;
-    if (Date.now() - cached.timestamp > 3600 * 1000) {
+    if (Date.now() - cached.timestamp > 3600 * 1000 || isRefusalText(cached.data?.content)) {
         responseCache.delete(key);
         return null;
     }
@@ -35,6 +40,9 @@ function getFromCache(key) {
 }
 
 function setToCache(key, data) {
+    if (!data || !data.content || isRefusalText(data.content)) {
+        return; // DO NOT CACHE BAD / REFUSAL RESPONSES
+    }
     if (responseCache.size >= MAX_CACHE_SIZE) {
         const firstKey = responseCache.keys().next().value;
         if (firstKey) responseCache.delete(firstKey);
@@ -123,6 +131,12 @@ router.post('/chat', async (req, res) => {
         }
     }
 
+    // Append strict single-pass anti-splitting rules ONLY for explicit translation / spec table prompts (not for Meta, Sapo, SEO, etc.)
+    const isExplicitTableTranslation = /(?:dịch\s+bảng|dịch\s+thông\s+số|chuyển\s+đổi\s+cấu\s+trúc|đổi\s+cấu\s+trúc|chỉ\s+xuất\s+duy\s+nhất\s+bảng|table_product_style|<table|thông\s+số\s+kỹ\s+thuật)/i.test(finalMessage) && !/(?:meta|sapo|tiêu\s+đề|bài\s+viết|mở\s+đầu)/i.test(finalMessage);
+    if (isExplicitTableTranslation) {
+        enhancedMessage += `\n\n[QUY TẮC NGUYÊN TẮC BẮT BUỘC - XỬ LÝ BẢNG THÔNG SỐ]:\n1. BẮT BUỘC dịch/chuyển đổi TOÀN BỘ 100% tất cả các dòng thông số trong 1 LẦN TRẢ VỀ DUY NHẤT.\n2. BẤT KỂ BẢNG DÀI BAO NHIÊU (DÙ TRÊN 100-200 HÀNG), TUYỆT ĐỐI KHÔNG ĐƯỢC CHIA THÀNH NHIỀU PHẦN (KHÔNG ĐƯỢC BÁO "Phần 1", "Phần 2"...), KHÔNG ĐƯỢC GIẢI THÍCH HOẶC HỎI LẠI.\n3. CHỈ TRẢ VỀ DUY NHẤT BẢNG KẾT QUẢ KỸ THUẬT, KHÔNG ĐƯỢC CÓ ĐOẠN VĂN MỞ ĐẦU HOẶC LỜI CHÀO HỎI (TUYỆT ĐỐI KHÔNG VIẾT "Tôi đã nhận...", "Do bảng dữ liệu rất dài...").\n4. BẮT BUỘC GIỮ NGUYÊN 100% cấu trúc HTML, tên class của thẻ <table> và nội dung các thẻ tiêu đề (<th>) đúng theo mẫu mà người dùng đã yêu cầu trong prompt.`;
+    }
+
     const payload = {
         message: enhancedMessage,
         stream: false,
@@ -160,11 +174,34 @@ router.post('/chat', async (req, res) => {
                             json = null;
                         }
 
-                        const content = extractAiContent(json, lastRaw);
-                        if (content) {
+                        let content = extractAiContent(json, lastRaw);
+                        
+                        // Check if AI output is conversational refusal chatter ("chia thành nhiều phần", "Do bảng rất dài", "Phần 1:")
+                        const isRefusalChatter = /chia (kết quả|thành nhiều phần)|bảng (dữ liệu )?rất dài|Phần 1:|tránh bị cắt/i.test(content) && !content.includes('<table');
+
+                        if (content && !isRefusalChatter) {
+                            // Extract HTML <table> ONLY for explicit table translation prompts
+                            // For meta/sapo/SEO prompts, keep the full response as-is
+                            if (isExplicitTableTranslation) {
+                                const tableMatch = content.match(/(?:<h2>[\s\S]*?<\/h2>[\s\n]*)?<table[\s\S]*?(?:<\/table>|$)/i);
+                                if (tableMatch) {
+                                    content = tableMatch[0];
+                                    if (!content.includes('</table>')) {
+                                        content += '\n</table>';
+                                    }
+                                }
+                            }
                             const resultObj = { content, raw: json || lastRaw };
                             setToCache(cacheKey, resultObj);
                             return resultObj;
+                        } else {
+                            console.warn(`[AI] Attempt ${attempts}/${maxAttempts} returned ${isRefusalChatter ? 'refusal chatter' : 'empty content'}. Retrying in ${attempts * 1000}ms...`);
+                            // Update payload with urgent enforcement prompt on retry
+                            payload.message = enhancedMessage + `\n\n[CẢNH BÁO KHẨN CẤP LẦN ${attempts}]: Bạn vừa từ chối dịch hoặc chia nhỏ phần! KHÔNG ĐƯỢC CHIA PHẦN, KHÔNG NÓI CHUYỆN! Hãy xuất BẢNG HTML HOÀN CHỈNH 100% HÀNG ngay bây giờ!`;
+                            if (attempts < maxAttempts) {
+                                await delay(attempts * 1000);
+                                continue;
+                            }
                         }
                     }
 
@@ -203,6 +240,15 @@ router.post('/chat', async (req, res) => {
             status
         });
     }
+});
+
+// ──────────────────────────────────────────────────────────────
+// POST /api/ai/clear-cache
+// Flush in-memory AI response cache
+// ──────────────────────────────────────────────────────────────
+router.post('/clear-cache', (req, res) => {
+    responseCache.clear();
+    res.json({ success: true, message: 'Đã xóa toàn bộ bộ nhớ tạm (cache) kết quả AI thành công.' });
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -280,12 +326,16 @@ router.post('/test-connection', async (req, res) => {
         const rawText = await response.text();
 
         if (!response.ok) {
+            let errorHint = rawText.slice(0, 200);
+            if (rawText.includes('429')) {
+                errorHint = 'Phía upstream ChatGPT trả về status=429 (Too Many Requests / Quá tải lượt gọi / Hết quota IP)';
+            }
             return res.json({
                 ok: false,
                 status: response.status,
                 latencyMs,
-                message: `Server AI (aidesign.io.vn) phản hồi mã lỗi HTTP ${response.status}`,
-                details: rawText.slice(0, 200)
+                message: `Server AI (${new URL(AI_API_URL).hostname}) phản hồi mã lỗi HTTP ${response.status}`,
+                details: errorHint
             });
         }
 

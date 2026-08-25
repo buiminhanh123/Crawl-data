@@ -444,8 +444,8 @@ export default function ImgDownloaderModal({ isOpen, onClose, onSuccess, onConve
                                                         background: selectedProfile === p.profile_slug ? '#eff6ff' : 'var(--bg-card, #fff)',
                                                         cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s'
                                                     }}>
-                                                        <div style={{ fontWeight: 700, fontSize: 13, color: selectedProfile === p.profile_slug ? '#1d4ed8' : 'var(--text-primary, #0f172a)', marginBottom: 4, textTransform: 'capitalize' }}>
-                                                            {p.profile_slug}
+                                                        <div style={{ fontWeight: 700, fontSize: 13, color: selectedProfile === p.profile_slug ? '#1d4ed8' : 'var(--text-primary, #0f172a)', marginBottom: 4 }}>
+                                                            {p.profile_name || p.profile_slug}
                                                         </div>
                                                         <div style={{ fontSize: 11, color: '#64748b' }}>
                                                             <span style={{ color: '#15803d', fontWeight: 700 }}>{(p.with_image || 0).toLocaleString('vi-VN')}</span> ảnh

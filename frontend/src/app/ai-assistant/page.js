@@ -49,7 +49,8 @@ Thông số: {noi-dung}`
         variables: [
             { id: 'dich-1', name: 'noi-dung', label: 'Nội Dung', col: 'C' }
         ],
-        prompt: `Dịch bảng thông số kỹ thuật sau sang tiếng Việt chuẩn kỹ thuật (BẮT BUỘC TUÂN THỦ TỪ ĐIỂN THUẬT NGỮ & KHÔNG TỰ Ý DÙNG TỪ ĐỒNG NGHĨA):
+        prompt: `Dịch bảng thông số kỹ thuật sau sang tiếng Việt chuẩn kỹ thuật (BẮT BUỘC TUÂN THỦ TỪ ĐIỂN THUẬT NGỮ & KHÔNG TỰ Ý DÙNG TỪ ĐỒNG NGHĨA).
+BẮT BUỘC: Dịch 100% tất cả các hàng thông số trong 1 lần duy nhất. KHÔNG ĐƯỢC CHIA PHẦN, KHÔNG GIẢI THÍCH HOẶC CHÀO HỎI. Chỉ xuất duy nhất bảng HTML kết quả.
 
 Thông tin:
 {noi-dung}`
@@ -490,6 +491,17 @@ export default function AIAssistantPage() {
         }
     };
 
+    const handleClearAiCache = async () => {
+        try {
+            const res = await fetchApi('/api/ai/clear-cache', { method: 'POST' });
+            if (res && res.success) {
+                showToast('🧹 Đã xóa toàn bộ bộ nhớ tạm (Cache) kết quả AI!', 'success');
+            }
+        } catch (e) {
+            showToast('Lỗi khi xóa bộ nhớ tạm AI', 'danger');
+        }
+    };
+
     // Live Runner State
     const [runnerState, setRunnerStateInternal] = useState({
         isRunning: false,
@@ -538,7 +550,13 @@ export default function AIAssistantPage() {
         const syncState = () => {
             try {
                 const runner = getGlobalAiRunner();
-                setRunnerStateInternal(runner.state);
+                if (runner && runner.state) {
+                    setRunnerStateInternal({
+                        ...runner.state,
+                        logs: Array.isArray(runner.state?.logs) ? runner.state.logs : [],
+                        failedItems: Array.isArray(runner.state?.failedItems) ? runner.state.failedItems : []
+                    });
+                }
             } catch (e) {}
         };
         syncState();
@@ -992,7 +1010,7 @@ export default function AIAssistantPage() {
             ...prev,
             isRunning: false,
             isPaused: false,
-            logs: [`[${new Date().toLocaleTimeString()}] ⏹️ Đã dừng tiến trình.`, ...prev.logs.slice(0, 150)]
+            logs: [`[${new Date().toLocaleTimeString()}] ⏹️ Đã dừng tiến trình.`, ...(prev.logs || []).slice(0, 150)]
         }));
         showToast('Đã dừng tiến trình AI', 'info');
     };
@@ -1163,15 +1181,25 @@ export default function AIAssistantPage() {
                                     Bấm nút để gửi 1 yêu cầu thử nghiệm tới Server AI và đo thời gian phản hồi thực tế trước khi chạy hàng loạt.
                                 </p>
                             </div>
-                            <button
-                                type="button"
-                                onClick={handleTestApiConnection}
-                                disabled={apiTestState.testing}
-                                style={{ padding: '8px 16px', background: apiTestState.testing ? 'var(--bg-secondary)' : 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: 13, cursor: apiTestState.testing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 12px rgba(99,102,241,0.2)' }}
-                            >
-                                {apiTestState.testing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={15} />}
-                                {apiTestState.testing ? 'Đang Kiểm Tra Kết Nối...' : 'Kiểm Tra Kết Nối API AI'}
-                            </button>
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                                <button
+                                    type="button"
+                                    onClick={handleClearAiCache}
+                                    style={{ padding: '8px 14px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                                    title="Xóa các phản hồi rác đã lưu tạm để AI quét lại dữ liệu mới"
+                                >
+                                    <Trash2 size={14} style={{ color: '#ef4444' }} /> Xóa Cache AI
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleTestApiConnection}
+                                    disabled={apiTestState.testing}
+                                    style={{ padding: '8px 16px', background: apiTestState.testing ? 'var(--bg-secondary)' : 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: 13, cursor: apiTestState.testing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 12px rgba(99,102,241,0.2)' }}
+                                >
+                                    {apiTestState.testing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={15} />}
+                                    {apiTestState.testing ? 'Đang Kiểm Tra Kết Nối...' : 'Kiểm Tra Kết Nối API AI'}
+                                </button>
+                            </div>
                         </div>
 
                         {apiTestState.result && (
@@ -1190,7 +1218,7 @@ export default function AIAssistantPage() {
                                 )}
                                 {!apiTestState.result.ok && (
                                     <p style={{ margin: '4px 0 0', fontSize: 12, color: '#b91c1c' }}>
-                                        💡 <strong>Hướng dẫn khắc phục:</strong> Server AI (aidesign.io.vn) hiện đang bị nghẽn/timeout (Status 504). Vui lòng thử lại sau vài phút hoặc chạy 1-2 luồng.
+                                        💡 <strong>Chi tiết nguyên nhân & Hướng dẫn:</strong> {apiTestState.result.details ? `${apiTestState.result.details}` : 'Server AI (aidesign.io.vn) hiện đang bị nghẽn/quá tải. Vui lòng chờ vài phút rồi thử lại.'}
                                     </p>
                                 )}
                             </div>
@@ -1634,14 +1662,14 @@ export default function AIAssistantPage() {
                                 📟 Terminal Output Monitor Log
                             </span>
                             <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                                {runnerState.logs.length} log
+                                {(runnerState?.logs || []).length} log
                             </span>
                         </div>
                         <div style={{ maxHeight: 380, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            {runnerState.logs.length === 0 ? (
+                            {(runnerState?.logs || []).length === 0 ? (
                                 <span style={{ color: '#64748b', fontStyle: 'italic' }}>Chưa có log sự kiện nào. Hãy cấu hình và bấm Bắt đầu để khởi chạy.</span>
                             ) : (
-                                runnerState.logs.map((log, idx) => (
+                                (runnerState?.logs || []).map((log, idx) => (
                                     <div key={idx} style={{ color: log.includes('Lỗi') ? '#fca5a5' : (log.includes('✓') ? '#86efac' : '#e2e8f0') }}>
                                         {log}
                                     </div>

@@ -49,12 +49,17 @@ export async function fetchApi(path, options = {}) {
     }
 
     if (res.status === 401) {
+        if (options?.silent) return null;
         if (typeof window !== 'undefined') {
             localStorage.removeItem('token');
             localStorage.removeItem('user');
             window.location.href = '/login';
         }
         throw new Error('Session expired');
+    }
+
+    if (!res.ok && options?.silent) {
+        return null;
     }
 
     const contentType = res.headers.get('content-type') || '';
@@ -64,23 +69,27 @@ export async function fetchApi(path, options = {}) {
         try {
             data = await res.json();
         } catch (e) {
-            const rawText = await res.text();
+            if (options?.silent) return null;
+            const rawText = await res.text().catch(() => '');
             throw new Error(`Phản hồi Server lỗi cấu trúc JSON (${res.status}): ${rawText.slice(0, 150)}`);
         }
     } else {
-        const rawText = await res.text();
+        const rawText = await res.text().catch(() => '');
         if (!res.ok) {
+            if (options?.silent) return null;
             throw new Error(`Lỗi Backend Server (Mã ${res.status} ${res.statusText}): Server backend tạm thời không phản hồi. Vui lòng kiểm tra lại!`);
         }
         try {
             data = JSON.parse(rawText);
         } catch (e) {
+            if (options?.silent) return null;
             throw new Error(`Server không trả về định dạng JSON (${res.status}): ${rawText.slice(0, 120)}`);
         }
     }
 
     if (!res.ok) {
-        throw new Error(data.error || data.message || `Lỗi API (${res.status})`);
+        if (options?.silent) return null;
+        throw new Error(data?.error || data?.message || `Lỗi API (${res.status})`);
     }
 
     return data;

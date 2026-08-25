@@ -11,7 +11,7 @@ function colToIdx(col) {
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-export function convertMarkdownTableToHtml(text) {
+export function convertMarkdownTableToHtml(text, promptTemplate = '') {
     if (!text || typeof text !== 'string') return text;
     let trimmed = text.trim();
 
@@ -27,6 +27,17 @@ export function convertMarkdownTableToHtml(text) {
 
     if (!hasPipes && !hasHtmlRows) {
         return trimmed;
+    }
+
+    let tableClass = 'Table_Products_Style';
+    let defaultHeader = ['Thông số kỹ thuật', 'Chi tiết'];
+    if (promptTemplate) {
+        const classMatch = promptTemplate.match(/<table[^>]*class=["']([^"']+)["']/i);
+        if (classMatch) tableClass = classMatch[1];
+        const thMatches = [...promptTemplate.matchAll(/<th[^>]*>(.*?)<\/th>/gi)];
+        if (thMatches.length > 0) {
+            defaultHeader = thMatches.map(m => m[1].trim());
+        }
     }
 
     const lines = trimmed.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -68,10 +79,10 @@ export function convertMarkdownTableToHtml(text) {
     }
 
     if (!headerRow && rows.length > 0) {
-        headerRow = ['Thông số kỹ thuật', 'Chi tiết'];
+        headerRow = defaultHeader;
     }
 
-    let html = `<table class="Table_Products_Style">\n<thead>\n<tr>\n`;
+    let html = `<table class="${tableClass}">\n<thead>\n<tr>\n`;
     headerRow.forEach(h => {
         html += `  <th>${h}</th>\n`;
     });
@@ -121,6 +132,21 @@ export function cleanAiOutput(text) {
     }
     cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*/i, '').replace(/```$/i, '');
 
+    // Extract HTML <table>...</table> if present, discarding lead-in / trailing chatter
+    const tableMatch = cleaned.match(/<table[\s\S]*?<\/table>/i);
+    if (tableMatch) {
+        return tableMatch[0].trim();
+    }
+
+    // Extract markdown table if present, discarding lead-in chatter
+    const markdownTableMatch = cleaned.match(/(\|[^\n]+\|\s*\n?)+/g);
+    if (markdownTableMatch) {
+        return markdownTableMatch.join('\n').trim();
+    }
+
+    // Remove lead-in conversational sentences if text contains chatter phrases
+    cleaned = cleaned.replace(/^(Tôi đã nhận|Do bảng|Để tránh|Dưới đây là|Sau đây là|Chào bạn|Tôi sẽ chia)[^\n]*\n+/gi, '');
+
     return cleaned.trim();
 }
 
@@ -135,7 +161,15 @@ class GlobalAiRunner {
         if (typeof window === 'undefined') return this.getInitialState();
         try {
             const saved = localStorage.getItem('ai_runner_state');
-            if (saved) return JSON.parse(saved);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                return {
+                    ...this.getInitialState(),
+                    ...parsed,
+                    logs: Array.isArray(parsed?.logs) ? parsed.logs : [],
+                    failedItems: Array.isArray(parsed?.failedItems) ? parsed.failedItems : []
+                };
+            }
         } catch (e) {}
         return this.getInitialState();
     }
@@ -175,7 +209,7 @@ class GlobalAiRunner {
         this.saveState({
             isRunning: false,
             isPaused: false,
-            logs: [`[${new Date().toLocaleTimeString()}] ⏹️ Người dùng đã chủ động DỪNG tiến trình AI.`, ...this.state.logs.slice(0, 150)]
+            logs: [`[${new Date().toLocaleTimeString()}] ⏹️ Người dùng đã chủ động DỪNG tiến trình AI.`, ...(this.state.logs || []).slice(0, 150)]
         });
     }
 
@@ -183,7 +217,7 @@ class GlobalAiRunner {
         this.pauseFlag = true;
         this.saveState({
             isPaused: true,
-            logs: [`[${new Date().toLocaleTimeString()}] ⏸️ Đã tạm dừng tiến trình AI.`, ...this.state.logs.slice(0, 150)]
+            logs: [`[${new Date().toLocaleTimeString()}] ⏸️ Đã tạm dừng tiến trình AI.`, ...(this.state.logs || []).slice(0, 150)]
         });
     }
 
@@ -191,7 +225,7 @@ class GlobalAiRunner {
         this.pauseFlag = false;
         this.saveState({
             isPaused: false,
-            logs: [`[${new Date().toLocaleTimeString()}] ▶️ Đã tiếp tục tiến trình AI.`, ...this.state.logs.slice(0, 150)]
+            logs: [`[${new Date().toLocaleTimeString()}] ▶️ Đã tiếp tục tiến trình AI.`, ...(this.state.logs || []).slice(0, 150)]
         });
     }
 
@@ -266,7 +300,7 @@ class GlobalAiRunner {
 
                 this.saveState({
                     activeTabName: currentSheetName,
-                    logs: [`[${new Date().toLocaleTimeString()}] Đang xử lý Tab: ${currentSheetName}`, ...this.state.logs.slice(0, 150)]
+                    logs: [`[${new Date().toLocaleTimeString()}] Đang xử lý Tab: ${currentSheetName}`, ...(this.state.logs || []).slice(0, 150)]
                 });
 
                 const sheetDataRef = updatedSheetsData.find(s => s.name === currentSheetName);
@@ -342,18 +376,31 @@ class GlobalAiRunner {
 
                         try {
                             const seriesKey = selectedProfileSlug || currentSheetName || 'default';
-                            const res = await fetchApi('/api/ai/chat', {
-                                method: 'POST',
-                                body: JSON.stringify({
-                                    message: builtPrompt,
-                                    history: [],
-                                    seriesKey,
-                                    useGlossary: true
-                                })
-                            });
+                            let cleaned = '';
+                            const maxRowAttempts = 2;
 
-                            let rawContent = res.content || '';
-                            let cleaned = autoClean ? cleanAiOutput(rawContent) : rawContent.trim();
+                            for (let rAttempt = 1; rAttempt <= maxRowAttempts; rAttempt++) {
+                                const res = await fetchApi('/api/ai/chat', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        message: builtPrompt,
+                                        history: [],
+                                        seriesKey,
+                                        useGlossary: true
+                                    })
+                                });
+
+                                let rawContent = res.content || '';
+                                cleaned = autoClean ? cleanAiOutput(rawContent) : rawContent.trim();
+
+                                if (cleaned || this.abortFlag) {
+                                    break;
+                                }
+
+                                if (rAttempt < maxRowAttempts) {
+                                    await delay(1000);
+                                }
+                            }
 
                             if (!cleaned && !this.abortFlag) {
                                 throw new Error('Kết quả AI trả về rỗng');
@@ -388,7 +435,7 @@ class GlobalAiRunner {
                                 completedCount: globalCompleted,
                                 pendingCount: Math.max(0, grandTotalRows - completedTotal),
                                 currentProgressPercent: percent,
-                                logs: [successLog, ...this.state.logs.slice(0, 150)]
+                                logs: [successLog, ...(this.state.logs || []).slice(0, 150)]
                             });
 
                             if (globalCompleted % 5 === 0 || completedTotal >= grandTotalRows) {
@@ -416,7 +463,7 @@ class GlobalAiRunner {
                                 failedItems: [...currentFailedList],
                                 pendingCount: Math.max(0, grandTotalRows - completedTotal),
                                 currentProgressPercent: percent,
-                                logs: [errLog, ...this.state.logs.slice(0, 150)]
+                                logs: [errLog, ...(this.state.logs || []).slice(0, 150)]
                             });
                         }
                     }
@@ -444,7 +491,7 @@ class GlobalAiRunner {
                 isRunning: false,
                 isPaused: false,
                 currentProgressPercent: 100,
-                logs: [finishMsg, ...this.state.logs.slice(0, 150)]
+                logs: [finishMsg, ...(this.state.logs || []).slice(0, 150)]
             });
 
         } catch (e) {
@@ -452,7 +499,7 @@ class GlobalAiRunner {
             this.saveState({
                 isRunning: false,
                 isPaused: false,
-                logs: [`[${new Date().toLocaleTimeString()}] ❌ Lỗi tiến trình AI: ${e.message}`, ...this.state.logs.slice(0, 150)]
+                logs: [`[${new Date().toLocaleTimeString()}] ❌ Lỗi tiến trình AI: ${e.message}`, ...(this.state.logs || []).slice(0, 150)]
             });
         }
     }

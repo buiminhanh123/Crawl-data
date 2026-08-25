@@ -176,6 +176,12 @@ async function initDatabase() {
     try {
         db.run('ALTER TABLE product_profiles ADD COLUMN data_sheet_id TEXT DEFAULT NULL');
     } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN extraction_schema_json TEXT DEFAULT NULL');
+    } catch (e) {}
+    try {
+        db.run('ALTER TABLE product_profiles ADD COLUMN crawl_stats_json TEXT DEFAULT NULL');
+    } catch (e) {}
 
     try {
         const profRes = db.exec("SELECT COUNT(*) FROM product_profiles");
@@ -422,6 +428,9 @@ async function openProductsDb() {
         'ALTER TABLE products ADD COLUMN main_category TEXT DEFAULT NULL',
         'ALTER TABLE products ADD COLUMN part_number TEXT DEFAULT NULL',
         'ALTER TABLE products ADD COLUMN short_description TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN document_url TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN hdsd TEXT DEFAULT NULL',
+        'ALTER TABLE products ADD COLUMN custom_data TEXT DEFAULT NULL',
         "ALTER TABLE crawler_status ADD COLUMN profile_slug TEXT DEFAULT 'newland'",
         "ALTER TABLE crawler_failed ADD COLUMN profile_slug TEXT DEFAULT NULL"
     ];
@@ -625,6 +634,56 @@ function extractModelFromName(name, slug) {
         pdb.run(`DELETE FROM products WHERE id IN (${placeholders})`, ids);
         saveProductsDb(pdb);
         pdb.close();
+    },
+
+    bulkUpsertProducts: async (profileSlug, productsList = []) => {
+        if (!productsList || productsList.length === 0) return 0;
+        const pdb = await openProductsDb();
+        let insertedCount = 0;
+        for (const p of productsList) {
+            const url = p.url || p.detail_url || '';
+            if (!url) continue;
+            const name = (p.name || '').trim();
+            const model = (p.model || p.part_number || '').trim();
+            const category = (p.category || '').trim();
+            const series = (p.series || '').trim();
+            const image_url = (p.image_url || p.image || '').trim();
+            const description = (p.description || p.short_description || '').trim();
+            const short_description = (p.short_description || '').trim();
+            const specifications = typeof p.specs_json === 'object' ? JSON.stringify(p.specs_json) : (p.specs_json || p.specifications || '');
+            const slug = (p.slug || url.replace(/\/+$/, '').split('/').pop() || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')).toLowerCase();
+
+            const document_url = (p.document_url || p.catalog || p.catalog_url || '').trim();
+            const hdsd = (p.hdsd || p.manual_url || '').trim();
+            const custom_data = JSON.stringify(p);
+
+            try {
+                pdb.run(`
+                    INSERT INTO products (category, slug, name, short_description, description, image_url, url, specifications, part_number, profile_slug, series, main_category, document_url, hdsd, custom_data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(url) DO UPDATE SET
+                        name = CASE WHEN excluded.name != '' THEN excluded.name ELSE products.name END,
+                        category = CASE WHEN excluded.category != '' THEN excluded.category ELSE products.category END,
+                        series = CASE WHEN excluded.series != '' THEN excluded.series ELSE products.series END,
+                        part_number = CASE WHEN excluded.part_number != '' THEN excluded.part_number ELSE products.part_number END,
+                        image_url = CASE WHEN excluded.image_url != '' THEN excluded.image_url ELSE products.image_url END,
+                        description = CASE WHEN excluded.description != '' THEN excluded.description ELSE products.description END,
+                        specifications = CASE WHEN excluded.specifications != '' THEN excluded.specifications ELSE products.specifications END,
+                        document_url = CASE WHEN excluded.document_url != '' THEN excluded.document_url ELSE products.document_url END,
+                        hdsd = CASE WHEN excluded.hdsd != '' THEN excluded.hdsd ELSE products.hdsd END,
+                        custom_data = excluded.custom_data,
+                        profile_slug = excluded.profile_slug
+                `, [
+                    category, slug, name, short_description, description, image_url, url, specifications, model, profileSlug, series, category, document_url, hdsd, custom_data
+                ]);
+                insertedCount++;
+            } catch (err) {
+                console.error('[bulkUpsertProducts] error for URL:', url, err.message);
+            }
+        }
+        saveProductsDb(pdb);
+        pdb.close();
+        return insertedCount;
     },
 
     deleteByProfile: async (profileSlug) => {
@@ -997,6 +1056,32 @@ const profileQueries = {
         } catch (e) {
             return null;
         }
+    },
+
+    saveExtractionSchema: (slug, schemaObj) => {
+        db.run(
+            'UPDATE product_profiles SET extraction_schema_json = ?, updated_at = datetime("now") WHERE slug = ?',
+            [JSON.stringify(schemaObj), slug]
+        );
+        saveDatabase();
+    },
+
+    getExtractionSchema: (slug) => {
+        const res = db.exec('SELECT extraction_schema_json FROM product_profiles WHERE slug = ?', [slug]);
+        if (!res[0]?.values[0]?.[0]) return null;
+        try {
+            return JSON.parse(res[0].values[0][0]);
+        } catch (e) {
+            return null;
+        }
+    },
+
+    saveCrawlStats: (slug, statsObj) => {
+        db.run(
+            'UPDATE product_profiles SET crawl_stats_json = ?, updated_at = datetime("now") WHERE slug = ?',
+            [JSON.stringify(statsObj), slug]
+        );
+        saveDatabase();
     },
 
     saveCheckConfig: (slug, configObj) => {

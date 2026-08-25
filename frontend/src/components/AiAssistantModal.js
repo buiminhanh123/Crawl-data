@@ -29,7 +29,11 @@ import {
     Save,
     BookOpen,
     ShieldCheck,
-    CheckCheck
+    CheckCheck,
+    Table,
+    Eye,
+    Code,
+    Zap
 } from 'lucide-react';
 import {
     fetchGlossary,
@@ -41,6 +45,7 @@ import {
     applyPreTranslation,
     saveSeriesMemory
 } from '@/lib/translationControl';
+import { parseAndNormalizeHtmlTable } from '@/lib/htmlTableParser';
 
 export function convertMarkdownTableToHtml(text) {
     if (!text || typeof text !== 'string') return text;
@@ -332,11 +337,37 @@ Thông tin sản phẩm:
    - Giữ nguyên bản TẤT CẢ các mã số, mã định danh, số đo, đơn vị (VD: U089908..., EN ISO 13849-1, 250 years, 262,144 (18 bit), UNSPSC, ECLASS, ETIM, cULus, RoHS...)
    - KHÔNG thêm/bớt thông số. KHÔNG tự ý suy ra các từ đồng nghĩa khác. Chỉ dùng duy nhất 1 nghĩa tiếng Việt chuẩn kỹ thuật đã định sẵn.
 
+3. QUY TẮC XỬ LÝ BẢNG DÀI (BẮT BUỘC):
+   - Dịch 100% tất cả các dòng thông số trong 1 LẦN TRẢ VỀ DUY NHẤT. Bất kể bảng dài hơn 100-200 dòng, KHÔNG ĐƯỢC CHIA THÀNH NHIỀU PHẦN (Phần 1, Phần 2...).
+   - TUYỆT ĐỐ KHÔNG ĐƯỢC GIẢI THÍCH, KHÔNG CHÀO HỎI, KHÔNG DẪN DẮT. Chỉ xuất duy nhất bảng HTML kết quả.
+
 Thông tin:
 {noi-dung}`,
 
     custom: `Hãy xử lý thông tin sản phẩm sau theo yêu cầu:
 {noi-dung}`
+};
+
+const getJobStatusBg = (status) => {
+    switch (status) {
+        case 'done': return '#dcfce7'; // green-100
+        case 'running': return '#dbeafe'; // blue-100
+        case 'error': return '#fee2e2'; // red-100
+        case 'skipped': return '#f1f5f9'; // slate-100
+        case 'pending':
+        default: return '#e2e8f0'; // gray-200
+    }
+};
+
+const getJobStatusColor = (status) => {
+    switch (status) {
+        case 'done': return '#15803d'; // green-700
+        case 'running': return '#1d4ed8'; // blue-700
+        case 'error': return '#b91c1c'; // red-700
+        case 'skipped': return '#475569'; // slate-600
+        case 'pending':
+        default: return '#475569'; // slate-600
+    }
 };
 
 export default function AiAssistantModal({
@@ -540,6 +571,49 @@ export default function AiAssistantModal({
         }
     };
 
+    // Update currently selected saved command profile
+    const handleUpdateCurrentProfile = async () => {
+        if (!selectedSavedProfileId) return;
+        const p = savedProfiles.find(item => item.id === selectedSavedProfileId || String(item.id) === String(selectedSavedProfileId));
+        if (!p) return;
+
+        const updatedProfileData = {
+            ...p,
+            name: p.name,
+            presetType,
+            promptText,
+            variables,
+            targetColIdx,
+            startRow,
+            endRow,
+            concurrency,
+            skipExisting
+        };
+
+        try {
+            const res = await fetchApi(`/api/ai/prompt-profiles/${selectedSavedProfileId}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    name: updatedProfileData.name,
+                    prompt: JSON.stringify(updatedProfileData)
+                })
+            });
+
+            if (res && res.success) {
+                const updatedList = savedProfiles.map(item =>
+                    (item.id === selectedSavedProfileId || String(item.id) === String(selectedSavedProfileId))
+                        ? { ...updatedProfileData, id: selectedSavedProfileId }
+                        : item
+                );
+                setSavedProfiles(updatedList);
+                alert(`✅ Đã cập nhật thành công Cấu Hình Lệnh "${p.name}"!`);
+            }
+        } catch (e) {
+            console.error('Error updating profile:', e);
+            alert('❌ Không thể cập nhật Cấu Hình Lệnh vào Server Database.');
+        }
+    };
+
     // Delete selected saved command profile
     const handleDeleteSavedProfile = async () => {
         if (!selectedSavedProfileId) return;
@@ -563,6 +637,7 @@ export default function AiAssistantModal({
     const [selectedJobDetail, setSelectedJobDetail] = useState(null);
 
     const abortRef = useRef(false);
+    const promptTextareaRef = useRef(null);
 
     // Initial default variables: 1 clean example row
     const [variables, setVariables] = useState([
@@ -640,6 +715,136 @@ export default function AiAssistantModal({
         return '';
     };
 
+    // Parser State (0-Token Deterministic Table Normalizer)
+    const [parserSourceCol, setParserSourceCol] = useState(19); // Default Col T (0-indexed 19)
+    const [parserTargetCol, setParserTargetCol] = useState(20); // Default Col U (0-indexed 20)
+    const [parserHeading, setParserHeading] = useState('Thông số kỹ thuật');
+    const [parserTableClass, setParserTableClass] = useState('Table_Product_Style');
+    const [parserTh1, setParserTh1] = useState('Thông số');
+    const [parserTh2, setParserTh2] = useState('Giá trị');
+    const [parserKeepOriginalHeading, setParserKeepOriginalHeading] = useState(true);
+    const [parserStartRow, setParserStartRow] = useState(2);
+    const [parserEndRow, setParserEndRow] = useState('');
+    const [parserSkipExisting, setParserSkipExisting] = useState(false);
+    const [parserPreviewRowIdx, setParserPreviewRowIdx] = useState(2);
+    const [parserPreviewSource, setParserPreviewSource] = useState('');
+    const [parserPreviewResult, setParserPreviewResult] = useState('');
+    const [parserPreviewTab, setParserPreviewTab] = useState('rendered'); // 'rendered' | 'html'
+    const [parserProcessing, setParserProcessing] = useState(false);
+    const [parserSuccessMsg, setParserSuccessMsg] = useState('');
+    const [parserPreviewInfo, setParserPreviewInfo] = useState(null);
+
+    const handleRunParserPreview = (targetRow = parserPreviewRowIdx) => {
+        const activeSheet = sheets.find(s => s.name === selectedTab) || sheets[0];
+        const rIdx = Math.max(1, parseInt(targetRow) || 1) - 1;
+        if (!activeSheet || !activeSheet.data || activeSheet.data.length <= rIdx) {
+            alert('Hàng đã chọn không tồn tại hoặc không có dữ liệu.');
+            return;
+        }
+        const row = activeSheet.data[rIdx] || [];
+        const modelName = row[0] || row[1] || `Hàng ${rIdx + 1}`;
+        const sourceText = row[parserSourceCol] || '';
+        setParserPreviewSource(sourceText);
+        
+        if (!sourceText || typeof sourceText !== 'string' || sourceText.trim() === '') {
+            setParserPreviewInfo({
+                rowNum: rIdx + 1,
+                modelName,
+                sourceLen: 0,
+                rowCount: 0,
+                empty: true
+            });
+            setParserPreviewResult('<div style="color: #94a3b8; font-style: italic; padding: 24px; text-align: center;">⚠️ Ô dữ liệu nguồn ở Cột ' + getColLetter(parserSourceCol) + ' của Hàng ' + (rIdx + 1) + ' (' + modelName + ') đang TRỐNG.<br/><span style="font-size: 11.5px; color: #64748b; margin-top: 4px; display: inline-block;">(Vui lòng chọn hàng khác có dữ liệu thông số HTML)</span></div>');
+            return;
+        }
+
+        const converted = parseAndNormalizeHtmlTable(sourceText, {
+            heading: parserHeading,
+            tableClass: parserTableClass,
+            th1: parserTh1,
+            th2: parserTh2,
+            keepOriginalHeading: parserKeepOriginalHeading
+        });
+
+        const rowMatches = converted ? (converted.match(/<tr/gi) || []).length : 0;
+        const actualSpecRows = Math.max(0, rowMatches - 1);
+
+        setParserPreviewInfo({
+            rowNum: rIdx + 1,
+            modelName,
+            sourceLen: sourceText.length,
+            rowCount: actualSpecRows,
+            empty: false
+        });
+
+        setParserPreviewResult(converted);
+    };
+
+    const handleRunBatchParser = async () => {
+        const activeSheet = sheets.find(s => s.name === selectedTab) || sheets[0];
+        if (!activeSheet || !activeSheet.data || activeSheet.data.length === 0) {
+            alert('Không tìm thấy dữ liệu trong tab.');
+            return;
+        }
+
+        setParserProcessing(true);
+        setParserSuccessMsg('');
+
+        try {
+            const sIdx = Math.max(1, parseInt(parserStartRow) || 1) - 1;
+            const eIdx = parserEndRow ? Math.min(activeSheet.data.length, parseInt(parserEndRow)) : activeSheet.data.length;
+
+            let workingData = activeSheet.data.map(r => Array.isArray(r) ? [...r] : []);
+            let convertedCount = 0;
+            let skippedCount = 0;
+
+            for (let r = sIdx; r < eIdx; r++) {
+                const row = workingData[r];
+                if (!row) continue;
+
+                const existingTarget = row[parserTargetCol];
+                if (parserSkipExisting && existingTarget && String(existingTarget).trim() !== '') {
+                    skippedCount++;
+                    continue;
+                }
+
+                const sourceVal = row[parserSourceCol];
+                if (sourceVal && typeof sourceVal === 'string' && sourceVal.trim() !== '') {
+                    const converted = parseAndNormalizeHtmlTable(sourceVal, {
+                        heading: parserHeading,
+                        tableClass: parserTableClass,
+                        th1: parserTh1,
+                        th2: parserTh2,
+                        keepOriginalHeading: parserKeepOriginalHeading
+                    });
+                    if (converted) {
+                        row[parserTargetCol] = converted;
+                        convertedCount++;
+                    }
+                }
+            }
+
+            const updatedSheets = sheets.map(s => s.name === selectedTab ? { ...s, data: workingData } : s);
+            if (onUpdateSheets) onUpdateSheets(updatedSheets);
+
+            try {
+                await fetchApi('/api/products/profile-sheet', {
+                    method: 'POST',
+                    body: JSON.stringify({ profile: profileSlug, sheets: updatedSheets })
+                });
+            } catch (e) {
+                console.error('Failed to auto-save sheet parser:', e);
+            }
+
+            playCompletionChime();
+            setParserSuccessMsg(`🎉 Đã chuyển đổi thành công ${convertedCount} hàng (Bỏ qua: ${skippedCount}) trong nháy mắt!`);
+        } catch (err) {
+            alert('Lỗi chuyển đổi: ' + err.message);
+        } finally {
+            setParserProcessing(false);
+        }
+    };
+
     // Auto-map variables from Header row manually
     const handleAutoMapFromHeader = () => {
         if (!sheetData.length) {
@@ -683,6 +888,36 @@ export default function AiAssistantModal({
 
     const handleRemoveVariable = (id) => {
         setVariables(prev => prev.filter(v => v.id !== id));
+    };
+    const handleDeleteVariable = handleRemoveVariable;
+
+    // Insert variable tag into prompt textarea at cursor position or append
+    const handleInsertVariable = (token) => {
+        if (!token) return;
+        let tag = token;
+        if (!tag.startsWith('{')) {
+            if (/^[A-Z]+$/.test(tag)) {
+                tag = `{{${tag}}}`;
+            } else {
+                tag = `{${tag}}`;
+            }
+        }
+
+        const textarea = promptTextareaRef.current;
+        if (textarea) {
+            const start = textarea.selectionStart ?? promptText.length;
+            const end = textarea.selectionEnd ?? promptText.length;
+            const before = promptText.substring(0, start);
+            const after = promptText.substring(end);
+            const nextText = `${before}${tag}${after}`;
+            setPromptText(nextText);
+            setTimeout(() => {
+                textarea.focus();
+                textarea.setSelectionRange(start + tag.length, start + tag.length);
+            }, 0);
+        } else {
+            setPromptText(prev => `${prev} ${tag}`);
+        }
     };
 
     // Format prompt template with custom variables & column tags for specific row
@@ -1091,6 +1326,30 @@ export default function AiAssistantModal({
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => {
+                                        setActiveView('parser');
+                                        if (!parserPreviewResult) {
+                                            setTimeout(() => handleRunParserPreview(parserPreviewRowIdx), 50);
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '4px 12px',
+                                        fontSize: 12,
+                                        fontWeight: 700,
+                                        borderRadius: 6,
+                                        border: activeView === 'parser' ? '1.5px solid #059669' : '1px solid var(--border-color)',
+                                        background: activeView === 'parser' ? '#ecfdf5' : 'var(--bg-card)',
+                                        color: activeView === 'parser' ? '#059669' : 'var(--text-secondary)',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 5
+                                    }}
+                                >
+                                    <Zap size={13} /> Chuyển Đổi Bảng HTML (Parser 0 Token)
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => setActiveView('glossary')}
                                     style={{
                                         padding: '4px 12px',
@@ -1263,45 +1522,443 @@ export default function AiAssistantModal({
                                 </div>
                             </div>
                         </div>
+                    ) : activeView === 'parser' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            {/* Parser Intro Banner */}
+                            <div style={{ padding: '14px 18px', background: '#ecfdf5', borderRadius: 'var(--radius-md)', border: '1px solid #a7f3d0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                                <div>
+                                    <div style={{ fontSize: 13.5, fontWeight: 700, color: '#065f46', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <Zap size={16} /> Chuyển Đổi Bảng Thông Số Bằng DOM Parser (Thuật Toán Chuẩn)
+                                    </div>
+                                    <div style={{ fontSize: 12, color: '#047857', marginTop: 2 }}>
+                                        Tự động trích xuất mọi cấu trúc bảng/khối DIV thông số thành định dạng thẻ <code>&lt;table class="{parserTableClass}"&gt;</code> chuẩn Web. Tốc độ siêu tốc 0.05s, 0 Token AI, bảo đảm 100% không mất chữ, không bị ngắt đoạn.
+                                    </div>
+                                </div>
+                            </div>
+
+                            {parserSuccessMsg && (
+                                <div style={{ padding: '10px 14px', background: '#dcfce7', border: '1px solid #86efac', borderRadius: 8, color: '#15803d', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span>{parserSuccessMsg}</span>
+                                    <button type="button" onClick={() => setParserSuccessMsg('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#15803d' }}><X size={15} /></button>
+                                </div>
+                            )}
+
+                            {/* Section 1: Sub-Tab & Cột Nguồn / Cột Đích */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, padding: 16, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                                <div>
+                                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                        Chọn Sub-Tab dữ liệu:
+                                    </label>
+                                    <select
+                                        value={selectedTab}
+                                        onChange={e => setSelectedTab(e.target.value)}
+                                        style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontWeight: 600 }}
+                                    >
+                                        {sheets.map((s, idx) => (
+                                            <option key={idx} value={s.name}>
+                                                📄 Tab '{s.name}' ({s.data?.length || 0} hàng)
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                        Cột Nguồn (Chứa mã HTML/DIV thô):
+                                    </label>
+                                    <select
+                                        value={parserSourceCol}
+                                        onChange={e => setParserSourceCol(parseInt(e.target.value))}
+                                        style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
+                                    >
+                                        {Array.from({ length: Math.max(maxCols, 1) }).map((_, cIdx) => {
+                                            const letter = getColLetter(cIdx);
+                                            const headerTitle = getHeaderTitleForCol(cIdx);
+                                            return (
+                                                <option key={cIdx} value={cIdx}>
+                                                    Cột {letter} {headerTitle ? `— [${headerTitle}]` : ''}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                        Cột Đích (Nơi lưu Bảng HTML Chuẩn):
+                                    </label>
+                                    <select
+                                        value={parserTargetCol}
+                                        onChange={e => setParserTargetCol(parseInt(e.target.value))}
+                                        style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid #10b981', background: '#ecfdf5', color: '#047857', fontWeight: 700 }}
+                                    >
+                                        {Array.from({ length: Math.max(maxCols, 1) }).map((_, cIdx) => {
+                                            const letter = getColLetter(cIdx);
+                                            const headerTitle = getHeaderTitleForCol(cIdx);
+                                            return (
+                                                <option key={cIdx} value={cIdx}>
+                                                    Cột {letter} {headerTitle ? `— [${headerTitle}]` : ''}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Section 2: Cấu hình HTML Output */}
+                            <div style={{ padding: 16, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                                    <Table size={16} style={{ color: '#059669' }} /> Cấu hình Cấu Trúc HTML Bảng:
+                                </span>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                                    <div>
+                                        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Tiêu đề thẻ &lt;h2&gt;:</label>
+                                        <input
+                                            type="text"
+                                            value={parserHeading}
+                                            onChange={e => setParserHeading(e.target.value)}
+                                            placeholder="Thông số kỹ thuật"
+                                            style={{ width: '100%', padding: '7px 10px', fontSize: 12.5, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Tên Class của &lt;table&gt;:</label>
+                                        <input
+                                            type="text"
+                                            value={parserTableClass}
+                                            onChange={e => setParserTableClass(e.target.value)}
+                                            placeholder="Table_Product_Style"
+                                            style={{ width: '100%', padding: '7px 10px', fontSize: 12.5, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Cột 1 Header &lt;th&gt;:</label>
+                                        <input
+                                            type="text"
+                                            value={parserTh1}
+                                            onChange={e => setParserTh1(e.target.value)}
+                                            placeholder="Thông số"
+                                            style={{ width: '100%', padding: '7px 10px', fontSize: 12.5, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Cột 2 Header &lt;th&gt;:</label>
+                                        <input
+                                            type="text"
+                                            value={parserTh2}
+                                            onChange={e => setParserTh2(e.target.value)}
+                                            placeholder="Giá trị"
+                                            style={{ width: '100%', padding: '7px 10px', fontSize: 12.5, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                        />
+                                    </div>
+                                </div>
+                                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <input
+                                        type="checkbox"
+                                        id="chk-keep-h"
+                                        checked={parserKeepOriginalHeading}
+                                        onChange={e => setParserKeepOriginalHeading(e.target.checked)}
+                                        style={{ accentColor: '#059669' }}
+                                    />
+                                    <label htmlFor="chk-keep-h" style={{ fontSize: 12.5, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                                        Tự động giữ nguyên tiêu đề &lt;h2&gt; gốc nếu trong ô nguồn đã có sẵn
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Section 3: Phạm vi hàng */}
+                            <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                                    <span>Từ hàng:</span>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        value={parserStartRow}
+                                        onChange={e => setParserStartRow(e.target.value)}
+                                        style={{ width: 60, padding: '5px 8px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', textAlign: 'center' }}
+                                    />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                                    <span>Đến hàng:</span>
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        value={parserEndRow}
+                                        onChange={e => setParserEndRow(e.target.value)}
+                                        placeholder="Hàng cuối"
+                                        style={{ width: 85, padding: '5px 8px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', textAlign: 'center' }}
+                                    />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 'auto' }}>
+                                    <input
+                                        type="checkbox"
+                                        id="chk-parser-skip"
+                                        checked={parserSkipExisting}
+                                        onChange={e => setParserSkipExisting(e.target.checked)}
+                                        style={{ accentColor: '#059669' }}
+                                    />
+                                    <label htmlFor="chk-parser-skip" style={{ cursor: 'pointer', fontWeight: 600 }}>
+                                        Bỏ qua các hàng đã có dữ liệu ở cột đích
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Section 4: Live Preview Box */}
+                            <div style={{ padding: 16, background: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px solid #cbd5e1' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <Eye size={16} style={{ color: '#0284c7' }} /> Xem Trước Kết Quả Chuyển Đổi:
+                                        </span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                                            <span>Hàng:</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const nextRow = Math.max(1, parserPreviewRowIdx - 1);
+                                                    setParserPreviewRowIdx(nextRow);
+                                                    handleRunParserPreview(nextRow);
+                                                }}
+                                                disabled={parserPreviewRowIdx <= 1}
+                                                style={{ padding: '3px 8px', fontSize: 11, background: '#e2e8f0', border: '1px solid #cbd5e1', borderRadius: 4, cursor: parserPreviewRowIdx <= 1 ? 'not-allowed' : 'pointer' }}
+                                                title="Hàng trước"
+                                            >
+                                                ◀
+                                            </button>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={sheetData.length || 1}
+                                                value={parserPreviewRowIdx}
+                                                onChange={e => setParserPreviewRowIdx(parseInt(e.target.value) || 1)}
+                                                onKeyDown={e => { if (e.key === 'Enter') handleRunParserPreview(parserPreviewRowIdx); }}
+                                                style={{ width: 55, padding: '3px 6px', fontSize: 12, textAlign: 'center', borderRadius: 4, border: '1px solid #cbd5e1' }}
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const nextRow = Math.min(sheetData.length || 999, parserPreviewRowIdx + 1);
+                                                    setParserPreviewRowIdx(nextRow);
+                                                    handleRunParserPreview(nextRow);
+                                                }}
+                                                disabled={sheetData.length > 0 && parserPreviewRowIdx >= sheetData.length}
+                                                style={{ padding: '3px 8px', fontSize: 11, background: '#e2e8f0', border: '1px solid #cbd5e1', borderRadius: 4, cursor: (sheetData.length > 0 && parserPreviewRowIdx >= sheetData.length) ? 'not-allowed' : 'pointer' }}
+                                                title="Hàng tiếp theo"
+                                            >
+                                                ▶
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRunParserPreview(parserPreviewRowIdx)}
+                                                style={{ padding: '4px 12px', fontSize: 12, fontWeight: 700, background: '#0284c7', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                            >
+                                                Kiểm tra ngay
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Preview Mode Switcher */}
+                                    <div style={{ display: 'flex', gap: 4, background: '#e2e8f0', padding: 2, borderRadius: 6 }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setParserPreviewTab('rendered')}
+                                            style={{ padding: '3px 10px', fontSize: 11.5, fontWeight: 600, borderRadius: 4, border: 'none', cursor: 'pointer', background: parserPreviewTab === 'rendered' ? 'white' : 'transparent', color: parserPreviewTab === 'rendered' ? '#0f172a' : '#64748b' }}
+                                        >
+                                            👁️ Giao Diện Web
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setParserPreviewTab('html')}
+                                            style={{ padding: '3px 10px', fontSize: 11.5, fontWeight: 600, borderRadius: 4, border: 'none', cursor: 'pointer', background: parserPreviewTab === 'html' ? 'white' : 'transparent', color: parserPreviewTab === 'html' ? '#0f172a' : '#64748b' }}
+                                        >
+                                            &lt;/&gt; Mã HTML
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Preview Info Badge & Sample Switchers */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                                    {parserPreviewInfo && !parserPreviewInfo.empty ? (
+                                        <div style={{ fontSize: 12, color: '#0369a1', background: '#e0f2fe', padding: '4px 10px', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6, border: '1px solid #bae6fd' }}>
+                                            <span><strong>Hàng {parserPreviewInfo.rowNum}:</strong> {parserPreviewInfo.modelName}</span>
+                                            <span>•</span>
+                                            <span>Nguồn: <strong>{parserPreviewInfo.sourceLen}</strong> ký tự</span>
+                                            <span>•</span>
+                                            <span>Trích xuất: <strong>{parserPreviewInfo.rowCount}</strong> dòng thông số</span>
+                                        </div>
+                                    ) : (
+                                        <span style={{ fontSize: 11.5, color: '#64748b' }}>Thử kiểm tra nhanh các hàng mẫu:</span>
+                                    )}
+
+                                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                        <span style={{ fontSize: 11.5, color: '#64748b' }}>Xem nhanh:</span>
+                                        {[2, 3, 5].map(rNum => (
+                                            <button
+                                                key={rNum}
+                                                type="button"
+                                                onClick={() => {
+                                                    setParserPreviewRowIdx(rNum);
+                                                    handleRunParserPreview(rNum);
+                                                }}
+                                                style={{ padding: '2px 8px', fontSize: 11, background: parserPreviewRowIdx === rNum ? '#0284c7' : '#f1f5f9', color: parserPreviewRowIdx === rNum ? 'white' : '#334155', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
+                                            >
+                                                Hàng {rNum} {rNum === 2 ? '(Phụ kiện)' : rNum === 3 ? '(Bảng chi tiết)' : ''}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Notice if Row 2 only has 1 accessory row */}
+                                {parserPreviewInfo && parserPreviewInfo.rowCount === 1 && (
+                                    <div style={{ marginBottom: 8, padding: '6px 12px', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, fontSize: 12, color: '#92400e', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span>💡 Hàng {parserPreviewInfo.rowNum} ({parserPreviewInfo.modelName}) là phụ kiện nên chỉ có 1 dòng thông số "Các model áp dụng". Bấm nút <strong>"Hàng 3 (Bảng chi tiết)"</strong> ở trên để xem bảng nhiều thông số hơn.</span>
+                                    </div>
+                                )}
+
+                                {/* Preview Content */}
+                                {parserPreviewResult ? (
+                                    <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, background: 'white', padding: 14, maxHeight: 300, overflowY: 'auto' }}>
+                                        {parserPreviewTab === 'rendered' ? (
+                                            <div>
+                                                <style>{`
+                                                    .Table_Product_Style, .Table_Products_Style {
+                                                        width: 100%;
+                                                        border-collapse: collapse;
+                                                        margin-top: 8px;
+                                                        font-size: 12.5px;
+                                                    }
+                                                    .Table_Product_Style th, .Table_Products_Style th {
+                                                        background: #f1f5f9;
+                                                        color: #1e293b;
+                                                        font-weight: 700;
+                                                        text-align: left;
+                                                        padding: 8px 12px;
+                                                        border: 1px solid #cbd5e1;
+                                                    }
+                                                    .Table_Product_Style td, .Table_Products_Style td {
+                                                        padding: 8px 12px;
+                                                        border: 1px solid #e2e8f0;
+                                                        color: #334155;
+                                                    }
+                                                    .Table_Product_Style tr:nth-child(even), .Table_Products_Style tr:nth-child(even) {
+                                                        background: #f8fafc;
+                                                    }
+                                                    .Table_Product_Style a, .Table_Products_Style a {
+                                                        color: #0284c7;
+                                                        text-decoration: underline;
+                                                        font-weight: 600;
+                                                    }
+                                                `}</style>
+                                                <div dangerouslySetInnerHTML={{ __html: parserPreviewResult }} />
+                                            </div>
+                                        ) : (
+                                            <pre style={{ margin: 0, fontSize: 12, fontFamily: 'monospace', color: '#0f172a', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+                                                {parserPreviewResult}
+                                            </pre>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div style={{ padding: 20, textAlign: 'center', color: '#94a3b8', fontSize: 12.5, border: '1px dashed #cbd5e1', borderRadius: 8 }}>
+                                        Bấm <strong>"Kiểm tra ngay"</strong> ở trên để xem trước bảng chuyển đổi mẫu cho hàng đang chọn.
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Section 5: Batch Run Card */}
+                            <div style={{ padding: '16px 20px', background: '#f0fdf4', borderRadius: 'var(--radius-md)', border: '1.5px solid #86efac', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14 }}>
+                                <div>
+                                    <div style={{ fontSize: 14, fontWeight: 700, color: '#166534', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <Zap size={18} style={{ color: '#16a34a' }} /> Bắt đầu chuyển đổi bảng hàng loạt (0 Token AI):
+                                    </div>
+                                    <div style={{ fontSize: 12.5, color: '#15803d', marginTop: 2 }}>
+                                        Xử lý từ <strong>Cột {getColLetter(parserSourceCol)}</strong> sang <strong>Cột {getColLetter(parserTargetCol)}</strong> (Phạm vi: Hàng {parserStartRow} đến {parserEndRow || 'hàng cuối'}).
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    onClick={handleRunBatchParser}
+                                    disabled={parserProcessing}
+                                    style={{
+                                        background: '#16a34a',
+                                        color: 'white',
+                                        border: 'none',
+                                        padding: '10px 24px',
+                                        fontSize: 13.5,
+                                        fontWeight: 700,
+                                        borderRadius: 'var(--radius-md)',
+                                        cursor: parserProcessing ? 'not-allowed' : 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 8,
+                                        boxShadow: '0 4px 12px rgba(22, 163, 74, 0.3)'
+                                    }}
+                                >
+                                    {parserProcessing ? (
+                                        <>
+                                            <Loader2 className="spin" size={17} /> Đang chuyển đổi...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Zap size={17} /> ⚡ Bắt Đầu Chuyển Đổi Bảng Ngay (0 Token)
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </div>
                     ) : (
                         <>
                     
                     {/* Saved Command Profiles Preset Manager Bar */}
                     <div style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px solid #cbd5e1', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 280 }}>
-                            <Bookmark size={18} style={{ color: 'var(--accent)' }} />
-                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 240 }}>
+                            <Bookmark size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', flexShrink: 0 }}>
                                 📁 Cấu hình Prompt Đã Lưu:
                             </span>
-                            <select
-                                value={selectedSavedProfileId}
-                                onChange={e => handleSelectSavedProfile(e.target.value)}
-                                style={{ flex: 1, padding: '7px 11px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontWeight: 600 }}
-                            >
-                                <option value="">-- Chọn Cấu hình Prompt Đã Lưu --</option>
-                                {savedProfiles.map(p => (
-                                    <option key={p.id} value={p.id}>
-                                        ⭐ {p.name} ({p.variables?.length || 0} biến - Cột {getColLetter(p.targetColIdx)})
-                                    </option>
-                                ))}
-                            </select>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <select
+                                    value={selectedSavedProfileId}
+                                    onChange={e => handleSelectSavedProfile(e.target.value)}
+                                    style={{ width: '100%', padding: '7px 11px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontWeight: 600, outline: 'none', textOverflow: 'ellipsis' }}
+                                >
+                                    <option value="">-- Chọn Cấu hình Prompt Đã Lưu --</option>
+                                    {savedProfiles.map(p => (
+                                        <option key={p.id} value={p.id}>
+                                            ⭐ {p.name} ({p.variables?.length || 0} biến - Cột {getColLetter(p.targetColIdx)})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                            {selectedSavedProfileId && (
+                                <button
+                                    type="button"
+                                    className="btn btn-sm"
+                                    onClick={handleUpdateCurrentProfile}
+                                    style={{ fontSize: 12.5, padding: '6px 14px', background: '#0284c7', color: 'white', border: 'none', fontWeight: 600, borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.1)', whiteSpace: 'nowrap' }}
+                                    title="Lưu ghi đè lên cấu hình đang chọn"
+                                >
+                                    <CheckCircle2 size={15} /> Cập Nhật Cấu Hình Đang Chọn
+                                </button>
+                            )}
+
                             <button
                                 type="button"
                                 className="btn btn-sm"
                                 onClick={handleSaveCurrentProfile}
-                                style={{ fontSize: 12.5, padding: '6px 14px', background: 'var(--gradient-primary)', color: 'white', border: 'none', fontWeight: 600, borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.1)' }}
+                                style={{ fontSize: 12.5, padding: '6px 14px', background: 'var(--gradient-primary)', color: 'white', border: 'none', fontWeight: 600, borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.1)', whiteSpace: 'nowrap' }}
                             >
-                                <Save size={15} /> Lưu Cấu Hình Lệnh Hiện Tại
+                                <Save size={15} /> Lưu Cấu Hình Mới
                             </button>
 
                             {selectedSavedProfileId && (
                                 <button
                                     type="button"
                                     onClick={handleDeleteSavedProfile}
-                                    style={{ fontSize: 12, padding: '6px 10px', background: '#fef2f2', color: '#ef4444', border: '1px solid #fecaca', fontWeight: 600, borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                                    style={{ fontSize: 12, padding: '6px 10px', background: '#fef2f2', color: '#ef4444', border: '1px solid #fecaca', fontWeight: 600, borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
                                     title="Xóa Profile Lệnh Này"
                                 >
                                     <Trash2 size={14} /> Xóa Profile
@@ -1418,8 +2075,8 @@ export default function AiAssistantModal({
                         </div>
                     </div>
 
-                    {/* Sub-Tab, Output Target & Concurrency Threads Selector */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 180px', gap: 16 }}>
+                    {/* Section 1: Sub-Tab, Cột Đích & Số Luồng Song Song (Matching Image 2) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, padding: '14px 16px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                         <div>
                             <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
                                 Chọn Sub-Tab dữ liệu:
@@ -1429,8 +2086,8 @@ export default function AiAssistantModal({
                                 onChange={e => setSelectedTab(e.target.value)}
                                 style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                             >
-                                {sheets.map(s => (
-                                    <option key={s.name} value={s.name}>
+                                {sheets.map((s, idx) => (
+                                    <option key={idx} value={s.name}>
                                         📄 Tab '{s.name}' ({s.data?.length || 0} hàng)
                                     </option>
                                 ))}
@@ -1537,46 +2194,40 @@ export default function AiAssistantModal({
                                             const cIdx = colToIdx(newCol);
                                             const hTitle = getHeaderTitleForCol(cIdx);
                                             const updates = { col: newCol };
-                                            if (hTitle && (!v.label || v.label === v.col)) {
+                                            if (hTitle && (!v.label || v.label === v.name)) {
                                                 updates.label = hTitle;
                                                 updates.name = cleanHeaderToSlug(hTitle, newCol);
                                             }
                                             handleUpdateVariable(v.id, updates);
                                         }}
-                                        style={{ padding: '6px 8px', fontSize: 12, fontWeight: 700, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)', textOverflow: 'ellipsis' }}
+                                        style={{ padding: '6px 10px', fontSize: 12.5, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', background: 'var(--bg-card)', color: 'var(--text-primary)' }}
                                     >
                                         {Array.from({ length: Math.max(maxCols, 1) }).map((_, cIdx) => {
                                             const letter = getColLetter(cIdx);
                                             const headerTitle = getHeaderTitleForCol(cIdx);
                                             return (
-                                                <option key={letter} value={letter}>
+                                                <option key={cIdx} value={letter}>
                                                     {letter} {headerTitle ? `(${headerTitle})` : ''}
                                                 </option>
                                             );
                                         })}
                                     </select>
 
-                                    {/* BIẾN INPUT ({slug-var}) */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>{`{`}</span>
-                                        <input
-                                            type="text"
-                                            value={v.name}
-                                            onChange={e => handleUpdateVariable(v.id, { name: e.target.value })}
-                                            placeholder="var-name"
-                                            style={{ width: '100%', padding: '6px 8px', fontSize: 12.5, fontWeight: 600, borderRadius: 'var(--radius-sm)', border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8', fontFamily: 'monospace' }}
-                                        />
-                                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>{`}`}</span>
+                                    {/* BIẾN INPUT (e.g. { thong-so }) */}
+                                    <div style={{ display: 'flex', alignItems: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 'var(--radius-sm)', padding: '5px 10px', fontSize: 12.5, fontFamily: 'monospace', color: '#0284c7', fontWeight: 600 }}>
+                                        <span style={{ color: '#0369a1', marginRight: 4 }}>{`{`}</span>
+                                        <span style={{ flex: 1 }}>{v.name || 'var'}</span>
+                                        <span style={{ color: '#0369a1', marginLeft: 4 }}>{`}`}</span>
                                     </div>
 
-                                    {/* Delete Button [ X ] */}
+                                    {/* Delete Button */}
                                     <button
                                         type="button"
                                         onClick={() => handleRemoveVariable(v.id)}
-                                        style={{ width: 28, height: 28, borderRadius: 5, border: '1px solid #fecaca', background: '#fef2f2', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                        style={{ padding: 6, border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                                         title="Xóa biến này"
                                     >
-                                        <X size={14} />
+                                        <X size={15} />
                                     </button>
                                 </div>
                             ))}
@@ -1584,155 +2235,171 @@ export default function AiAssistantModal({
 
                         <button
                             type="button"
+                            className="btn btn-ghost btn-sm"
                             onClick={handleAddVariable}
-                            style={{ marginTop: 10, padding: '4px 10px', fontSize: 12, background: 'none', border: '1px dashed var(--border-color)', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                            style={{ marginTop: 10, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--accent)', fontWeight: 600 }}
                         >
                             <Plus size={14} /> Thêm biến tùy chỉnh
                         </button>
                     </div>
 
-                    {/* Section 3: Prompt Template Input */}
+                    {/* Section 3: Câu Lệnh AI (Prompt Template with Click-to-Insert Pills) */}
                     <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                            <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
                                 3. Câu Lệnh AI (Prompt Template):
                             </label>
-                            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Bấm để chèn nhanh biến vào Prompt:</span>
+                            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                                Bấm để chèn nhanh biến vào Prompt:
+                            </span>
                         </div>
-                        
-                        {/* Dynamic Column Tag & Variable Pills */}
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                            {/* Custom Mapped Variable Pills */}
-                            {variables.map((v, idx) => (
-                                v.name && (
-                                    <button
-                                        key={v.id ? `mtag-${v.id}-${idx}` : `mtag-idx-${idx}`}
-                                        type="button"
-                                        onClick={() => setPromptText(prev => prev + ` {${v.name}}`)}
-                                        style={{ padding: '3px 8px', fontSize: 11.5, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
-                                    >
-                                        + {`{${v.name}}`} (Cột {v.col})
-                                    </button>
-                                )
-                            ))}
 
-                            {/* Standard Column Tag Pills */}
-                            {Array.from({ length: Math.min(maxCols, 8) }).map((_, cIdx) => {
-                                const letter = getColLetter(cIdx);
-                                return (
-                                    <button
-                                        key={letter}
-                                        type="button"
-                                        onClick={() => setPromptText(prev => prev + ` {{${letter}}}`)}
-                                        style={{ padding: '3px 8px', fontSize: 11.5, background: '#fff7ed', border: '1px solid #ffedd5', color: 'var(--accent)', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }}
-                                    >
-                                        + {`{{${letter}}}`}
-                                    </button>
-                                );
-                            })}
+                        {/* Click-to-Insert Quick Variable Buttons / Pills */}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                            {variables.map((v, idx) => (
+                                <button
+                                    key={v.id ? `pill-v-${v.id}` : `pill-idx-${idx}`}
+                                    type="button"
+                                    onClick={() => handleInsertVariable(v.name)}
+                                    style={{
+                                        padding: '4px 10px',
+                                        fontSize: 11.5,
+                                        fontFamily: 'monospace',
+                                        fontWeight: 600,
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: '1px solid #bfdbfe',
+                                        background: '#eff6ff',
+                                        color: '#1d4ed8',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 4
+                                    }}
+                                >
+                                    <Plus size={12} /> {`{${v.name}}`} <span style={{ fontSize: 10, color: '#6b7280', fontFamily: 'sans-serif' }}>(Cột {v.col})</span>
+                                </button>
+                            ))}
+                            {/* Generic Column Tokens */}
+                            {['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map(col => (
+                                <button
+                                    key={`gen-${col}`}
+                                    type="button"
+                                    onClick={() => handleInsertVariable(col)}
+                                    style={{
+                                        padding: '4px 8px',
+                                        fontSize: 11,
+                                        fontFamily: 'monospace',
+                                        borderRadius: 'var(--radius-sm)',
+                                        border: '1px solid #fed7aa',
+                                        background: '#fff7ed',
+                                        color: '#c2410c',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    + {`{{${col}}}`}
+                                </button>
+                            ))}
                         </div>
 
                         <textarea
+                            ref={promptTextareaRef}
                             value={promptText}
                             onChange={e => setPromptText(e.target.value)}
-                            rows={5}
-                            style={{ width: '100%', padding: '10px 12px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontFamily: 'monospace', outline: 'none' }}
+                            rows={8}
+                            placeholder="Nhập câu lệnh của bạn. Sử dụng {ten_bien} tương ứng với danh sách biến ở trên..."
+                            style={{
+                                width: '100%',
+                                padding: '12px 14px',
+                                fontSize: 13,
+                                fontFamily: 'monospace',
+                                lineHeight: 1.5,
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border-color)',
+                                background: 'var(--bg-secondary)',
+                                color: 'var(--text-primary)',
+                                resize: 'vertical'
+                            }}
                         />
                     </div>
 
-                    {/* Row Range & Options */}
-                    <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                    {/* Row Range & Execution Options */}
+                    <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
                             <span>Từ hàng:</span>
                             <input
                                 type="number"
                                 min={1}
                                 value={startRow}
                                 onChange={e => setStartRow(e.target.value)}
-                                style={{ width: 70, padding: '4px 8px', fontSize: 12.5, borderRadius: 4, border: '1px solid var(--border-color)' }}
+                                style={{ width: 60, padding: '5px 8px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', textAlign: 'center' }}
                             />
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
                             <span>Đến hàng:</span>
                             <input
                                 type="number"
-                                placeholder="Hàng cuối"
+                                min={1}
                                 value={endRow}
                                 onChange={e => setEndRow(e.target.value)}
-                                style={{ width: 90, padding: '4px 8px', fontSize: 12.5, borderRadius: 4, border: '1px solid var(--border-color)' }}
+                                placeholder="Hàng cuối"
+                                style={{ width: 85, padding: '5px 8px', fontSize: 13, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', textAlign: 'center' }}
                             />
                         </div>
 
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, cursor: 'pointer', userSelect: 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginLeft: 'auto' }}>
                             <input
                                 type="checkbox"
+                                id="chk-skip"
                                 checked={skipExisting}
                                 onChange={e => setSkipExisting(e.target.checked)}
                                 style={{ accentColor: 'var(--accent)' }}
                             />
-                            <span>Bỏ qua các hàng đã có dữ liệu ở cột đích</span>
-                        </label>
+                            <label htmlFor="chk-skip" style={{ cursor: 'pointer', fontWeight: 500 }}>
+                                Bỏ qua các hàng đã có dữ liệu ở cột đích
+                            </label>
+                        </div>
                     </div>
 
-                    {/* Section 4: Visual Status Grid Tiles Matrix (Ma Trận Ô Vuông Theo Dõi Tiến Độ) */}
+                    {/* Status Matrix Grid & Logs */}
                     {jobs.length > 0 && (
                         <div style={{ padding: '14px 16px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <Layers size={16} style={{ color: 'var(--accent)' }} /> 
-                                    Ma Trận Ô Theo Dõi Hàng ({stats.done + stats.skipped}/{stats.total} xong)
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <Layers size={16} style={{ color: 'var(--accent)' }} /> Ma Trận Tiến Độ Hàng ({jobs.length} Hàng):
                                 </div>
-
-                                {/* Status Legend Indicators */}
-                                <div style={{ display: 'flex', gap: 12, fontSize: 11, fontWeight: 600 }}>
-                                    <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: '#10b981' }} /> {stats.done} Xong</span>
-                                    <span style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: '#f59e0b' }} /> {stats.skipped} Bỏ qua</span>
-                                    <span style={{ color: '#3b82f6', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: '#3b82f6' }} /> {stats.running} Đang chạy</span>
-                                    <span style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: '#ef4444' }} /> {stats.error} Lỗi</span>
-                                    <span style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: '#cbd5e1' }} /> {stats.pending} Chờ</span>
+                                <div style={{ display: 'flex', gap: 12, fontSize: 11.5, fontWeight: 600 }}>
+                                    <span style={{ color: '#16a34a' }}>● Hoàn thành: {stats.done}</span>
+                                    <span style={{ color: '#2563eb' }}>● Đang chạy: {stats.running}</span>
+                                    <span style={{ color: '#dc2626' }}>● Lỗi: {stats.error}</span>
+                                    <span style={{ color: '#64748b' }}>● Đã bỏ qua: {stats.skipped}</span>
+                                    <span style={{ color: '#94a3b8' }}>○ Đang chờ: {stats.pending}</span>
                                 </div>
                             </div>
 
-                            {/* Status Grid Tiles Matrix Container */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(32px, 1fr))', gap: 6, maxHeight: 150, overflowY: 'auto', padding: 8, background: 'var(--bg-card)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-                                {jobs.map((job) => {
-                                    const bgColors = {
-                                        pending: '#cbd5e1',
-                                        running: '#3b82f6',
-                                        done: '#10b981',
-                                        skipped: '#f59e0b',
-                                        error: '#ef4444'
-                                    };
-                                    const isSelected = selectedJobDetail?.rowNum === job.rowNum;
-
-                                    return (
-                                        <div
-                                            key={job.rowNum}
-                                            onClick={() => setSelectedJobDetail(job)}
-                                            title={`Hàng ${job.rowNum}: ${job.status.toUpperCase()} ${job.error ? `- ${job.error}` : ''}`}
-                                            style={{
-                                                height: 30,
-                                                borderRadius: 4,
-                                                background: bgColors[job.status] || '#cbd5e1',
-                                                color: 'white',
-                                                fontSize: 11,
-                                                fontWeight: 700,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                cursor: 'pointer',
-                                                userSelect: 'none',
-                                                boxShadow: job.status === 'running' ? '0 0 10px #3b82f6' : 'none',
-                                                border: isSelected ? '2px solid #000' : 'none',
-                                                transform: isSelected ? 'scale(1.1)' : 'none',
-                                                transition: 'all 0.15s ease'
-                                            }}
-                                        >
-                                            {job.rowNum}
-                                        </div>
-                                    );
-                                })}
+                            {/* Matrix Grid of Row Badges */}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxHeight: 110, overflowY: 'auto', padding: '6px 2px' }}>
+                                {jobs.map(job => (
+                                    <button
+                                        key={job.rowNum}
+                                        type="button"
+                                        onClick={() => setSelectedJobDetail(job)}
+                                        style={{
+                                            padding: '3px 7px',
+                                            fontSize: 11,
+                                            fontWeight: 600,
+                                            borderRadius: 4,
+                                            border: selectedJobDetail?.rowNum === job.rowNum ? '2px solid #0f172a' : '1px solid transparent',
+                                            background: getJobStatusBg(job.status),
+                                            color: getJobStatusColor(job.status),
+                                            cursor: 'pointer',
+                                            transition: 'all 0.15s ease'
+                                        }}
+                                        title={`Hàng ${job.rowNum}: ${job.status.toUpperCase()}${job.error ? ` - Lỗi: ${job.error}` : ''}`}
+                                    >
+                                        {job.rowNum}
+                                    </button>
+                                ))}
                             </div>
 
                             {/* Inspected Job Detail Box */}
@@ -1845,36 +2512,49 @@ export default function AiAssistantModal({
 
                 {/* Modal Footer Controls */}
                 <div style={{ padding: '14px 24px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-card)' }}>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                        <button
-                            type="button"
-                            className="btn btn-ghost"
-                            onClick={handleTestRun}
-                            disabled={testing || aiState.isRunning}
-                            style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6 }}
-                        >
-                            {testing ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} style={{ color: 'var(--accent)' }} />}
-                            Chạy thử 1 hàng
-                        </button>
-
-                        {/* Retry Failed Rows Button */}
-                        {stats.error > 0 && !aiState.isRunning && (
-                            <button
-                                type="button"
-                                onClick={() => handleStartBatchAI(true)}
-                                style={{ padding: '6px 12px', fontSize: 12.5, background: '#fef2f2', border: '1px solid #fca5a5', color: '#dc2626', borderRadius: 'var(--radius-sm)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
-                            >
-                                <RotateCcw size={14} /> Thử lại {stats.error} hàng lỗi
-                            </button>
-                        )}
-                    </div>
-
                     <div style={{ display: 'flex', gap: 10 }}>
                         <button type="button" className="btn btn-ghost" onClick={onClose}>
-                            Đóng cửa sổ (Vẫn chạy ngầm)
+                            Đóng cửa sổ
                         </button>
+                    </div>
 
-                        {aiState.isRunning ? (
+                    <div>
+                        {activeView === 'parser' ? (
+                            <button
+                                type="button"
+                                className="btn btn-success"
+                                onClick={handleRunBatchParser}
+                                disabled={parserProcessing}
+                                style={{
+                                    background: '#16a34a',
+                                    color: 'white',
+                                    border: 'none',
+                                    padding: '9px 24px',
+                                    fontSize: 13.5,
+                                    fontWeight: 700,
+                                    borderRadius: 'var(--radius-md)',
+                                    cursor: parserProcessing ? 'not-allowed' : 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 8,
+                                    boxShadow: '0 4px 12px rgba(22, 163, 74, 0.25)'
+                                }}
+                            >
+                                {parserProcessing ? (
+                                    <>
+                                        <Loader2 className="spin" size={16} /> Đang chuyển đổi...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Zap size={16} /> ⚡ Bắt Đầu Chuyển Đổi Bảng Hàng Loạt (0 Token)
+                                    </>
+                                )}
+                            </button>
+                        ) : activeView === 'glossary' ? (
+                            <button type="button" className="btn btn-primary" onClick={() => setActiveView('runner')}>
+                                Quay lại Trình Chạy AI
+                            </button>
+                        ) : aiState.isRunning ? (
                             <button
                                 type="button"
                                 className="btn btn-outline"

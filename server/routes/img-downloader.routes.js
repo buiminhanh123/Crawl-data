@@ -382,7 +382,85 @@ async function runDownloadJob(tasks, concurrency) {
     }
 }
 
-// ─── Build tasks from DB products ────────────────────────────────────────────
+function extractRowsFromProfileSheets(profileSlug) {
+    try {
+        const { profileSheetQueries } = require('../db');
+        const sheets = profileSheetQueries.getBySlug(profileSlug);
+        const rows = [];
+        if (!Array.isArray(sheets) || sheets.length === 0) return rows;
+
+        for (const sheet of sheets) {
+            const sheetRows = sheet.data || [];
+            if (!Array.isArray(sheetRows) || sheetRows.length < 2) continue;
+
+            let headerIdx = -1;
+            for (let i = 0; i < Math.min(4, sheetRows.length); i++) {
+                const r = sheetRows[i];
+                if (Array.isArray(r) && r.filter(c => c && typeof c === 'string' && !c.startsWith('http') && isNaN(c)).length >= 2) {
+                    headerIdx = i;
+                    break;
+                }
+            }
+            if (headerIdx === -1) headerIdx = 0;
+
+            const header = sheetRows[headerIdx].map(h => String(h || '').trim());
+            for (let i = headerIdx + 1; i < sheetRows.length; i++) {
+                const r = sheetRows[i];
+                if (!Array.isArray(r) || r.length === 0 || r.every(c => !c || String(c).trim() === '')) continue;
+
+                const rowObj = {};
+                header.forEach((h, idx) => {
+                    if (h && r[idx] !== undefined && r[idx] !== null) {
+                        rowObj[h] = String(r[idx]).trim();
+                    }
+                });
+
+                let model = '';
+                let image_url = '';
+                let category = sheet.name || '';
+                let series = '';
+
+                for (const [k, v] of Object.entries(rowObj)) {
+                    const lk = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (!model && (lk.includes('model') || lk.includes('masanpham') || lk.includes('masp') || lk.includes('sku') || lk.includes('partnumber'))) {
+                        model = v;
+                    }
+                    if (!image_url && (lk.includes('anh') || lk.includes('image') || lk.includes('img') || lk.includes('urlanh') || lk.includes('photo') || (v.startsWith('http') && (v.includes('.jpg') || v.includes('.png') || v.includes('.webp'))))) {
+                        image_url = v;
+                    }
+                    if (!category && (lk.includes('category') || lk.includes('danhmuc') || lk.includes('dm'))) {
+                        category = v;
+                    }
+                    if (!series && lk.includes('series')) {
+                        series = v;
+                    }
+                }
+
+                if (!model) {
+                    model = r[0] ? String(r[0]).trim() : `Item_${i}`;
+                }
+
+                rows.push({
+                    id: i,
+                    part_number: model,
+                    name: model,
+                    image_url,
+                    category,
+                    main_category: category,
+                    series,
+                    profile_slug: profileSlug,
+                    ...rowObj
+                });
+            }
+        }
+        return rows;
+    } catch (e) {
+        console.error('[img-downloader] Error extracting rows from sheet:', e);
+        return [];
+    }
+}
+
+// ─── Build tasks from DB products or Profile Sheets ──────────────────────────
 
 async function buildTasksFromProfile(profileSlug, categoryFilter, seriesFilter, outputDir, options = {}) {
     const {
@@ -395,26 +473,39 @@ async function buildTasksFromProfile(profileSlug, categoryFilter, seriesFilter, 
         resultCol = 'NONE'
     } = options;
 
-    const pdb = await openProductsDb();
-    if (!pdb) throw new Error('Không tìm thấy products.db');
+    let rows = [];
+    try {
+        const pdb = await openProductsDb();
+        if (pdb) {
+            let query = `SELECT * FROM products WHERE profile_slug = ? AND image_url IS NOT NULL AND trim(image_url) != ''`;
+            const params = [profileSlug];
 
-    let query = `SELECT * FROM products WHERE profile_slug = ? AND image_url IS NOT NULL AND trim(image_url) != ''`;
-    const params = [profileSlug];
+            if (categoryFilter) { query += ' AND (main_category = ? OR category = ?)'; params.push(categoryFilter, categoryFilter); }
+            if (seriesFilter)   { query += ' AND series = ?'; params.push(seriesFilter); }
 
-    if (categoryFilter) { query += ' AND (main_category = ? OR category = ?)'; params.push(categoryFilter, categoryFilter); }
-    if (seriesFilter)   { query += ' AND series = ?'; params.push(seriesFilter); }
+            const res = pdb.exec(query, params);
+            pdb.close();
 
-    const res = pdb.exec(query, params);
-    pdb.close();
+            if (res[0]) {
+                const cols = res[0].columns;
+                rows = res[0].values.map(row => {
+                    const obj = {};
+                    cols.forEach((c, i) => { obj[c] = row[i]; });
+                    return obj;
+                });
+            }
+        }
+    } catch (e) {}
 
-    if (!res[0]) return [];
-
-    const cols = res[0].columns;
-    const rows = res[0].values.map(row => {
-        const obj = {};
-        cols.forEach((c, i) => { obj[c] = row[i]; });
-        return obj;
-    });
+    // Fallback to Profile Sheets if DB has no products
+    if (rows.length === 0) {
+        const sheetRows = extractRowsFromProfileSheets(profileSlug);
+        rows = sheetRows.filter(r => {
+            if (categoryFilter && r.main_category !== categoryFilter && r.category !== categoryFilter) return false;
+            if (seriesFilter && r.series !== seriesFilter) return false;
+            return r.image_url && String(r.image_url).trim() !== '';
+        });
+    }
 
     return buildDownloadTasks(rows, profileSlug, {
         outputDir,
@@ -696,28 +787,55 @@ router.post('/reset', (req, res) => {
 // GET /api/img-downloader/profile-stats — summary of images per profile
 router.get('/profile-stats', async (req, res) => {
     try {
-        const pdb = await openProductsDb();
-        if (!pdb) return res.json({ profiles: [] });
+        const { profileQueries, profileSheetQueries } = require('../db');
+        const allProfiles = profileQueries.getAll();
 
-        // Count products with image_url per profile
-        const result = pdb.exec(`
-            SELECT
-                profile_slug,
-                COUNT(*) as total_products,
-                COUNT(CASE WHEN image_url IS NOT NULL AND trim(image_url) != '' THEN 1 END) as with_image
-            FROM products
-            GROUP BY profile_slug
-            ORDER BY total_products DESC
-        `);
-        pdb.close();
+        const dbStatsMap = new Map();
+        try {
+            const pdb = await openProductsDb();
+            if (pdb) {
+                const result = pdb.exec(`
+                    SELECT
+                        profile_slug,
+                        COUNT(*) as total_products,
+                        COUNT(CASE WHEN image_url IS NOT NULL AND trim(image_url) != '' THEN 1 END) as with_image
+                    FROM products
+                    GROUP BY profile_slug
+                `);
+                pdb.close();
+                if (result[0]) {
+                    const cols = result[0].columns;
+                    result[0].values.forEach(row => {
+                        const slug = row[cols.indexOf('profile_slug')];
+                        const total = row[cols.indexOf('total_products')] || 0;
+                        const withImg = row[cols.indexOf('with_image')] || 0;
+                        dbStatsMap.set(slug, { total, withImg });
+                    });
+                }
+            }
+        } catch (e) {}
 
-        if (!result[0]) return res.json({ profiles: [] });
+        const profiles = allProfiles.map(p => {
+            const dbStat = dbStatsMap.get(p.slug) || { total: 0, withImg: 0 };
+            let total = dbStat.total;
+            let withImg = dbStat.withImg;
 
-        const cols = result[0].columns;
-        const profiles = result[0].values.map(row => {
-            const obj = {};
-            cols.forEach((c, i) => { obj[c] = row[i]; });
-            return obj;
+            // Check profile sheet data if DB is empty
+            if (total === 0 || withImg === 0) {
+                const sheetRows = extractRowsFromProfileSheets(p.slug);
+                if (sheetRows.length > 0) {
+                    total = Math.max(total, sheetRows.length);
+                    const sheetWithImg = sheetRows.filter(r => r.image_url && String(r.image_url).trim() !== '').length;
+                    withImg = Math.max(withImg, sheetWithImg);
+                }
+            }
+
+            return {
+                profile_slug: p.slug,
+                profile_name: p.name || p.slug,
+                total_products: total,
+                with_image: withImg
+            };
         });
 
         res.json({ profiles });
@@ -732,40 +850,77 @@ router.get('/profile-categories', async (req, res) => {
     if (!profile) return res.status(400).json({ error: 'Missing profile' });
 
     try {
-        const pdb = await openProductsDb();
-        if (!pdb) return res.json({ categories: [], series: [] });
+        let categories = [];
+        let seriesList = [];
 
-        const catResult = pdb.exec(`
-            SELECT DISTINCT COALESCE(NULLIF(trim(main_category), ''), category) as cat,
-                   COUNT(*) as cnt,
-                   COUNT(CASE WHEN image_url IS NOT NULL AND trim(image_url) != '' THEN 1 END) as with_image
-            FROM products
-            WHERE profile_slug = ?
-            GROUP BY cat
-            ORDER BY cnt DESC
-        `, [profile]);
+        try {
+            const pdb = await openProductsDb();
+            if (pdb) {
+                const catResult = pdb.exec(`
+                    SELECT DISTINCT COALESCE(NULLIF(trim(main_category), ''), category) as cat,
+                           COUNT(*) as cnt,
+                           COUNT(CASE WHEN image_url IS NOT NULL AND trim(image_url) != '' THEN 1 END) as with_image
+                    FROM products
+                    WHERE profile_slug = ?
+                    GROUP BY cat
+                    ORDER BY cnt DESC
+                `, [profile]);
 
-        const seriesResult = pdb.exec(`
-            SELECT DISTINCT series,
-                   COUNT(*) as cnt,
-                   COUNT(CASE WHEN image_url IS NOT NULL AND trim(image_url) != '' THEN 1 END) as with_image
-            FROM products
-            WHERE profile_slug = ? AND series IS NOT NULL AND trim(series) != ''
-            GROUP BY series
-            ORDER BY cnt DESC
-        `, [profile]);
+                const seriesResult = pdb.exec(`
+                    SELECT DISTINCT series,
+                           COUNT(*) as cnt,
+                           COUNT(CASE WHEN image_url IS NOT NULL AND trim(image_url) != '' THEN 1 END) as with_image
+                    FROM products
+                    WHERE profile_slug = ? AND series IS NOT NULL AND trim(series) != ''
+                    GROUP BY series
+                    ORDER BY cnt DESC
+                `, [profile]);
 
-        pdb.close();
+                pdb.close();
 
-        const mapRows = (r) => {
-            if (!r[0]) return [];
-            const cols = r[0].columns;
-            return r[0].values.map(row => { const o = {}; cols.forEach((c, i) => { o[c] = row[i]; }); return o; });
-        };
+                const mapRows = (r) => {
+                    if (!r[0]) return [];
+                    const cols = r[0].columns;
+                    return r[0].values.map(row => { const o = {}; cols.forEach((c, i) => { o[c] = row[i]; }); return o; });
+                };
+
+                categories = mapRows(catResult);
+                seriesList = mapRows(seriesResult);
+            }
+        } catch (e) {}
+
+        // Fallback to Sheet data if DB categories are empty
+        if (categories.length === 0) {
+            const sheetRows = extractRowsFromProfileSheets(profile);
+            const catMap = new Map();
+            const serMap = new Map();
+
+            sheetRows.forEach(r => {
+                const cat = r.main_category || r.category || '';
+                const ser = r.series || '';
+                const hasImg = r.image_url && String(r.image_url).trim() !== '';
+
+                if (cat) {
+                    const cur = catMap.get(cat) || { cat, cnt: 0, with_image: 0 };
+                    cur.cnt++;
+                    if (hasImg) cur.with_image++;
+                    catMap.set(cat, cur);
+                }
+                if (ser) {
+                    const cur = serMap.get(ser) || { series: ser, cnt: 0, with_image: 0 };
+                    cur.cnt++;
+                    if (hasImg) cur.with_image++;
+                    serMap.set(ser, cur);
+                }
+            });
+
+            categories = Array.from(catMap.values());
+            seriesList = Array.from(serMap.values());
+        }
 
         res.json({
-            categories: mapRows(catResult),
-            series: mapRows(seriesResult)
+            categories,
+            series: seriesList
         });
     } catch (e) {
         res.status(500).json({ error: e.message });

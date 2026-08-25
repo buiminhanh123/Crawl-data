@@ -19,12 +19,12 @@ const PROFILE_MAPPING_DEFAULTS = {
     profMainCategory: 'main_category',
     profSubCategory: 'NONE',
     profSeries: 'NONE',
-    profModel: 'part_number',
-    profPdfUrl: 'download_links',
-    resultCol: 'drive_link',
-    pdfFilterMode: 'datasheet_only', // 'datasheet_only' | 'all_pdfs' | 'keywords'
-    keywords: 'datasheet, manual, guide, brochure',
-    filenamePattern: '{model}.pdf'
+    profModel: 'ma_san_pham',
+    profPdfUrl: 'ALL',
+    resultCol: 'NONE',
+    pdfFilterMode: 'all_pdfs', // 'all_pdfs' | 'datasheet_only' | 'keywords'
+    keywords: 'datasheet, manual, guide, brochure, hdsd, tailieu',
+    filenamePattern: '{model}_{doc_type}.pdf'
 };
 
 export default function PdfDownloaderModal({ isOpen, onClose, onSuccess, onConvertSuccess }) {
@@ -480,7 +480,7 @@ export default function PdfDownloaderModal({ isOpen, onClose, onSuccess, onConve
                                                         background: selectedProfile === p.profile_slug ? '#eff6ff' : '#fff',
                                                         textAlign: 'left', cursor: 'pointer'
                                                     }}>
-                                                        <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{p.profile_slug}</div>
+                                                        <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{p.profile_name || p.profile_slug}</div>
                                                         <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
                                                             📄 <span style={{ color: '#15803d', fontWeight: 700 }}>{(p.with_pdf || 0).toLocaleString('vi-VN')}</span> PDF
                                                         </div>
@@ -513,6 +513,7 @@ export default function PdfDownloaderModal({ isOpen, onClose, onSuccess, onConve
                                                                     disabled={isRunning}
                                                                 >
                                                                     <option value="NONE">NONE</option>
+                                                                    {key === 'profPdfUrl' && <option value="ALL">🔍 ALL (Tự động quét tất cả)</option>}
                                                                     {profileColumns.map((col, idx) => (
                                                                         <option key={`${key}-${idx}`} value={col}>{col}</option>
                                                                     ))}
@@ -523,11 +524,13 @@ export default function PdfDownloaderModal({ isOpen, onClose, onSuccess, onConve
                                                             <label style={{ ...lS, fontSize: 10, color: '#15803d', fontWeight: 800 }}>🔗 Cột Link Kết Quả</label>
                                                             <select
                                                                 style={{ ...iS, padding: '6px 4px', fontWeight: 800, fontSize: 11, color: '#15803d', background: '#fff', cursor: 'pointer' }}
-                                                                value={profMapping.resultCol || 'drive_link'}
+                                                                value={profMapping.resultCol || 'NONE'}
                                                                 onChange={e => setProfMapping(p => ({ ...p, resultCol: e.target.value }))}
                                                                 disabled={isRunning}
                                                             >
-                                                                <option value="NONE">NONE</option>
+                                                                <option value="NONE">Tự động theo cột nguồn (hoặc NONE)</option>
+                                                                <option value="drive_link">drive_link (Tạo cột mới)</option>
+                                                                <option value="pdf_drive_link">pdf_drive_link (Tạo cột mới)</option>
                                                                 {profileColumns.map((col, idx) => (
                                                                     <option key={`result-${idx}`} value={col}>{col}</option>
                                                                 ))}
