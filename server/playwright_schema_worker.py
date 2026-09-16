@@ -85,7 +85,71 @@ async def evaluate_schema_on_page(page, schema):
                 return pairs.length ? pairs.join('\\n') : null;
             }
             
-            // Single element extraction
+            const getElementText = (el) => {
+                if (!el) return '';
+                if (typeof el === 'string' || typeof el === 'number' || typeof el === 'boolean') {
+                    return String(el).trim();
+                }
+                if (el.nodeType === 3 || el.nodeType === 2) {
+                    return (el.nodeValue || '').trim();
+                }
+                if (el.nodeType !== 1) {
+                    return (el.textContent || '').trim();
+                }
+                
+                // Check CSS pseudo-elements (e.g. ::before { content: "/" } or ::after)
+                let before = '';
+                let after = '';
+                try {
+                    const bStyle = window.getComputedStyle(el, '::before');
+                    if (bStyle && bStyle.content && bStyle.content !== 'none' && bStyle.content !== 'normal') {
+                        before = bStyle.content.replace(/^["']|["']$/g, '').trim();
+                    }
+                    const aStyle = window.getComputedStyle(el, '::after');
+                    if (aStyle && aStyle.content && aStyle.content !== 'none' && aStyle.content !== 'normal') {
+                        after = aStyle.content.replace(/^["']|["']$/g, '').trim();
+                    }
+                } catch(e) {}
+                
+                // If element has child elements (e.g. div containing multiple spans/paragraphs)
+                if (el.children && el.children.length > 0) {
+                    const parts = [];
+                    for (let i = 0; i < el.children.length; i++) {
+                        const childText = getElementText(el.children[i]);
+                        if (childText) parts.push(childText);
+                    }
+                    if (parts.length > 0) {
+                        const hasSep = parts.some((p, idx) => idx > 0 && /^[-/\\>|:,•]/.test(p.trim()));
+                        let combined = hasSep ? parts.join(' ') : parts.join(' / ');
+                        if (before) combined = before + ' ' + combined;
+                        if (after) combined = combined + ' ' + after;
+                        return combined.replace(/\\s*([-/\\>|:,•])\\s*/g, ' $1 ').trim();
+                    }
+                }
+                
+                let text = (el.innerText || el.textContent || '').trim();
+                if (before) text = before + ' ' + text;
+                if (after) text = text + ' ' + after;
+                return text.replace(/\\s*([-/\\>|:,•])\\s*/g, ' $1 ').trim();
+            };
+
+            const joinTextsNicely = (texts) => {
+                if (!texts || texts.length === 0) return null;
+                if (texts.length === 1) return texts[0];
+                const hasSep = texts.some((t, idx) => idx > 0 && /^[-/\\>|:,•]/.test(t.trim()));
+                const combined = hasSep ? texts.join(' ') : texts.join(' / ');
+                return combined.replace(/\\s*([-/\\>|:,•])\\s*/g, ' $1 ').trim();
+            };
+
+            if (attr === 'text') {
+                if (nodes.length > 1) {
+                    const texts = nodes.map(n => getElementText(n)).filter(Boolean);
+                    return joinTextsNicely(texts);
+                }
+                return getElementText(nodes[0]) || null;
+            }
+
+            // Single element extraction for html, attributes, etc.
             const first = nodes[0];
             if (typeof first === 'string' || typeof first === 'number' || typeof first === 'boolean') {
                 return String(first).trim() || null;
@@ -95,7 +159,6 @@ async def evaluate_schema_on_page(page, schema):
                 return (attr === 'href' || attr === 'src') ? resolveUrl(val) : val;
             }
             if (first.nodeType === 1) {
-                if (attr === 'text') return (first.innerText || first.textContent || '').trim() || null;
                 if (attr === 'html') return (first.innerHTML || '').trim() || null;
                 const val = (first.getAttribute(attr) || first[attr] || '').trim();
                 return (attr === 'href' || attr === 'src') ? resolveUrl(val) : (val || null);

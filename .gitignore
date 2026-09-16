@@ -68,6 +68,8 @@ Image/
 crawler_test.log
 scratch/
 scratch*
+modified_*.txt
+server/data/tmp_*
 
 # ==========================================
 # 6. Python Cache & Virtual Environments

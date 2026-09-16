@@ -54,7 +54,8 @@ import {
     FileText,
     Settings,
     RefreshCw,
-    Sparkles
+    Sparkles,
+    Globe
 } from 'lucide-react';
 
 const STANDARD_31_COLUMNS = [
@@ -817,7 +818,7 @@ function ProductsContent() {
             if (res?.success && res.data) {
                 setCheckConfig(prev => ({
                     mode: res.data.mode || prev.mode || 'sitemap',
-                    sitemapUrl: res.data.sitemapUrl || prev.sitemapUrl || '',
+                    sitemapUrl: res.data.sitemapUrl || prev.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || '',
                     apiUrl: res.data.apiUrl || prev.apiUrl || '',
                     consumerKey: res.data.consumerKey || prev.consumerKey || '',
                     consumerSecret: res.data.consumerSecret || prev.consumerSecret || '',
@@ -850,21 +851,33 @@ function ProductsContent() {
         setShowCheckConfigModal(false);
     };
 
-    const handleRunPublicationCheck = async () => {
+    const handleRunPublicationCheck = async (forceRefresh = false) => {
         if (!profileSlug) return;
         setIsCheckingPublication(true);
         try {
+            const effectiveSitemapUrl = checkConfig.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || '';
+            const configToSend = {
+                ...checkConfig,
+                sitemapUrl: effectiveSitemapUrl,
+                refresh: Boolean(forceRefresh)
+            };
+
             let res = null;
             try {
                 res = await fetchApi(`/api/products/profiles/${profileSlug}/check-publication-status`, {
                     method: 'POST',
-                    body: JSON.stringify(checkConfig)
+                    body: JSON.stringify(configToSend)
                 });
-            } catch (err) {}
+            } catch (err) {
+                console.warn('Publication check API error:', err);
+            }
 
             let scannedLogs = null;
-            if (res?.success && Array.isArray(res.logs) && res.logs.length > 0) {
+            if (res?.success && Array.isArray(res.logs)) {
                 scannedLogs = res.logs;
+            } else if (res && !res.success) {
+                toast(res.error || '❌ Lỗi khi kiểm tra đăng bài!', 'danger');
+                return;
             } else {
                 // Client-side scanning fallback
                 const sheets = profileSheets || [];
@@ -879,23 +892,26 @@ function ProductsContent() {
                     let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
                     if (nameColIdx === -1) nameColIdx = 1;
 
+                    let urlColIdx = headers.findIndex(h => h === 'url' || h.includes('đường dẫn') || h.includes('slug') || h.includes('link'));
+
                     for (let r = 1; r < rows.length; r++) {
                         const row = rows[r];
                         if (!Array.isArray(row)) continue;
                         const model = String(row[modelColIdx] || row[0] || row[1] || '').trim();
                         const name = String(row[nameColIdx] || row[1] || row[0] || '').trim();
+                        const customUrl = urlColIdx !== -1 ? String(row[urlColIdx] || '').trim() : '';
                         if (model || name) {
-                            productItems.push({ rowIdx: r, model: model || name, name: name || model });
+                            productItems.push({ rowIdx: r, model: model || name, name: name || model, customUrl });
                         }
                     }
                 });
 
                 if (checkConfig.mode === 'sitemap') {
-                    let xmlText = currentProfile?.sitemap_xml || '';
-                    let targetSitemapUrl = checkConfig.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || '';
+                    let targetSitemapUrl = effectiveSitemapUrl;
                     if (targetSitemapUrl && !targetSitemapUrl.endsWith('.xml') && !targetSitemapUrl.includes('sitemap')) {
                         targetSitemapUrl = targetSitemapUrl.replace(/\/$/, '') + '/sitemap.xml';
                     }
+                    let xmlText = currentProfile?.sitemap_xml || '';
                     if (targetSitemapUrl && !xmlText) {
                         try {
                             const proxyRes = await fetchApi(`/api/products/proxy-sitemap?url=${encodeURIComponent(targetSitemapUrl)}`);
@@ -909,11 +925,20 @@ function ProductsContent() {
                     const locMatches = xmlText ? (xmlText.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || []) : [];
                     const foundUrls = locMatches.map(m => m.replace(/<\/?loc>/gi, '').trim().toLowerCase());
                     scannedLogs = productItems.map(p => {
-                        const modelSlug = p.model.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-                        const isFound = foundUrls.length > 0 && (foundUrls.some(u => u.includes(modelSlug)) || foundUrls.some(u => u.includes(p.model.toLowerCase())));
+                        const candidates = [p.customUrl, p.model].filter(Boolean);
+                        let isFound = false;
+                        for (const cand of candidates) {
+                            const cLower = cand.toLowerCase().trim();
+                            const hyphenSlug = cLower.replace(/[^a-z0-9]+/g, '-');
+                            const underscoreSlug = cLower.replace(/[^a-z0-9]+/g, '_');
+                            if (foundUrls.some(u => u.includes(hyphenSlug) || u.includes(underscoreSlug) || u.includes(cLower))) {
+                                isFound = true;
+                                break;
+                            }
+                        }
                         const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
                         return {
-                            id: `log_${p.rowIdx}_${Date.now()}`,
+                            id: `log_${p.rowIdx}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
                             posted_at: isFound ? nowStr : `Dự kiến: ${nowStr}`,
                             model: p.model,
                             name: p.name,
@@ -934,12 +959,18 @@ function ProductsContent() {
                         } catch (e) {}
                     }
                     scannedLogs = productItems.map(p => {
-                        const modelKey = p.model.trim().toLowerCase();
-                        const nameKey = p.name.trim().toLowerCase();
-                        const isFound = cmsSkuSet.has(modelKey) || cmsSkuSet.has(nameKey);
+                        const candidates = [p.customUrl, p.model, p.name].filter(Boolean);
+                        let isFound = false;
+                        for (const cand of candidates) {
+                            const cLower = cand.toLowerCase().trim();
+                            if (cmsSkuSet.has(cLower)) {
+                                isFound = true;
+                                break;
+                            }
+                        }
                         const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
                         return {
-                            id: `log_${p.rowIdx}_${Date.now()}`,
+                            id: `log_${p.rowIdx}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
                             posted_at: isFound ? nowStr : `Dự kiến: ${nowStr}`,
                             model: p.model,
                             name: p.name,
@@ -2524,7 +2555,10 @@ function ProductsContent() {
                     <button 
                         type="button"
                         className="btn"
-                        onClick={() => setShowPostingHistoryModal(true)}
+                        onClick={() => {
+                            handleLoadCheckConfig();
+                            setShowPostingHistoryModal(true);
+                        }}
                         style={{ 
                             display: 'flex', 
                             alignItems: 'center', 
@@ -3934,10 +3968,10 @@ function ProductsContent() {
                         <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    🗺️ Cấu Hình Sitemap XML
+                                    🗺️ Cấu Hình Sitemap XML (Tùy Chọn)
                                 </h3>
                                 <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.8 }}>
-                                    Profile: <strong>{currentProfile?.name || profileSlug}</strong>
+                                    Profile: <strong>{currentProfile?.name || profileSlug}</strong> — <em>(Tùy chọn, nhập cũng được, để trống hoặc xóa cũng không sao)</em>
                                 </p>
                             </div>
                             <button type="button" onClick={() => setShowSitemapModal(false)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -3968,14 +4002,14 @@ function ProductsContent() {
                             {/* Section 1: Upload File XML */}
                             {activeSitemapTab === 'file' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                                    <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, border: '2px dashed var(--border-color)', borderRadius: 12, padding: '36px 20px', cursor: 'pointer', background: 'var(--bg-primary)', transition: 'border-color 0.2s' }}>
+                                    <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, border: '2px dashed var(--border-color)', borderRadius: 12, padding: '32px 20px', cursor: 'pointer', background: 'var(--bg-primary)', transition: 'border-color 0.2s' }}>
                                         <Upload size={32} style={{ color: 'var(--accent)' }} />
                                         <div style={{ textAlign: 'center' }}>
                                             <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
                                                 Bấm để chọn file <code>.xml</code> hoặc Kéo thả vào đây
                                             </div>
                                             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-                                                Chấp nhận file <code>sitemap.xml</code> từ máy tính
+                                                Chấp nhận file <code>sitemap.xml</code> từ máy tính (Tùy chọn, không bắt buộc)
                                             </div>
                                         </div>
                                         <input
@@ -4000,9 +4034,35 @@ function ProductsContent() {
                                             }}
                                         />
                                     </label>
-                                    {sitemapInfo?.sitemapXml && (
-                                        <div style={{ fontSize: 12, color: '#16a34a', background: 'rgba(22,163,74,0.1)', padding: '8px 12px', borderRadius: 6, border: '1px solid rgba(22,163,74,0.3)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <CheckCircle2 size={15} /> File Sitemap XML hiện tại đã sẵn sàng trong cơ sở dữ liệu.
+                                    {sitemapInfo?.sitemapXml ? (
+                                        <div style={{ fontSize: 12, color: '#16a34a', background: 'rgba(22,163,74,0.08)', padding: '12px 14px', borderRadius: 8, border: '1px solid rgba(22,163,74,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <CheckCircle2 size={16} /> 
+                                                <span>File Sitemap XML đã sẵn sàng trong cơ sở dữ liệu.</span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    try {
+                                                        await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`, {
+                                                            method: 'POST',
+                                                            body: JSON.stringify({ sitemapXml: '' })
+                                                        });
+                                                        setSitemapInfo(prev => ({ ...prev, sitemapXml: null }));
+                                                        toast('✅ Đã xóa bỏ file Sitemap XML (chuyển về không dùng file sitemap)!', 'info');
+                                                    } catch (err) {
+                                                        toast('❌ Lỗi khi xóa file sitemap: ' + err.message, 'danger');
+                                                    }
+                                                }}
+                                                style={{ padding: '6px 12px', fontSize: 12, background: '#ef4444', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                                            >
+                                                <Trash2 size={13} /> Xóa / Bỏ File Này
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <span>💡</span>
+                                            <span>Mục này là <strong>tùy chọn</strong>. Nếu không có file sitemap.xml từ máy tính, bạn hoàn toàn có thể bỏ qua không cần nạp.</span>
                                         </div>
                                     )}
                                 </div>
@@ -4012,54 +4072,105 @@ function ProductsContent() {
                             {activeSitemapTab === 'link' && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                                     <div>
-                                        <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: 6 }}>
-                                            Đường Dẫn URL Sitemap Online:
-                                        </label>
-                                        <input
-                                            type="url"
-                                            placeholder="https://www.argox.com/sitemap.xml"
-                                            value={inputSitemapUrl}
-                                            onChange={e => setInputSitemapUrl(e.target.value)}
-                                            style={{ width: '100%', padding: '10px 14px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
-                                        />
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                            <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                Đường Dẫn URL Sitemap Online:
+                                            </label>
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: 4 }}>
+                                                Tùy chọn - Không bắt buộc
+                                            </span>
+                                        </div>
+                                        <div style={{ position: 'relative' }}>
+                                            <input
+                                                type="url"
+                                                placeholder="Để trống nếu không dùng, hoặc VD: https://www.argox.com/sitemap.xml"
+                                                value={inputSitemapUrl}
+                                                onChange={e => setInputSitemapUrl(e.target.value)}
+                                                style={{ width: '100%', padding: '10px 36px 10px 14px', fontSize: 13, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none' }}
+                                            />
+                                            {inputSitemapUrl && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setInputSitemapUrl('')}
+                                                    title="Xóa trắng ô link"
+                                                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', padding: 2 }}
+                                                >
+                                                    <X size={15} />
+                                                </button>
+                                            )}
+                                        </div>
                                         <p style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
-                                            💡 VD: <code>https://www.argox.com/sitemap.xml</code> hoặc <code>https://brand.com/product-sitemap.xml</code>
+                                            💡 Bạn có thể <strong>để trống ô này rồi bấm "Lưu"</strong> để hủy bỏ link sitemap, hoặc bấm nút <strong>"Bỏ Link Sitemap"</strong> bên dưới.
                                         </p>
                                     </div>
 
-                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowSitemapModal(false)}
-                                            className="btn btn-secondary"
-                                            style={{ padding: '8px 16px', fontSize: 13 }}
-                                        >
-                                            Hủy
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="btn btn-primary"
-                                            onClick={async () => {
-                                                if (!inputSitemapUrl.trim()) {
-                                                    toast('⚠️ Vui lòng nhập link sitemap!', 'warning');
-                                                    return;
-                                                }
-                                                try {
-                                                    await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`, {
-                                                        method: 'POST',
-                                                        body: JSON.stringify({ sitemapUrl: inputSitemapUrl.trim() })
-                                                    });
-                                                    setSitemapInfo(prev => ({ ...prev, sitemapUrl: inputSitemapUrl.trim() }));
-                                                    toast('✅ Đã lưu Link Sitemap.xml thành công!', 'success');
-                                                    setShowSitemapModal(false);
-                                                } catch (err) {
-                                                    toast('❌ ' + (err.message || 'Lỗi lưu Link Sitemap'), 'danger');
-                                                }
-                                            }}
-                                            style={{ padding: '8px 20px', fontSize: 13, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 600 }}
-                                        >
-                                            💾 Lưu Link Sitemap Online
-                                        </button>
+                                    {sitemapInfo?.sitemapUrl && (
+                                        <div style={{ fontSize: 12, color: '#0284c7', background: 'rgba(2,132,199,0.08)', padding: '8px 12px', borderRadius: 6, border: '1px solid rgba(2,132,199,0.25)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <Globe size={14} /> Link Sitemap hiện tại: <code style={{ wordBreak: 'break-all' }}>{sitemapInfo.sitemapUrl}</code>
+                                        </div>
+                                    )}
+
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                                        {/* Left: Nút Bỏ link sitemap */}
+                                        {(inputSitemapUrl || sitemapInfo?.sitemapUrl) ? (
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    try {
+                                                        await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`, {
+                                                            method: 'POST',
+                                                            body: JSON.stringify({ sitemapUrl: '' })
+                                                        });
+                                                        setInputSitemapUrl('');
+                                                        setSitemapInfo(prev => ({ ...prev, sitemapUrl: null }));
+                                                        toast('✅ Đã xóa bỏ link sitemap (chuyển về không dùng link sitemap)!', 'info');
+                                                        setShowSitemapModal(false);
+                                                    } catch (err) {
+                                                        toast('❌ Lỗi khi xóa link sitemap: ' + err.message, 'danger');
+                                                    }
+                                                }}
+                                                style={{ padding: '8px 14px', fontSize: 12.5, background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                                            >
+                                                <Trash2 size={14} /> Bỏ Link Sitemap
+                                            </button>
+                                        ) : <div />}
+
+                                        {/* Right: Hủy / Lưu */}
+                                        <div style={{ display: 'flex', gap: 10 }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowSitemapModal(false)}
+                                                className="btn btn-secondary"
+                                                style={{ padding: '8px 16px', fontSize: 13 }}
+                                            >
+                                                Hủy
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn btn-primary"
+                                                onClick={async () => {
+                                                    const trimmedUrl = inputSitemapUrl.trim();
+                                                    try {
+                                                        await fetchApi(`/api/products/profiles/${profileSlug}/sitemap`, {
+                                                            method: 'POST',
+                                                            body: JSON.stringify({ sitemapUrl: trimmedUrl })
+                                                        });
+                                                        setSitemapInfo(prev => ({ ...prev, sitemapUrl: trimmedUrl || null }));
+                                                        if (trimmedUrl) {
+                                                            toast('✅ Đã lưu Link Sitemap.xml thành công!', 'success');
+                                                        } else {
+                                                            toast('✅ Đã lưu cấu hình (không sử dụng Link Sitemap)!', 'info');
+                                                        }
+                                                        setShowSitemapModal(false);
+                                                    } catch (err) {
+                                                        toast('❌ ' + (err.message || 'Lỗi lưu Link Sitemap'), 'danger');
+                                                    }
+                                                }}
+                                                style={{ padding: '8px 20px', fontSize: 13, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 600 }}
+                                            >
+                                                💾 {inputSitemapUrl.trim() ? 'Lưu Link Sitemap Online' : 'Lưu (Bỏ / Không Dùng Link)'}
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -5311,10 +5422,11 @@ function ProductsContent() {
                                         </div>
                                     </div>
 
-                                    {/* Crawl Prerequisite Check */}
+                                    {/* Crawl Prerequisite Check (Optional Sitemap Info) */}
                                     {!sitemapInfo?.sitemapUrl && !sitemapInfo?.sitemapXml && !currentProfile?.sitemap_url && (
-                                        <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 7, fontSize: 12.5, color: '#b45309', marginBottom: 10 }}>
-                                            ⚠️ <strong>Chưa cấu hình Sitemap.</strong> Vào mục "Nạp / Cấu Hình Sitemap XML" ở trên để thêm sitemap trước khi crawl.
+                                        <div style={{ padding: '10px 14px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 7, fontSize: 12.5, color: '#2563eb', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <span>💡</span>
+                                            <span><strong>Chưa nạp Sitemap (Tùy chọn):</strong> Bạn có thể bắt đầu crawl ngay bằng link lấy từ tệp HAR hoặc website chính. Nếu muốn quét thêm theo sitemap hãng, bạn có thể cấu hình ở mục "Cấu Hình Sitemap XML" ở trên bất cứ lúc nào.</span>
                                         </div>
                                     )}
 
@@ -5892,9 +6004,39 @@ function ProductsContent() {
                                                     <tr key={item.id || idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
                                                         <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{globalIdx}</td>
                                                         <td style={{ padding: '10px 14px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{item.posted_at || '—'}</td>
-                                                        <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--accent)' }}>{item.model || '—'}</td>
-                                                        <td style={{ padding: '10px 14px', color: 'var(--text-primary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name || '—'}</td>
-                                                        <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{item.platform || 'Website'}</td>
+                                                        <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--accent)', whiteSpace: 'nowrap' }}>
+                                                            {item.live_url ? (
+                                                                <a href={item.live_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }} title={`Mở trang: ${item.live_url}`}>
+                                                                    {item.model || '—'}
+                                                                </a>
+                                                            ) : (
+                                                                item.model || '—'
+                                                            )}
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px', color: 'var(--text-primary)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.name || ''}>
+                                                            {item.live_url ? (
+                                                                <a href={item.live_url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'none' }} title={`Xem bài viết: ${item.live_url}`}>
+                                                                    {item.name || '—'}
+                                                                </a>
+                                                            ) : (
+                                                                item.name || '—'
+                                                            )}
+                                                        </td>
+                                                        <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                                            {item.live_url ? (
+                                                                <a 
+                                                                    href={item.live_url} 
+                                                                    target="_blank" 
+                                                                    rel="noopener noreferrer" 
+                                                                    style={{ color: '#0284c7', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600 }}
+                                                                    title={`Mở trang web đã đăng: ${item.live_url}`}
+                                                                >
+                                                                    {item.platform || 'Website'} <ExternalLink size={12} />
+                                                                </a>
+                                                            ) : (
+                                                                item.platform || 'Website'
+                                                            )}
+                                                        </td>
                                                         <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                                                             {item.status === 'posted' ? (
                                                                 <span style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(34, 197, 94, 0.1)', color: '#15803d', fontWeight: 700, fontSize: 11.5, border: '1px solid rgba(34, 197, 94, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>✅ Đã đăng</span>
@@ -5979,7 +6121,7 @@ function ProductsContent() {
                                 <button
                                     type="button"
                                     className="btn btn-primary"
-                                    onClick={handleRunPublicationCheck}
+                                    onClick={() => handleRunPublicationCheck(true)}
                                     disabled={isCheckingPublication}
                                     style={{ fontSize: 13, padding: '8px 18px', fontWeight: 700, background: 'var(--gradient-primary)', color: 'white', border: 'none', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', gap: 6, cursor: isCheckingPublication ? 'not-allowed' : 'pointer' }}
                                 >

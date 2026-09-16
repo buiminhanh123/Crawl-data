@@ -1263,16 +1263,28 @@ router.get('/profiles/:slug/sitemap', async (req, res) => {
     }
 });
 
-// POST /api/products/profiles/:slug/sitemap — save sitemap URL or uploaded XML
+// POST /api/products/profiles/:slug/sitemap — save or clear sitemap URL or uploaded XML (optional)
 router.post('/profiles/:slug/sitemap', async (req, res) => {
     try {
         const { slug } = req.params;
-        const { sitemapUrl = '', sitemapXml = '' } = req.body;
-        profileQueries.saveSitemap(slug, { sitemapUrl, sitemapXml });
-        res.json({ message: 'Lưu cấu hình Sitemap.xml thành công!', slug });
+        const { sitemapUrl, sitemapXml } = req.body;
+        const result = profileQueries.saveSitemap(slug, { sitemapUrl, sitemapXml });
+        res.json({ message: 'Cập nhật cấu hình Sitemap thành công!', slug, ...result });
     } catch (err) {
         console.error('Failed to save sitemap config:', err);
         res.status(500).json({ error: 'Không thể lưu cấu hình Sitemap.' });
+    }
+});
+
+// DELETE /api/products/profiles/:slug/sitemap — clear sitemap completely
+router.delete('/profiles/:slug/sitemap', async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const result = profileQueries.saveSitemap(slug, { sitemapUrl: '', sitemapXml: '' });
+        res.json({ message: 'Đã xóa bỏ cấu hình Sitemap.', slug, ...result });
+    } catch (err) {
+        console.error('Failed to clear sitemap config:', err);
+        res.status(500).json({ error: 'Không thể xóa cấu hình Sitemap.' });
     }
 });
 
@@ -2004,6 +2016,64 @@ router.post('/profiles/:slug/check-config', (req, res) => {
 // POST /api/products/profiles/:slug/check-publication-status
 // Run publication status check (Sitemap vs. CMS API)
 // ──────────────────────────────────────────────────────────────
+const sitemapUrlCache = new Map();
+const SITEMAP_CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
+async function fetchXmlWithTimeout(url, timeoutMs = 25000) {
+    const response = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+        signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+    return await response.text();
+}
+
+async function fetchAllSitemapUrls(rootSitemapUrl, forceRefresh = false) {
+    const cached = sitemapUrlCache.get(rootSitemapUrl);
+    if (!forceRefresh && cached && (Date.now() - cached.timestamp < SITEMAP_CACHE_TTL)) {
+        return cached.urls;
+    }
+
+    const xmlText = await fetchXmlWithTimeout(rootSitemapUrl);
+    const locMatches = [...xmlText.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)].map(m => m[1].trim());
+
+    // Check if it is a sitemap index (contains <sitemapindex> or sub-sitemap .xml links)
+    const isSitemapIndex = xmlText.includes('<sitemapindex') || locMatches.some(u => u.toLowerCase().endsWith('.xml') || u.toLowerCase().includes('sitemap'));
+
+    let finalUrls = [];
+
+    if (isSitemapIndex) {
+        const subSitemaps = locMatches.filter(u => u.toLowerCase().endsWith('.xml') || u.toLowerCase().includes('sitemap'));
+        const directUrls = locMatches.filter(u => !subSitemaps.includes(u));
+        finalUrls.push(...directUrls);
+
+        // Fetch sub-sitemaps in parallel with concurrency chunks (15 at a time)
+        const CHUNK_SIZE = 15;
+        for (let i = 0; i < subSitemaps.length; i += CHUNK_SIZE) {
+            const chunk = subSitemaps.slice(i, i + CHUNK_SIZE);
+            const chunkResults = await Promise.allSettled(chunk.map(async (subUrl) => {
+                const subXml = await fetchXmlWithTimeout(subUrl, 15000);
+                const subLocs = [...subXml.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)].map(m => m[1].trim());
+                return subLocs;
+            }));
+
+            for (const res of chunkResults) {
+                if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+                    finalUrls.push(...res.value);
+                }
+            }
+        }
+    } else {
+        finalUrls = locMatches;
+    }
+
+    const uniqueUrls = Array.from(new Set(finalUrls));
+    sitemapUrlCache.set(rootSitemapUrl, { urls: uniqueUrls, timestamp: Date.now() });
+    return uniqueUrls;
+}
+
 router.post('/profiles/:slug/check-publication-status', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -2026,17 +2096,21 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
             let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
             if (nameColIdx === -1) nameColIdx = 1;
 
+            let urlColIdx = headers.findIndex(h => h === 'url' || h.includes('đường dẫn') || h.includes('slug') || h.includes('link'));
+
             for (let r = 1; r < rows.length; r++) {
                 const row = rows[r];
                 if (!Array.isArray(row)) continue;
                 const model = String(row[modelColIdx] || '').trim();
                 const name = String(row[nameColIdx] || '').trim();
+                const customUrl = urlColIdx !== -1 ? String(row[urlColIdx] || '').trim() : '';
                 if (model || name) {
                     productItems.push({
                         sheetName: sheet.name,
                         rowIdx: r,
                         model: model || name,
-                        name: name || model
+                        name: name || model,
+                        customUrl
                     });
                 }
             }
@@ -2057,36 +2131,101 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Chưa cấu hình URL Sitemap cho Website.' });
             }
 
-            let xmlText = '';
+            let foundUrls = [];
             try {
-                const response = await fetch(targetSitemapUrl, {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' },
-                    signal: AbortSignal.timeout(20000)
-                });
-                xmlText = await response.text();
+                foundUrls = await fetchAllSitemapUrls(targetSitemapUrl, Boolean(req.body?.refresh));
             } catch (e) {
                 return res.status(500).json({ success: false, error: `Không thể tải Sitemap từ '${targetSitemapUrl}': ${e.message}` });
             }
 
-            const locMatches = xmlText.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || [];
-            const foundUrls = locMatches.map(m => m.replace(/<\/?loc>/gi, '').trim());
-            const urlSlugsSet = new Set(foundUrls.map(u => {
-                const parts = u.split('/').filter(Boolean);
-                return (parts[parts.length - 1] || '').toLowerCase();
-            }));
-            const fullUrlsLower = new Set(foundUrls.map(u => u.toLowerCase()));
+            // Build fast lookup indexes from collected sitemap URLs
+            const fullUrlsLower = new Set();
+            const slugToUrl = new Map();
+            const normalizedSlugToUrl = new Map();
+
+            for (const url of foundUrls) {
+                const urlLower = url.toLowerCase();
+                fullUrlsLower.add(urlLower);
+
+                const cleanUrl = url.split('?')[0].split('#')[0].replace(/\/+$/, '');
+                const parts = cleanUrl.split('/').filter(Boolean);
+                const lastSegment = parts[parts.length - 1] || '';
+                if (lastSegment) {
+                    const segLower = lastSegment.toLowerCase();
+                    if (!slugToUrl.has(segLower)) {
+                        slugToUrl.set(segLower, url);
+                    }
+                    const norm = segLower.replace(/[^a-z0-9]/g, '');
+                    if (norm && !normalizedSlugToUrl.has(norm)) {
+                        normalizedSlugToUrl.set(norm, url);
+                    }
+                }
+            }
 
             logs = productItems.map(p => {
-                const modelSlug = p.model.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-                const isFound = urlSlugsSet.has(modelSlug) || Array.from(fullUrlsLower).some(u => u.includes(modelSlug));
+                const candidates = [];
+                if (p.customUrl) candidates.push(p.customUrl);
+                if (p.model) candidates.push(p.model);
+
+                let isFound = false;
+                let liveUrl = '';
+
+                for (const cand of candidates) {
+                    const candLower = String(cand).trim().toLowerCase();
+                    if (!candLower) continue;
+
+                    const hyphenSlug = candLower.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    const underscoreSlug = candLower.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                    const norm = candLower.replace(/[^a-z0-9]/g, '');
+
+                    if (slugToUrl.has(candLower)) {
+                        isFound = true;
+                        liveUrl = slugToUrl.get(candLower);
+                        break;
+                    }
+                    if (hyphenSlug && slugToUrl.has(hyphenSlug)) {
+                        isFound = true;
+                        liveUrl = slugToUrl.get(hyphenSlug);
+                        break;
+                    }
+                    if (underscoreSlug && slugToUrl.has(underscoreSlug)) {
+                        isFound = true;
+                        liveUrl = slugToUrl.get(underscoreSlug);
+                        break;
+                    }
+                    if (norm && normalizedSlugToUrl.has(norm)) {
+                        isFound = true;
+                        liveUrl = normalizedSlugToUrl.get(norm);
+                        break;
+                    }
+                    // Fallback substring check in full URLs
+                    if (hyphenSlug && hyphenSlug.length >= 4) {
+                        const matched = Array.from(fullUrlsLower).find(u => u.includes('/' + hyphenSlug) || u.includes(hyphenSlug));
+                        if (matched) {
+                            isFound = true;
+                            liveUrl = matched;
+                            break;
+                        }
+                    }
+                    if (underscoreSlug && underscoreSlug.length >= 4) {
+                        const matched = Array.from(fullUrlsLower).find(u => u.includes('/' + underscoreSlug) || u.includes(underscoreSlug));
+                        if (matched) {
+                            isFound = true;
+                            liveUrl = matched;
+                            break;
+                        }
+                    }
+                }
+
                 const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
                 return {
-                    id: `log_${p.rowIdx}_${Date.now()}`,
+                    id: `log_${p.rowIdx}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
                     posted_at: isFound ? nowStr : `Dự kiến: ${nowStr}`,
                     model: p.model,
                     name: p.name,
                     platform: 'Website (Sitemap)',
-                    status: isFound ? 'posted' : 'pending'
+                    status: isFound ? 'posted' : 'pending',
+                    live_url: liveUrl || ''
                 };
             });
 
@@ -2149,27 +2288,63 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
             }
 
             const cmsSkuMap = new Map();
+            const cmsProdMap = new Map();
             if (Array.isArray(cmsProducts)) {
                 cmsProducts.forEach(prod => {
-                    const sku = String(prod.sku || prod.model || prod.slug || prod.name || prod.product_name || prod.id || '').trim().toLowerCase();
-                    if (sku) cmsSkuMap.set(sku, prod.status || 'publish');
+                    const sku = String(prod.sku || prod.model || '').trim().toLowerCase();
+                    const slug = String(prod.slug || '').trim().toLowerCase();
+                    const name = String(prod.name || prod.product_name || '').trim().toLowerCase();
+                    const id = String(prod.id || '').trim().toLowerCase();
+                    const status = prod.status || 'publish';
+
+                    const keys = [sku, slug, name, id].filter(Boolean);
+                    keys.forEach(k => {
+                        cmsSkuMap.set(k, status);
+                        cmsProdMap.set(k, prod);
+                        const norm = k.replace(/[^a-z0-9]/g, '');
+                        if (norm) {
+                            cmsSkuMap.set(norm, status);
+                            cmsProdMap.set(norm, prod);
+                        }
+                    });
                 });
             }
 
             logs = productItems.map(p => {
-                const modelKey = p.model.trim().toLowerCase();
-                const cmsStatus = cmsSkuMap.get(modelKey);
+                const candidates = [];
+                if (p.customUrl) candidates.push(p.customUrl);
+                if (p.model) candidates.push(p.model);
+                if (p.name) candidates.push(p.name);
+
+                let cmsStatus = null;
+                let matchedProd = null;
+
+                for (const cand of candidates) {
+                    const candLower = String(cand).trim().toLowerCase();
+                    if (!candLower) continue;
+                    const hyphenSlug = candLower.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    const underscoreSlug = candLower.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                    const norm = candLower.replace(/[^a-z0-9]/g, '');
+
+                    cmsStatus = cmsSkuMap.get(candLower) || cmsSkuMap.get(hyphenSlug) || cmsSkuMap.get(underscoreSlug) || cmsSkuMap.get(norm);
+                    if (cmsStatus) {
+                        matchedProd = cmsProdMap.get(candLower) || cmsProdMap.get(hyphenSlug) || cmsProdMap.get(underscoreSlug) || cmsProdMap.get(norm);
+                        break;
+                    }
+                }
+
                 const isPosted = cmsStatus === 'publish' || cmsStatus === 'active' || cmsStatus === 'posted' || cmsStatus === 1 || cmsStatus === true;
                 const isDraft = cmsStatus === 'draft' || cmsStatus === 'pending';
                 const nowStr = new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
                 return {
-                    id: `log_${p.rowIdx}_${Date.now()}`,
+                    id: `log_${p.rowIdx}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
                     posted_at: isPosted ? nowStr : (isDraft ? `Nháp: ${nowStr}` : `Dự kiến: ${nowStr}`),
                     model: p.model,
                     name: p.name,
                     platform: isDraft ? 'Bản nháp (CMS API)' : 'Website (CMS API)',
-                    status: isPosted ? 'posted' : 'pending'
+                    status: isPosted ? 'posted' : 'pending',
+                    live_url: matchedProd?.permalink || matchedProd?.url || ''
                 };
             });
         }
@@ -2349,8 +2524,31 @@ function applySchemaRule(rule, $, baseUrl, context) {
                 return pairs.length ? pairs.join('\n') : null;
             }
 
+            if (attr === 'text') {
+                const getCheerioText = (element) => {
+                    const $el = $(element);
+                    const children = $el.children();
+                    if (children.length > 1) {
+                        const childTexts = children.map((_, c) => $(c).text().trim()).get().filter(Boolean);
+                        if (childTexts.length > 1) {
+                            const hasSep = childTexts.some((p, idx) => idx > 0 && /^[-/\\>|:,•]/.test(p.trim()));
+                            const combined = hasSep ? childTexts.join(' ') : childTexts.join(' / ');
+                            return combined.replace(/\s*([-/\\>|:,•])\s*/g, ' $1 ').trim();
+                        }
+                    }
+                    return $el.text().trim();
+                };
+
+                if (els.length > 1) {
+                    const texts = els.map((_, el) => getCheerioText(el)).get().filter(Boolean);
+                    const hasSep = texts.some((p, idx) => idx > 0 && /^[-/\\>|:,•]/.test(p.trim()));
+                    const combined = hasSep ? texts.join(' ') : texts.join(' / ');
+                    return combined.replace(/\s*([-/\\>|:,•])\s*/g, ' $1 ').trim() || null;
+                }
+                return getCheerioText(els[0]) || null;
+            }
+
             const el = $(els[0]);
-            if (attr === 'text') return el.text().trim() || null;
             if (attr === 'html') return el.html()?.trim() || null;
             const val = el.attr(attr)?.trim();
             return (attr === 'href' || attr === 'src') ? resolveFullUrl(val, baseUrl) : (val || null);
@@ -2441,6 +2639,37 @@ function applySchemaRule(rule, $, baseUrl, context) {
                 return pairs.length ? pairs.join('\n') : null;
             }
 
+            if (attr === 'text') {
+                const getXmlNodeText = (n) => {
+                    if (!n) return '';
+                    if (typeof n === 'string' || typeof n === 'number') return String(n).trim();
+                    if (n.nodeType === 3 || n.nodeType === 2) return (n.nodeValue || '').trim();
+                    if (n.childNodes && n.childNodes.length > 0) {
+                        const parts = [];
+                        for (let i = 0; i < n.childNodes.length; i++) {
+                            const ct = getXmlNodeText(n.childNodes[i]);
+                            if (ct) parts.push(ct);
+                        }
+                        if (parts.length > 1) {
+                            const hasSep = parts.some((p, idx) => idx > 0 && /^[-/\\>|:,•]/.test(p.trim()));
+                            const combined = hasSep ? parts.join(' ') : parts.join(' / ');
+                            return combined.replace(/\s*([-/\\>|:,•])\s*/g, ' $1 ').trim();
+                        }
+                        if (parts.length === 1) return parts[0];
+                    }
+                    return (n.textContent || n.nodeValue || '').trim();
+                };
+
+                if (nodes.length > 1) {
+                    const texts = nodes.map(n => getXmlNodeText(n)).filter(Boolean);
+                    if (!texts.length) return null;
+                    const hasSep = texts.some((t, idx) => idx > 0 && /^[-/\\>|:,•]/.test(t.trim()));
+                    const combined = hasSep ? texts.join(' ') : texts.join(' / ');
+                    return combined.replace(/\s*([-/\\>|:,•])\s*/g, ' $1 ').trim();
+                }
+                return getXmlNodeText(nodes[0]) || null;
+            }
+
             const node = nodes[0];
             if (typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') {
                 return String(node).trim() || null;
@@ -2450,10 +2679,6 @@ function applySchemaRule(rule, $, baseUrl, context) {
             if (node.nodeType === 3 || node.nodeType === 2) {
                 const val = (node.nodeValue || '').trim();
                 return (attr === 'href' || attr === 'src') ? resolveFullUrl(val, baseUrl) : val;
-            }
-            if (attr === 'text') {
-                const text = node.textContent || node.nodeValue || '';
-                return text.trim() || null;
             }
             if (attr === 'html') {
                 return node.toString?.()?.trim() || null;
@@ -2507,6 +2732,36 @@ async function fetchAndApplySchema(url, schema) {
         result[fieldKey] = applySchemaRule(rule, $, url, context);
     }
     return result;
+}
+
+/**
+ * Filter out non-product URLs (distributor lists, search filters, company pages, etc.)
+ */
+function filterLikelyProductUrls(urls, targetUrl = '') {
+    if (!urls || !urls.length) return [];
+    
+    // Normalize target URL / host
+    const isHokuyo = (targetUrl || '').includes('hokuyo-aut.jp') || urls.some(u => u.includes('hokuyo-aut.jp'));
+    if (isHokuyo) {
+        // Hokuyo product detail pages are strictly: single.php?serial=...
+        const filtered = urls.filter(u => /single\.php\?serial=\d+/i.test(u));
+        if (filtered.length > 0) return filtered;
+    }
+    
+    // General filter: reject clear non-product pages
+    const nonProductPattern = /\/(company|about|contact|news|faq|privacy|terms|cart|checkout|login|account|global-network|download|support|history|recruit|policy|inquiry|sitemap|site-map|feed|rss)\b/i;
+    const listingSearchPattern = /(\/search\/?(\?.*)?$|\?cap=[A-Z]|\?cate\d*=|\?page=\d+|\/category\/|\/categories\/)/i;
+    
+    let candidates = urls.filter(u => !nonProductPattern.test(u) && !listingSearchPattern.test(u));
+    
+    // If we have candidates with explicit product indicators, prioritize them
+    const productIndicator = /(\/(product|item|goods|p|sp|detail|details|catalog)\/|\/\d+\.html|\.php\?id=|\.php\?serial=)/i;
+    const explicitProducts = candidates.filter(u => productIndicator.test(u));
+    if (explicitProducts.length >= 5) {
+        return explicitProducts;
+    }
+    
+    return candidates.length > 0 ? candidates : urls;
 }
 
 /**
@@ -2564,7 +2819,8 @@ async function parseSitemapUrls(sitemapUrl, sitemapXml, maxUrls = 2000) {
         }
     }
 
-    return allUrls.slice(0, maxUrls);
+    const filtered = filterLikelyProductUrls(allUrls, sitemapUrl);
+    return filtered.slice(0, maxUrls);
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -2721,8 +2977,12 @@ router.post('/profiles/:slug/crawl-schema', async (req, res) => {
     }
 
     const sitemap = profileQueries.getSitemap(slug);
-    if (!sitemap?.sitemapUrl && !sitemap?.sitemapXml && !profile.sitemap_url) {
-        return res.status(400).json({ error: 'Chưa cấu hình Sitemap cho Profile này.' });
+    const harReport = profileQueries.getHarReport(slug);
+    const sitemapUrl = sitemap?.sitemapUrl || profile.sitemap_url || '';
+    const sitemapXml = sitemap?.sitemapXml || '';
+
+    if (!sitemapUrl && !sitemapXml && !profile.target_url && (!harReport?.fields || harReport.fields.length === 0)) {
+        return res.status(400).json({ error: 'Chưa có thông tin để crawl (chưa có Sitemap, website chính hoặc tệp HAR).' });
     }
 
     const maxUrls = Math.min(parseInt(req.body?.maxUrls) || 500, 2000);
@@ -2740,17 +3000,79 @@ router.post('/profiles/:slug/crawl-schema', async (req, res) => {
     // Run crawl asynchronously
     (async () => {
         try {
-            const sitemapUrl = sitemap?.sitemapUrl || profile.sitemap_url || '';
-            const sitemapXml = sitemap?.sitemapXml || '';
+            // Step 1: Get URLs (from Sitemap if configured, or fallback to target_url / HAR report)
+            let allUrls = [];
+            if (sitemapUrl || sitemapXml) {
+                try {
+                    allUrls = await parseSitemapUrls(sitemapUrl, sitemapXml, maxUrls);
+                } catch (e) {
+                    console.error('[crawl-schema] Error parsing sitemap:', e.message);
+                }
+            }
 
-            // Step 1: Get all URLs from sitemap
-            const allUrls = await parseSitemapUrls(sitemapUrl, sitemapXml, maxUrls);
+            // Fallback 1: Try target_url/sitemap.xml
+            if (allUrls.length === 0 && profile.target_url) {
+                try {
+                    const fallbackUrl = profile.target_url.replace(/\/$/, '') + '/sitemap.xml';
+                    allUrls = await parseSitemapUrls(fallbackUrl, '', maxUrls);
+                } catch (e) {}
+            }
+
+            // Fallback 2: Hokuyo auto-discovery if Hokuyo profile
+            if (allUrls.length === 0 && (profile.target_url?.includes('hokuyo-aut.jp') || slug.includes('hokuyo'))) {
+                try {
+                    const hokuyoUrls = new Set();
+                    for (let c = 1; c <= 5; c++) {
+                        try {
+                            const sResp = await fetch(`https://www.hokuyo-aut.jp/search/?cate01=${c}`, {
+                                headers: { 'User-Agent': 'Mozilla/5.0 Chrome/120.0.0.0' },
+                                signal: AbortSignal.timeout(10000)
+                            });
+                            const sHtml = await sResp.text();
+                            const matches = sHtml.match(/href=["']([^"']*single\.php\?serial=[^"']+)["']/gi) || [];
+                            for (const m of matches) {
+                                const rawHref = m.replace(/^href=["']|["']$/gi, '').trim();
+                                const fullU = new URL(rawHref, 'https://www.hokuyo-aut.jp/search/').href.split('#')[0];
+                                hokuyoUrls.add(fullU);
+                            }
+                        } catch (e) {}
+                    }
+                    if (hokuyoUrls.size > 0) {
+                        allUrls = Array.from(hokuyoUrls).slice(0, maxUrls);
+                    }
+                } catch (e) {
+                    console.error('[crawl-schema] Hokuyo search scan error:', e.message);
+                }
+            }
+
+            // Fallback 3: Extract candidate product URLs from HAR report
+            if (allUrls.length === 0 && harReport?.fields) {
+                const urlSet = new Set();
+                for (const f of harReport.fields) {
+                    for (const s of (f.samples || [])) {
+                        const v = typeof s === 'string' ? s : s?.value;
+                        if (v && typeof v === 'string' && v.startsWith('http') && !v.match(/\.(css|js|png|jpg|jpeg|svg|gif|pdf|ico|woff2?)(\?|$)/i)) {
+                            urlSet.add(v.split('#')[0]);
+                        }
+                    }
+                    for (const ep of (f.endpoints || [])) {
+                        if (typeof ep === 'string' && ep.startsWith('http') && !ep.match(/\.(css|js|png|jpg|jpeg|svg|gif|pdf|ico|woff2?)(\?|$)/i)) {
+                            urlSet.add(ep.split('#')[0]);
+                        }
+                    }
+                }
+                allUrls = Array.from(urlSet).slice(0, maxUrls);
+            }
+
+            // Final filter: ensure non-product URLs (distributors, search, etc.) are excluded
+            allUrls = filterLikelyProductUrls(allUrls, profile.target_url || slug);
+
             job.total = allUrls.length;
 
             if (allUrls.length === 0) {
                 job.running = false;
                 job.done = true;
-                job.error = 'Sitemap không có URL nào.';
+                job.error = 'Không tìm thấy URL nào từ Sitemap hoặc tệp HAR.';
                 return;
             }
 

@@ -1032,11 +1032,19 @@ const profileQueries = {
     },
 
     saveSitemap: (slug, { sitemapXml, sitemapUrl }) => {
+        const res = db.exec('SELECT sitemap_xml, sitemap_url FROM product_profiles WHERE slug = ?', [slug]);
+        const existingXml = res[0]?.values[0]?.[0] || null;
+        const existingUrl = res[0]?.values[0]?.[1] || null;
+
+        const newXml = (sitemapXml !== undefined) ? (sitemapXml && sitemapXml.trim() ? sitemapXml.trim() : null) : existingXml;
+        const newUrl = (sitemapUrl !== undefined) ? (sitemapUrl && sitemapUrl.trim() ? sitemapUrl.trim() : null) : existingUrl;
+
         db.run(
             'UPDATE product_profiles SET sitemap_xml = ?, sitemap_url = ?, updated_at = datetime("now") WHERE slug = ?',
-            [sitemapXml || null, sitemapUrl || null, slug]
+            [newXml, newUrl, slug]
         );
         saveDatabase();
+        return { sitemapXml: newXml, sitemapUrl: newUrl };
     },
 
     getSitemap: (slug) => {

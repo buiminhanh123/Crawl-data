@@ -527,6 +527,18 @@ async def get_product_urls(profile_slug='newland'):
 
             har_json_str, target_url, profile_name, sitemap_xml, sitemap_url_db, db_slug = row
             report = json.loads(har_json_str) if har_json_str else {"fields": []}
+            def clean_product_url(u):
+                if not u or not isinstance(u, str): return ""
+                u = u.split('#')[0].strip()
+                parsed = urllib.parse.urlparse(u)
+                if not parsed.netloc: return u
+                q = parsed.query
+                if q:
+                    keep_params = [pair for pair in q.split('&') if pair.split('=')[0].lower() in ('serial', 'id', 'item', 'item_id', 'product_id', 'pid', 'p', 'model', 'code', 'cate01', 'sku')]
+                    if keep_params:
+                        return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '&'.join(keep_params), ''))
+                return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+
             seen = set()
             raw_candidates = []
 
@@ -535,8 +547,8 @@ async def get_product_urls(profile_slug='newland'):
                 log_message("Đang nạp dữ liệu từ file Sitemap.xml đã upload...")
                 locs = re.findall(r'<loc>(https?://[^<]+)</loc>', sitemap_xml, re.I)
                 for loc in locs:
-                    clean = loc.split('?')[0].split('#')[0]
-                    if clean not in seen and not any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
+                    clean = clean_product_url(loc)
+                    if clean and clean not in seen and not any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
                         if not any(x in clean.lower() for x in ('news-detail', 'solutions-detail', 'products-compare')):
                             seen.add(clean)
                             raw_candidates.append(clean)
@@ -561,8 +573,8 @@ async def get_product_urls(profile_slug='newland'):
                         locs = re.findall(r'<loc>(https?://[^<]+)</loc>', text, re.I)
                         c = 0
                         for loc in locs:
-                            clean = loc.split('?')[0].split('#')[0]
-                            if clean not in seen and not any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
+                            clean = clean_product_url(loc)
+                            if clean and clean not in seen and not any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
                                 if not any(x in clean.lower() for x in ('news-detail', 'solutions-detail', 'products-compare')):
                                     seen.add(clean)
                                     raw_candidates.append(clean)
@@ -618,8 +630,8 @@ async def get_product_urls(profile_slug='newland'):
                     if any(x in val.lower() for x in ('products-compare', 'products-search', 'discontinued=', 'index_tag_id=')):
                         continue
 
-                    clean_val = val.split('#')[0].split('?')[0]
-                    if clean_val not in seen:
+                    clean_val = clean_product_url(val)
+                    if clean_val and clean_val not in seen:
                         seen.add(clean_val)
                         raw_candidates.append(clean_val)
 
@@ -630,9 +642,16 @@ async def get_product_urls(profile_slug='newland'):
                 parsed = urllib.parse.urlparse(val)
                 parts = [p for p in parsed.path.split('/') if p]
                 slug = parts[-1] if parts else 'product'
+                if 'serial=' in parsed.query:
+                    m_s = re.search(r'serial=([^&]+)', parsed.query)
+                    if m_s: slug = f"serial-{m_s.group(1)}"
+                elif 'id=' in parsed.query:
+                    m_id = re.search(r'\bid=([^&]+)', parsed.query)
+                    if m_id: slug = f"id-{m_id.group(1)}"
+
                 category = parts[-2] if len(parts) >= 2 else p_name
 
-                is_detail = any(x in lower for x in ('products-detail', 'product-detail', '/detail/', '/item/', '/p/'))
+                is_detail = any(x in lower for x in ('products-detail', 'product-detail', '/detail/', '/item/', '/p/', 'single.php', 'product_detail', 'product-info')) or ('serial=' in lower)
                 if is_detail and not lower.replace('/', '').endswith('products-detail') and not lower.replace('/', '').endswith('product-detail'):
                     detail_urls.append((val, category, slug))
                 else:
@@ -643,40 +662,74 @@ async def get_product_urls(profile_slug='newland'):
             # Auto-discovery fallback if HAR has few/no links but target_url exists
             if (len(product_urls) < 10 or not detail_urls) and target_url and target_url.startswith('http'):
                 try:
-                    log_message(f"Đang tự động quét toàn bộ website '{target_url}' để thu thập thêm link sản phẩm...")
-                    auto_found = []
-                    sitemap_url = urllib.parse.urljoin(target_url, "/sitemap.xml")
-                    headers = {
-                        "User-Agent": HTTP_HEADERS["User-Agent"],
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "Accept-Encoding": "gzip, deflate"
-                    }
-                    import urllib.request, gzip
-                    req = urllib.request.Request(sitemap_url, headers=headers)
-                    with urllib.request.urlopen(req, timeout=15) as resp:
-                        data = resp.read()
-                        if resp.headers.get('Content-Encoding') == 'gzip':
-                            data = gzip.decompress(data)
-                        text = data.decode('utf-8', errors='replace')
-                        locs = re.findall(r'<loc>(https?://[^<]+)</loc>', text, re.I)
-                        for loc in locs:
-                            clean = loc.split('?')[0].split('#')[0]
-                            if any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
-                                continue
-                            if 'news-detail' in clean or 'solutions-detail' in clean or 'products-compare' in clean:
-                                continue
-                            lower = clean.lower()
-                            is_detail = any(x in lower for x in ('products-detail', 'product-detail', '/detail/', '/item/', '/p/'))
-                            if is_detail and not lower.rstrip('/').endswith('products-detail') and not lower.rstrip('/').endswith('product-detail'):
-                                if clean not in seen:
-                                    seen.add(clean)
-                                    parts = [p for p in urllib.parse.urlparse(clean).path.split('/') if p]
-                                    slug = parts[-1] if parts else 'product'
-                                    cat = parts[-2] if len(parts) >= 2 else p_name
-                                    auto_found.append((clean, cat, slug))
-                    if auto_found:
-                        log_message(f"Tự động quét sitemap website đã bổ sung thêm {len(auto_found)} đường dẫn sản phẩm!")
-                        product_urls = auto_found
+                    # Specialized auto-discovery for Hokuyo
+                    if 'hokuyo-aut.jp' in target_url or 'hokuyo' in (profile_slug or '').lower():
+                        log_message("Đang tự động quét danh mục sản phẩm Hokuyo từ https://www.hokuyo-aut.jp/search/ ...")
+                        auto_found = []
+                        headers = {
+                            "User-Agent": HTTP_HEADERS["User-Agent"],
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                        }
+                        import urllib.request
+                        for cat_id in range(1, 6):
+                            try:
+                                s_url = f"https://www.hokuyo-aut.jp/search/?cate01={cat_id}"
+                                req_s = urllib.request.Request(s_url, headers=headers)
+                                with urllib.request.urlopen(req_s, timeout=12) as r_s:
+                                    soup_s = BeautifulSoup(r_s.read().decode('utf-8', errors='replace'), 'html.parser')
+                                    for a in soup_s.find_all('a', href=True):
+                                        href = a['href']
+                                        if 'single.php' in href and 'serial=' in href:
+                                            full_h = clean_product_url(urllib.parse.urljoin("https://www.hokuyo-aut.jp/search/", href))
+                                            if full_h and full_h not in seen:
+                                                seen.add(full_h)
+                                                m = re.search(r'serial=([^&]+)', full_h)
+                                                s_slug = f"serial-{m.group(1)}" if m else "product"
+                                                auto_found.append((full_h, 'HOKUYO', s_slug))
+                            except Exception:
+                                pass
+                        if auto_found:
+                            log_message(f"Tự động quét Hokuyo đã bổ sung thêm {len(auto_found)} sản phẩm!")
+                            product_urls = auto_found
+
+                    if not product_urls or len(product_urls) < 5:
+                        log_message(f"Đang tự động quét toàn bộ website '{target_url}' để thu thập thêm link sản phẩm...")
+                        auto_found = []
+                        sitemap_url = urllib.parse.urljoin(target_url, "/sitemap.xml")
+                        headers = {
+                            "User-Agent": HTTP_HEADERS["User-Agent"],
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                            "Accept-Encoding": "gzip, deflate"
+                        }
+                        import urllib.request, gzip
+                        req = urllib.request.Request(sitemap_url, headers=headers)
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            data = resp.read()
+                            if resp.headers.get('Content-Encoding') == 'gzip':
+                                data = gzip.decompress(data)
+                            text = data.decode('utf-8', errors='replace')
+                            locs = re.findall(r'<loc>(https?://[^<]+)</loc>', text, re.I)
+                            for loc in locs:
+                                clean = clean_product_url(loc)
+                                if not clean or any(clean.lower().endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.jpeg', '.svg', '.gif', '.pdf')):
+                                    continue
+                                if 'news-detail' in clean or 'solutions-detail' in clean or 'products-compare' in clean:
+                                    continue
+                                lower = clean.lower()
+                                is_detail = any(x in lower for x in ('products-detail', 'product-detail', '/detail/', '/item/', '/p/', 'single.php')) or ('serial=' in lower)
+                                if is_detail and not lower.rstrip('/').endswith('products-detail') and not lower.rstrip('/').endswith('product-detail'):
+                                    if clean not in seen:
+                                        seen.add(clean)
+                                        parts = [p for p in urllib.parse.urlparse(clean).path.split('/') if p]
+                                        slug = parts[-1] if parts else 'product'
+                                        if 'serial=' in clean:
+                                            m_s = re.search(r'serial=([^&]+)', clean)
+                                            if m_s: slug = f"serial-{m_s.group(1)}"
+                                        cat = parts[-2] if len(parts) >= 2 else p_name
+                                        auto_found.append((clean, cat, slug))
+                        if auto_found:
+                            log_message(f"Tự động quét sitemap website đã bổ sung thêm {len(auto_found)} đường dẫn sản phẩm!")
+                            product_urls = auto_found
                 except Exception as ex:
                     log_message(f"Không tự quét được sitemap website: {ex}")
 
@@ -1051,8 +1104,7 @@ def extract_product_data(soup, slug, url=""):
                 stext = sec.text.strip()
                 if stext and stext not in overview_texts:
                     overview_texts.append(stext)
-        detailed_desc = "\n\n".join(overview_texts) if overview_texts else short_desc
-        full_desc = f"{short_desc}\n\n{detailed_desc}".strip() if short_desc else detailed_desc
+        detailed_desc = "\n\n".join(overview_texts) if overview_texts else ""
 
         download_links = {}
         manual_vi = ""
@@ -1096,7 +1148,7 @@ def extract_product_data(soup, slug, url=""):
                     if k and v:
                         specs[k] = v
 
-        return p_name, main_cat, cat, ser, full_desc, img_url, specs, part_num, download_links
+        return p_name, main_cat, cat, ser, short_desc, detailed_desc, img_url, specs, part_num, download_links
 
     # 1. Name
     name_el = soup.find("h1") or soup.find("h2", class_=re.compile(r'title|product', re.I))
@@ -1190,6 +1242,7 @@ def extract_product_data(soup, slug, url=""):
         c for c in crumbs 
         if c.lower() != (name or '').lower() 
         and c.lower() != (slug or '').lower()
+        and c.lower() not in ('top', 'single.php', 'home', 'main', 'index')
         and not re.match(r'^[A-Za-z0-9]{1,4}[-_/][0-9]{2,5}[A-Za-z0-9]*$', c.strip()) # Reject raw model codes like AS-8520
     ]
 
@@ -1295,14 +1348,24 @@ def extract_product_data(soup, slug, url=""):
 
     # 5. Image URL (Rich Image Link Extraction)
     image_url = ""
-    og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
-    if og_img and og_img.get("content"):
-        image_url = og_img.get("content").strip()
+    # Check for dedicated product images in page body first (especially /p/product/ on Hokuyo)
+    for img in soup.find_all("img"):
+        src = img.get("src", "") or img.get("data-src", "")
+        if src and ('/p/product/' in src.lower() or 'photo_product' in src.lower()):
+            image_url = src
+            break
+
+    if not image_url:
+        og_img = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "og:image"}) or soup.find("meta", attrs={"name": "twitter:image"})
+        if og_img and og_img.get("content"):
+            c_og = og_img.get("content").strip()
+            if not any(x in c_og.lower() for x in ('ogp.jpg', 'default', 'logo', 'common', 'banner')):
+                image_url = c_og
 
     if not image_url:
         for img in soup.find_all("img"):
             src = img.get("src", "") or img.get("data-src", "")
-            if not src or any(ext in src.lower() for ext in ('.svg', 'icon', 'logo', 'banner', 'button', 'loading')):
+            if not src or any(ext in src.lower() for ext in ('.svg', 'icon', 'logo', 'banner', 'button', 'loading', 'ogp.jpg')):
                 continue
             if any(k in src.lower() for k in ("katanapim", "upload", "catalog", "product", "item", "media", "images", "detail")):
                 image_url = src
@@ -1472,22 +1535,31 @@ async def scrape_product(session, browser, browser_sem, url_info, index, total, 
                 return
 
             # Full crawl
-            name, main_cat_ext, cat_extracted, series_extracted, description, image_url, specs, part_number, downloads = extract_product_data(soup, slug, url)
+            result = extract_product_data(soup, slug, url)
+            if len(result) == 10:
+                name, main_cat_ext, cat_extracted, series_extracted, short_description, description, image_url, specs, part_number, downloads = result
+            else:
+                # fallback for non-Kew (returns 9 values)
+                name, main_cat_ext, cat_extracted, series_extracted, description, image_url, specs, part_number, downloads = result
+                short_description = ""
 
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("""
             INSERT INTO products
-                (main_category, category, series, slug, name, description, image_url, url, specifications, part_number, download_links, profile_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (main_category, category, series, slug, name, short_description, description, image_url, url, specifications, part_number, download_links, profile_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(url) DO UPDATE SET
                 main_category=excluded.main_category, category=excluded.category, series=excluded.series,
-                slug=excluded.slug, name=excluded.name, description=excluded.description,
+                slug=excluded.slug, name=excluded.name,
+                short_description=excluded.short_description,
+                description=excluded.description,
                 image_url=excluded.image_url, specifications=excluded.specifications,
                 part_number=excluded.part_number, download_links=excluded.download_links,
                 profile_slug=excluded.profile_slug
             """, (
-                main_cat_ext, cat_extracted, series_extracted, slug, name, description, image_url, url,
+                main_cat_ext, cat_extracted, series_extracted, slug, name,
+                short_description, description, image_url, url,
                 json.dumps(specs, ensure_ascii=False), part_number,
                 json.dumps(downloads, ensure_ascii=False), profile_slug
             ))
