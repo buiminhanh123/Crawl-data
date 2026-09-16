@@ -225,14 +225,21 @@ export default function IncompleteRowsModal({
     // Map set of SKUs / Product Codes that are successfully posted on Web
     const postedSkuSet = useMemo(() => {
         const set = new Set();
-        const logs = Array.isArray(customPostingLogs) ? customPostingLogs : [];
+        let logs = Array.isArray(customPostingLogs) && customPostingLogs.length > 0 ? customPostingLogs : null;
+        if (!logs) {
+            try {
+                const saved = typeof window !== 'undefined' ? localStorage.getItem(`posting_logs_${profileSlug}`) : null;
+                if (saved) logs = JSON.parse(saved);
+            } catch (e) {}
+        }
+        if (!logs) logs = [];
         logs.forEach(item => {
             if (!item) return;
             const status = String(item.status || item.publish_status || '').toLowerCase();
-            const isOk = status === 'success' || status === 'published' || item.posted_url || item.post_id || item.product_id;
+            const isOk = status === 'posted' || status === 'success' || status === 'published' || item.live_url || item.posted_url || item.post_id || item.product_id;
             if (isOk) {
-                if (item.product_code || item.sku || item.ma_san_pham) {
-                    set.add(String(item.product_code || item.sku || item.ma_san_pham).trim().toLowerCase());
+                if (item.model || item.product_code || item.sku || item.ma_san_pham) {
+                    set.add(String(item.model || item.product_code || item.sku || item.ma_san_pham).trim().toLowerCase());
                 }
                 if (item.product_name || item.name) {
                     set.add(String(item.product_name || item.name).trim().toLowerCase());
@@ -240,7 +247,7 @@ export default function IncompleteRowsModal({
             }
         });
         return set;
-    }, [customPostingLogs]);
+    }, [customPostingLogs, profileSlug]);
 
     // Analyze all rows in sheets for missing required & smart audit checks
     const analyzedData = useMemo(() => {
@@ -424,17 +431,21 @@ export default function IncompleteRowsModal({
                 }
 
                 const isMandatoryMissing = missingMandatory.length > 0;
-                const isIncomplete = isMandatoryMissing || isDuplicateSku || missingImgLinks.length > 0 || missingPdfLinks.length > 0 || metaDescIssues.length > 0 || catBrandIssues.length > 0 || missingOptional.length > 0;
+                const hasIssues = isMandatoryMissing || isDuplicateSku || missingImgLinks.length > 0 || missingPdfLinks.length > 0 || metaDescIssues.length > 0 || catBrandIssues.length > 0 || missingOptional.length > 0;
+                const isIncomplete = !isWebPosted && hasIssues;
 
-                if (isMandatoryMissing) mandatoryCount++;
-                if (isDuplicateSku) duplicateCount++;
-                if (missingImgLinks.length > 0) imgLinkErrorCount++;
-                if (missingPdfLinks.length > 0) pdfLinkErrorCount++;
-                if (metaDescIssues.length > 0) metaDescErrorCount++;
-                if (catBrandIssues.length > 0) catIdErrorCount++;
-                if (isIncomplete) totalIncompleteCount++;
+                // If product is already posted, do NOT increment incomplete/error counts
+                if (!isWebPosted) {
+                    if (isMandatoryMissing) mandatoryCount++;
+                    if (isDuplicateSku) duplicateCount++;
+                    if (missingImgLinks.length > 0) imgLinkErrorCount++;
+                    if (missingPdfLinks.length > 0) pdfLinkErrorCount++;
+                    if (metaDescIssues.length > 0) metaDescErrorCount++;
+                    if (catBrandIssues.length > 0) catIdErrorCount++;
+                    if (isIncomplete) totalIncompleteCount++;
+                }
 
-                if (isIncomplete) {
+                if (isIncomplete || isWebPosted) {
                     allRows.push({
                         sheetName: s.name,
                         rowIndex: r + 1,
@@ -585,7 +596,9 @@ export default function IncompleteRowsModal({
                 const auditItem = analyzedData.rows.find(item => item.sheetName === s.name && item.rowIndex === (r + 1));
                 let statusText = 'OK';
 
-                if (auditItem) {
+                if (auditItem?.isWebPosted) {
+                    statusText = '✅ Đã đăng Web';
+                } else if (auditItem) {
                     const issues = [];
                     if (auditItem.missingMandatory && auditItem.missingMandatory.length > 0) {
                         issues.push(`Thiếu (${auditItem.missingMandatory.map(m => m.label.split('(')[0].trim()).join(', ')})`);
@@ -697,22 +710,27 @@ export default function IncompleteRowsModal({
     const filteredRows = analyzedData.rows.filter(item => {
         if (filterTab === 'web_posted') {
             // Keep all rows when checking web posted status
-        } else if (filterTab === 'mandatory') {
-            if (!item.isMandatoryMissing) return false;
-        } else if (filterTab === 'duplicate_sku') {
-            if (!item.isDuplicateSku) return false;
-        } else if (filterTab === 'image_links') {
-            if (item.missingImgLinks.length === 0) return false;
-        } else if (filterTab === 'pdf_links') {
-            if (item.missingPdfLinks.length === 0) return false;
-        } else if (filterTab === 'media_links') {
-            if (item.missingMediaLinks.length === 0) return false;
-        } else if (filterTab === 'meta_desc') {
-            if (item.metaDescIssues.length === 0) return false;
-        } else if (filterTab === 'category_ids') {
-            if (item.catBrandIssues.length === 0) return false;
-        } else if (filterTab !== 'all') {
-            if (!item.isIncomplete) return false;
+        } else {
+            // In error audit tabs, if row is already posted on the web, skip it
+            if (item.isWebPosted) return false;
+
+            if (filterTab === 'mandatory') {
+                if (!item.isMandatoryMissing) return false;
+            } else if (filterTab === 'duplicate_sku') {
+                if (!item.isDuplicateSku) return false;
+            } else if (filterTab === 'image_links') {
+                if (item.missingImgLinks.length === 0) return false;
+            } else if (filterTab === 'pdf_links') {
+                if (item.missingPdfLinks.length === 0) return false;
+            } else if (filterTab === 'media_links') {
+                if (item.missingMediaLinks.length === 0) return false;
+            } else if (filterTab === 'meta_desc') {
+                if (item.metaDescIssues.length === 0) return false;
+            } else if (filterTab === 'category_ids') {
+                if (item.catBrandIssues.length === 0) return false;
+            } else if (filterTab !== 'all') {
+                if (!item.isIncomplete) return false;
+            }
         }
 
         if (selectedSheetName !== 'ALL' && item.sheetName !== selectedSheetName) return false;

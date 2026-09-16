@@ -293,6 +293,16 @@ function ProductsContent() {
         const posted = logs.filter(l => l.status === 'posted').length;
         const webPostingErr = logs.filter(l => l.status === 'error').length;
 
+        // Collect all models and product names that are successfully posted on Web
+        const postedModels = new Set();
+        const postedNames = new Set();
+        logs.filter(l => l.status === 'posted').forEach(l => {
+            const m = (l.model || '').trim().toLowerCase();
+            const n = (l.name || '').trim().toLowerCase();
+            if (m) postedModels.add(m);
+            if (n) postedNames.add(n);
+        });
+
         // Audit & Check Status Error Scan across all profileSheets
         const sheetErrorKeys = new Set();
         const codeAliases = ['ma_san_pham', 'mã sản phẩm', 'mã sp', 'ma sp', 'sku', 'model', 'part_number'];
@@ -344,6 +354,13 @@ function ProductsContent() {
                 const valCat = catIdx >= 0 && catIdx < row.length ? String(row[catIdx] || '').trim() : '';
                 const statusVal = statusColIdx >= 0 && statusColIdx < row.length ? String(row[statusColIdx] || '').trim() : '';
 
+                // If product is already successfully posted, skip error check completely!
+                const isAlreadyPosted = (valCode && postedModels.has(valCode.toLowerCase())) ||
+                                        (valName && postedNames.has(valName.toLowerCase()));
+                if (isAlreadyPosted) {
+                    continue;
+                }
+
                 let isError = false;
 
                 // 1. Explicit CHECK STATUS column contains error
@@ -378,7 +395,7 @@ function ProductsContent() {
             if (mKey) sheetErrorKeys.add(mKey);
         });
 
-        const totalErrCount = Math.max(webPostingErr, sheetErrorKeys.size);
+        const totalErrCount = sheetErrorKeys.size;
         const total = totalProductsCount;
         const pending = Math.max(0, total - posted - totalErrCount);
 
@@ -6120,6 +6137,24 @@ function ProductsContent() {
 
                                 <button
                                     type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                        setCustomPostingLogs([]);
+                                        try {
+                                            localStorage.removeItem(`posting_logs_${profileSlug}`);
+                                        } catch (e) {}
+                                        toast('🗑️ Đã làm mới lịch sử lưu! Đang quét mới toàn bộ...', 'info');
+                                        handleRunPublicationCheck(true);
+                                    }}
+                                    disabled={isCheckingPublication}
+                                    style={{ fontSize: 13, padding: '8px 14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, cursor: isCheckingPublication ? 'not-allowed' : 'pointer', color: '#b91c1c' }}
+                                    title="Xóa kết quả lưu từ các lần quét trước trong trình duyệt và quét mới tinh từ đầu"
+                                >
+                                    <Trash2 size={15} style={{ color: '#ef4444' }} /> Xóa Cache & Quét Mới
+                                </button>
+
+                                <button
+                                    type="button"
                                     className="btn btn-primary"
                                     onClick={() => handleRunPublicationCheck(true)}
                                     disabled={isCheckingPublication}
@@ -6364,6 +6399,7 @@ function ProductsContent() {
                 profileName={profilesList.find(p => p.slug === profileSlug)?.name || profileSlug}
                 sheets={profileSheets}
                 initialTab={auditModalTab}
+                customPostingLogs={filteredHistoryLogs}
                 onNavigateToRow={(sheetName, rowIndex) => {
                     if (sheetName) {
                         setActiveSheetTabName(sheetName);

@@ -2031,6 +2031,9 @@ async function fetchXmlWithTimeout(url, timeoutMs = 25000) {
 }
 
 async function fetchAllSitemapUrls(rootSitemapUrl, forceRefresh = false) {
+    if (forceRefresh) {
+        sitemapUrlCache.delete(rootSitemapUrl);
+    }
     const cached = sitemapUrlCache.get(rootSitemapUrl);
     if (!forceRefresh && cached && (Date.now() - cached.timestamp < SITEMAP_CACHE_TTL)) {
         return cached.urls;
@@ -2131,6 +2134,9 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
                 return res.status(400).json({ success: false, error: 'Chưa cấu hình URL Sitemap cho Website.' });
             }
 
+            if (req.body?.refresh) {
+                sitemapUrlCache.delete(targetSitemapUrl);
+            }
             let foundUrls = [];
             try {
                 foundUrls = await fetchAllSitemapUrls(targetSitemapUrl, Boolean(req.body?.refresh));
@@ -2166,6 +2172,7 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
                 const candidates = [];
                 if (p.customUrl) candidates.push(p.customUrl);
                 if (p.model) candidates.push(p.model);
+                if (p.name) candidates.push(p.name);
 
                 let isFound = false;
                 let liveUrl = '';
