@@ -268,7 +268,7 @@ function ProductsContent() {
             const headers = (rows[0] || []).map(h => String(h || '').trim().toLowerCase());
             let modelIdx = headers.findIndex(h => h.includes('model') || h.includes('mã') || h.includes('sku') || h.includes('part number'));
             if (modelIdx === -1) modelIdx = 0;
-            let nameIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
+            let nameIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề') || h.includes('title'));
             if (nameIdx === -1) nameIdx = 1;
 
             for (let r = 1; r < rows.length; r++) {
@@ -307,7 +307,7 @@ function ProductsContent() {
         const sheetErrorKeys = new Set();
         const codeAliases = ['ma_san_pham', 'mã sản phẩm', 'mã sp', 'ma sp', 'sku', 'model', 'part_number'];
         const nameAliases = ['ten_san_pham', 'tên sản phẩm', 'tên sp', 'ten sp', 'tiêu đề', 'title', 'name'];
-        const catAliases = ['danh_muc_id', 'danh mục id', 'category id', 'danh mục', 'danh_muc'];
+        const catAliases = ['danh_muc_id', 'danh mục id', 'category id', 'danh mục', 'danh_muc', 'category', 'id cat', 'cat id'];
 
         // Track duplicate SKUs across sheets
         const skuMap = {};
@@ -397,7 +397,7 @@ function ProductsContent() {
 
         const totalErrCount = sheetErrorKeys.size;
         const total = totalProductsCount;
-        const pending = Math.max(0, total - posted - totalErrCount);
+        const pending = Math.max(0, total - posted);
 
         let filtered = logs;
         if (historyStatusFilter !== 'all') {
@@ -906,7 +906,7 @@ function ProductsContent() {
                     let modelColIdx = headers.findIndex(h => h.includes('model') || h.includes('mã') || h.includes('sku') || h.includes('part number'));
                     if (modelColIdx === -1) modelColIdx = 0;
 
-                    let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
+                    let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề') || h.includes('title'));
                     if (nameColIdx === -1) nameColIdx = 1;
 
                     let urlColIdx = headers.findIndex(h => h === 'url' || h.includes('đường dẫn') || h.includes('slug') || h.includes('link'));

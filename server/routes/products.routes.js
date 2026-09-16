@@ -2096,7 +2096,7 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
             let modelColIdx = headers.findIndex(h => h.includes('model') || h.includes('mã') || h.includes('sku') || h.includes('part number'));
             if (modelColIdx === -1) modelColIdx = 0;
 
-            let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề'));
+            let nameColIdx = headers.findIndex(h => h.includes('tên') || h.includes('name') || h.includes('tiêu đề') || h.includes('title'));
             if (nameColIdx === -1) nameColIdx = 1;
 
             let urlColIdx = headers.findIndex(h => h === 'url' || h.includes('đường dẫn') || h.includes('slug') || h.includes('link'));
