@@ -2637,12 +2637,24 @@ function ProductsContent() {
                 </div>
 
                 {/* Card 2: Posted */}
-                <div className="card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                <div 
+                    className="card" 
+                    onClick={() => {
+                        handleLoadCheckConfig();
+                        setShowPostingHistoryModal(true);
+                    }}
+                    title="Bấm để xem chi tiết & quét kiểm tra sản phẩm đã đăng web"
+                    style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', cursor: 'pointer', transition: 'all 0.15s ease' }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(22, 163, 74, 0.2)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)'; }}
+                >
                     <div style={{ width: 46, height: 46, borderRadius: 12, background: '#16a34a', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, flexShrink: 0 }}>
                         <Send size={22} />
                     </div>
                     <div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Đã đăng</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            Đã đăng <span style={{ fontSize: 10, color: '#16a34a', background: 'rgba(22, 163, 74, 0.12)', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>🔍 Quét</span>
+                        </div>
                         <div style={{ fontSize: 24, fontWeight: 800, color: '#16a34a', lineHeight: 1.2, marginTop: 2 }}>
                             {postedCount} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-muted)' }}>SP</span>
                         </div>
@@ -2650,7 +2662,17 @@ function ProductsContent() {
                 </div>
 
                 {/* Card 3: Pending */}
-                <div className="card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                <div 
+                    className="card" 
+                    onClick={() => {
+                        handleLoadCheckConfig();
+                        setShowPostingHistoryModal(true);
+                    }}
+                    title="Bấm để xem danh sách & quét kiểm tra sản phẩm chưa đăng web"
+                    style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', cursor: 'pointer', transition: 'all 0.15s ease' }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(245, 158, 11, 0.2)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)'; }}
+                >
                     <div style={{ width: 46, height: 46, borderRadius: 12, background: '#f59e0b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, flexShrink: 0 }}>
                         <Clock size={22} />
                     </div>
@@ -2763,6 +2785,26 @@ function ProductsContent() {
                 >
                     <span style={{ fontSize: 15 }}>📊</span>
                     <span>Phân Tích Trường TTS</span>
+                </button>
+
+                <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                        handleLoadCheckConfig();
+                        setShowPostingHistoryModal(true);
+                    }}
+                    style={{
+                        display: 'flex', alignItems: 'center', gap: 7,
+                        fontSize: 13, padding: '8px 15px', fontWeight: 700,
+                        background: 'linear-gradient(135deg, #15803d, #166534)', color: '#ffffff',
+                        border: 'none', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(22, 101, 52, 0.3)'
+                    }}
+                    title="Kiểm tra xem sản phẩm đã được đăng lên website hay chưa qua Sitemap XML & Live URL"
+                >
+                    <Send size={14} style={{ color: '#86efac' }} />
+                    <span>Quét SP Đã Đăng</span>
                 </button>
 
                 {/* Unified Data Audit Center Menu Dropdown Button */}

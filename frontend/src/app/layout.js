@@ -1,6 +1,9 @@
 import './globals.css';
 import ClientLayout from '@/components/ClientLayout';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export const metadata = {
     title: 'Newland Portal — Newland Product Scraper and Explorer',
     description: 'Newland Product Scraper and Explorer',

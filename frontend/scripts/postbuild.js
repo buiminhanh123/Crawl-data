@@ -49,6 +49,15 @@ try {
     const ecosystemPath = path.join(TARGET_DIR, 'ecosystem.config.js');
     fs.writeFileSync(ecosystemPath, ecosystemContent, 'utf8');
     console.log('[postbuild] Written fresh ecosystem.config.js to', ecosystemPath);
+
+    try {
+        console.log('[postbuild] Restarting PM2 processes with fresh build...');
+        execSync(`pm2 restart ${ecosystemPath} --update-env || pm2 restart all --update-env`, { stdio: 'inherit' });
+        execSync('pm2 save', { stdio: 'inherit' });
+        console.log('[postbuild] PM2 restarted and saved successfully.');
+    } catch (pm2Err) {
+        console.warn('[postbuild] Note on PM2 restart:', pm2Err.message);
+    }
 } catch (err) {
     console.error('[postbuild] Error writing ecosystem config:', err.message);
 }
