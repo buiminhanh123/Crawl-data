@@ -48,53 +48,54 @@ const ecosystemContent = `module.exports = {
 };
 `;
 
+let ecosystemPath = path.join(TARGET_DIR, 'ecosystem.config.js');
 try {
-    const ecosystemPath = path.join(TARGET_DIR, 'ecosystem.config.js');
     fs.writeFileSync(ecosystemPath, ecosystemContent, 'utf8');
     console.log('[postbuild] Written fresh ecosystem.config.js to', ecosystemPath);
+} catch (e) {
+    console.warn('[postbuild] Cannot write to', ecosystemPath, e.message);
+    ecosystemPath = path.join(__dirname, '..', 'ecosystem.config.js');
+    fs.writeFileSync(ecosystemPath, ecosystemContent, 'utf8');
+    console.log('[postbuild] Written fresh ecosystem.config.js to fallback path:', ecosystemPath);
+}
 
+try {
+    console.log('[postbuild] Inspecting processes holding port 5104 or 5105:');
     try {
-        console.log('[postbuild] Inspecting processes holding port 5104 or 5105:');
-        try {
-            console.log(execSync('ps -ef | grep -E "node|5104|5105" || true').toString());
-        } catch (e) {}
+        console.log(execSync('ps -ef | grep -E "node|5104|5105" || true').toString());
+    } catch (e) {}
 
-        console.log('[postbuild] Forcibly killing any process on port 5104 or 5105 (with sudo -n and fallback):');
-        try {
-            execSync('sudo -n kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || true');
-            execSync('sudo -n fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || true');
-            execSync('sudo -n pm2 delete crawl-data-frontend crawl-data-backend 2>/dev/null || true');
-        } catch (e) {}
+    console.log('[postbuild] Forcibly killing any user process on port 5104 or 5105:');
+    try {
+        execSync('pkill -f "next start|server.js|5104|5105" || true');
+        execSync('sudo -n kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || true');
+        execSync('sudo -n fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || true');
+    } catch (e) {}
 
-        console.log('[postbuild] Verifying ports 5104 and 5105 are free:');
-        try {
-            console.log(execSync('sudo -n ss -lptn "sport = :5104 or sport = :5105" 2>/dev/null || ss -lptn "sport = :5104 or sport = :5105" || true').toString());
-        } catch (e) {}
-
-        console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105 (fork mode)...');
-        execSync('pm2 delete crawl-data-frontend crawl-data-backend || true', { stdio: 'inherit' });
+    console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105 (fork mode)...');
+    try {
+        execSync('pm2 delete all || true', { stdio: 'inherit' });
         execSync(`pm2 start ${ecosystemPath} --update-env`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });
         console.log('[postbuild] PM2 restarted and saved successfully.');
-
-        console.log('[postbuild] Waiting 4 seconds and checking PM2 logs...');
-        try {
-            execSync('sleep 4', { stdio: 'inherit' });
-            console.log('--- PM2 describe crawl-data-frontend ---');
-            console.log(execSync('pm2 describe crawl-data-frontend || true').toString());
-            console.log('--- Last error log lines ---');
-            console.log(execSync('cat /home/daco-local/.pm2/logs/crawl-data-frontend-error*.log | tail -n 30 || true').toString());
-            console.log('--- Last out log lines ---');
-            console.log(execSync('cat /home/daco-local/.pm2/logs/crawl-data-frontend-out*.log | tail -n 30 || true').toString());
-        } catch (e) {}
-
-        console.log('[postbuild] PM2 status after clean start:');
-        try {
-            console.log(execSync('pm2 status || true').toString());
-        } catch (e) {}
-    } catch (pm2Err) {
-        console.warn('[postbuild] Note on PM2 restart:', pm2Err.message);
+    } catch (err) {
+        console.warn('[postbuild] PM2 start error, trying restart:', err.message);
+        execSync('pm2 restart all --update-env || true', { stdio: 'inherit' });
     }
-} catch (err) {
-    console.error('[postbuild] Error writing ecosystem config:', err.message);
+
+    console.log('[postbuild] Waiting 3 seconds and checking PM2 logs...');
+    try {
+        execSync('sleep 3', { stdio: 'inherit' });
+        console.log('--- PM2 describe crawl-data-frontend ---');
+        console.log(execSync('pm2 describe crawl-data-frontend || true').toString());
+        console.log('--- PM2 describe crawl-data-backend ---');
+        console.log(execSync('pm2 describe crawl-data-backend || true').toString());
+    } catch (e) {}
+
+    console.log('[postbuild] PM2 status after clean start:');
+    try {
+        console.log(execSync('pm2 status || true').toString());
+    } catch (e) {}
+} catch (pm2Err) {
+    console.warn('[postbuild] Note on PM2 restart:', pm2Err.message);
 }
