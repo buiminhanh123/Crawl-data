@@ -59,15 +59,16 @@ try {
             console.log(execSync('ps -ef | grep -E "node|5104|5105" || true').toString());
         } catch (e) {}
 
-        console.log('[postbuild] Forcibly killing any process on port 5104 or 5105...');
+        console.log('[postbuild] Forcibly killing any process on port 5104 or 5105 (with sudo -n and fallback):');
         try {
-            execSync('kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || true');
-            execSync('fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || true');
+            execSync('sudo -n kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || true');
+            execSync('sudo -n fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || true');
+            execSync('sudo -n pm2 delete crawl-data-frontend crawl-data-backend 2>/dev/null || true');
         } catch (e) {}
 
         console.log('[postbuild] Verifying ports 5104 and 5105 are free:');
         try {
-            console.log(execSync('ss -lptn "sport = :5104 or sport = :5105" || true').toString());
+            console.log(execSync('sudo -n ss -lptn "sport = :5104 or sport = :5105" 2>/dev/null || ss -lptn "sport = :5104 or sport = :5105" || true').toString());
         } catch (e) {}
 
         console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105 (fork mode)...');
