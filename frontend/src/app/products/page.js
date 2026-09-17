@@ -371,11 +371,9 @@ function ProductsContent() {
                     }
                 }
 
-                // 2. Missing mandatory fields or non-numeric Cat ID or Duplicate SKU
+                // 2. Missing mandatory fields or Duplicate SKU
                 if (!isError) {
                     if (!valCode || !valName || !valCat) {
-                        isError = true;
-                    } else if (!/^\d+$/.test(valCat)) {
                         isError = true;
                     } else if (valCode && skuMap[valCode.toUpperCase()] > 1) {
                         isError = true;
@@ -872,7 +870,8 @@ function ProductsContent() {
         if (!profileSlug) return;
         setIsCheckingPublication(true);
         try {
-            const effectiveSitemapUrl = checkConfig.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || '';
+            const defaultSitemap = (profileSlug === 'newland' || profileSlug === 'default') ? 'https://newland.vn/sitemap.xml' : '';
+            const effectiveSitemapUrl = checkConfig.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || defaultSitemap;
             const configToSend = {
                 ...checkConfig,
                 sitemapUrl: effectiveSitemapUrl,
@@ -940,16 +939,22 @@ function ProductsContent() {
                         }
                     }
                     const locMatches = xmlText ? (xmlText.match(/<loc>(https?:\/\/[^<]+)<\/loc>/gi) || []) : [];
-                    const foundUrls = locMatches.map(m => m.replace(/<\/?loc>/gi, '').trim().toLowerCase());
+                    const foundUrls = locMatches.map(m => m.replace(/<\/?loc>/gi, '').trim());
                     scannedLogs = productItems.map(p => {
-                        const candidates = [p.customUrl, p.model].filter(Boolean);
+                        const candidates = [p.customUrl, p.model, p.name].filter(Boolean);
                         let isFound = false;
+                        let matchedLiveUrl = '';
                         for (const cand of candidates) {
                             const cLower = cand.toLowerCase().trim();
                             const hyphenSlug = cLower.replace(/[^a-z0-9]+/g, '-');
                             const underscoreSlug = cLower.replace(/[^a-z0-9]+/g, '_');
-                            if (foundUrls.some(u => u.includes(hyphenSlug) || u.includes(underscoreSlug) || u.includes(cLower))) {
+                            const matched = foundUrls.find(u => {
+                                const uLower = u.toLowerCase();
+                                return uLower.includes(hyphenSlug) || uLower.includes(underscoreSlug) || uLower.includes(cLower);
+                            });
+                            if (matched) {
                                 isFound = true;
+                                matchedLiveUrl = matched;
                                 break;
                             }
                         }
@@ -960,7 +965,8 @@ function ProductsContent() {
                             model: p.model,
                             name: p.name,
                             platform: 'Website (Sitemap)',
-                            status: isFound ? 'posted' : 'pending'
+                            status: isFound ? 'posted' : 'pending',
+                            live_url: matchedLiveUrl || (p.customUrl ? (p.customUrl.startsWith('http') ? p.customUrl : `https://newland.vn/${p.customUrl.replace(/^\/+/, '')}`) : '')
                         };
                     });
                 } else {

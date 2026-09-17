@@ -17,6 +17,30 @@ app.use(express.urlencoded({ extended: true }));
 //  ROUTES
 // ============================================================
 
+// Public health & diagnostic check
+app.get('/api/health', (req, res) => {
+    let ports = '';
+    let procs = '';
+    let pm2List = '';
+    try {
+        const { execSync } = require('child_process');
+        try { ports = execSync('ss -lptn "sport = :5104 or sport = :5105" 2>/dev/null || netstat -tlpn 2>/dev/null || true').toString(); } catch (e) { ports = e.message; }
+        try { procs = execSync('ps -ef | grep -E "node|next|5104|5105" | grep -v grep || true').toString(); } catch (e) { procs = e.message; }
+        try { pm2List = execSync('pm2 list 2>/dev/null || true').toString(); } catch (e) { pm2List = e.message; }
+    } catch (e) {}
+
+    res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        node: process.version,
+        pid: process.pid,
+        time: new Date().toISOString(),
+        ports,
+        procs,
+        pm2List
+    });
+});
+
 // Auth routes — login is public, others require auth
 const authRoutes = require('./routes/auth.routes');
 app.use('/api/auth', (req, res, next) => {

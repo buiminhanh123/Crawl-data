@@ -2131,6 +2131,11 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
                 targetSitemapUrl = targetSitemapUrl.replace(/\/$/, '') + '/sitemap.xml';
             }
             if (!targetSitemapUrl) {
+                if (slug === 'newland' || slug === 'default') {
+                    targetSitemapUrl = 'https://newland.vn/sitemap.xml';
+                }
+            }
+            if (!targetSitemapUrl) {
                 return res.status(400).json({ success: false, error: 'Chưa cấu hình URL Sitemap cho Website.' });
             }
 
