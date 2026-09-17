@@ -747,7 +747,7 @@ function extractModelFromName(name, slug) {
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             `);
-            const res = pdb.exec('SELECT message, datetime(created_at, "localtime") as time FROM crawler_logs ORDER BY id DESC LIMIT 50');
+            const res = pdb.exec('SELECT message, datetime(created_at, "localtime") as time, created_at FROM crawler_logs ORDER BY id DESC LIMIT 50');
             pdb.close();
             if (!res[0]) return [];
             const cols = res[0].columns;
@@ -756,6 +756,18 @@ function extractModelFromName(name, slug) {
             );
         } catch (e) {
             return [];
+        }
+    },
+
+    clearCrawlerLogs: async () => {
+        try {
+            const pdb = await openProductsDb();
+            pdb.run('CREATE TABLE IF NOT EXISTS crawler_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+            pdb.run('DELETE FROM crawler_logs');
+            saveProductsDb(pdb);
+            pdb.close();
+        } catch (e) {
+            console.error('Failed to clear crawler logs:', e);
         }
     },
 

@@ -117,10 +117,9 @@ export default function DashboardPage() {
 
     useEffect(() => {
         fetchStatsAndStatus();
-        fetchLogs();
         fetchFailed();
 
-        // Poll status and logs every 2 seconds
+        // Poll status every 2 seconds; only fetch logs when crawler is actively running
         intervalRef.current = setInterval(async () => {
             try {
                 const statusData = await fetchApi('/api/products/crawler/status', { silent: true });
@@ -129,11 +128,12 @@ export default function DashboardPage() {
                     if (statusData.status === 'Running' || statusData.status === 'Starting') {
                         const statsData = await fetchApi('/api/products/stats', { silent: true });
                         if (statsData) setStats(statsData);
+                        fetchLogs();
                     }
-                    fetchLogs();
-                    // Refresh failed list after crawler finishes and schedule 15s auto-reset for Completed status
+                    // Refresh failed list & fetch final logs after crawler finishes, schedule 15s auto-reset for Completed status
                     if (statusData.status === 'Completed') {
                         fetchFailed();
+                        fetchLogs();
                         if (!completedTimerRef.current) {
                             completedTimerRef.current = setTimeout(async () => {
                                 try {
@@ -146,6 +146,7 @@ export default function DashboardPage() {
                                         failed_items: 0,
                                         last_message: 'Ready'
                                     });
+                                    setLogs([]);
                                 } catch (e) {}
                                 completedTimerRef.current = null;
                             }, 15000);
@@ -586,27 +587,46 @@ export default function DashboardPage() {
                     )}
                 </div>
 
-                {/* 5. CRAWL LOG */}
-                <div className="card" style={{ padding: 20, background: '#0f172a', color: '#f8fafc', borderRadius: 16, border: '1px solid #334155' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid #334155', paddingBottom: 10 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 8 }}>📟 Crawl Log (Realtime) <span style={{ fontSize: 11, color: '#475569', fontWeight: 400 }}>{logs.length} dòng</span></span>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                            <button type="button" onClick={fetchLogs} style={{ background: 'none', border: '1px solid #334155', borderRadius: 6, color: '#64748b', padding: '3px 8px', fontSize: 11, cursor: 'pointer' }}>↻ Làm mới</button>
-                            <button type="button" onClick={() => setLogs([])} style={{ background: 'none', border: '1px solid #ef444440', borderRadius: 6, color: '#f87171', padding: '3px 8px', fontSize: 11, cursor: 'pointer' }}>🗑 Xóa log</button>
+                {/* 5. CRAWL LOG (Chỉ hiển thị khi có task đang chạy hoặc vừa hoàn tất) */}
+                {(crawlerStatus.status === 'Running' || crawlerStatus.status === 'Starting' || triggering || (crawlerStatus.status === 'Completed' && logs.length > 0)) && (
+                    <div className="card" style={{ padding: 20, background: '#0f172a', color: '#f8fafc', borderRadius: 16, border: '1px solid #334155' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid #334155', paddingBottom: 10 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                📟 Crawl Log (Realtime)
+                                {crawlerStatus.status === 'Running' && (
+                                    <span style={{ fontSize: 11, color: '#4ade80', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: '#4ade80' }} />
+                                        Đang chạy
+                                    </span>
+                                )}
+                                <span style={{ fontSize: 11, color: '#475569', fontWeight: 400 }}>{logs.length} dòng</span>
+                            </span>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <button type="button" onClick={fetchLogs} style={{ background: 'none', border: '1px solid #334155', borderRadius: 6, color: '#64748b', padding: '3px 8px', fontSize: 11, cursor: 'pointer' }}>↻ Làm mới</button>
+                                <button type="button" onClick={async () => {
+                                    try { await fetchApi('/api/products/crawler/logs', { method: 'DELETE' }); } catch (e) {}
+                                    setLogs([]);
+                                }} style={{ background: 'none', border: '1px solid #ef444440', borderRadius: 6, color: '#f87171', padding: '3px 8px', fontSize: 11, cursor: 'pointer' }}>🗑 Xóa log</button>
+                            </div>
+                        </div>
+                        <div style={{ maxHeight: 280, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            {logs.length === 0 ? (
+                                <span style={{ color: '#64748b', fontStyle: 'italic' }}>Đang chờ nhật ký từ crawler...</span>
+                            ) : (
+                                [...logs].reverse().slice(0, 100).map((log, idx) => (
+                                    <div key={idx} style={{ color: log.message?.includes('Error') || log.message?.includes('Lỗi') || log.message?.includes('fail') ? '#fca5a5' : log.message?.includes('OK') || log.message?.includes('success') || log.message?.includes('Thành công') ? '#86efac' : '#e2e8f0' }}>
+                                        {log.time ? (
+                                            <span style={{ color: '#475569', marginRight: 8 }}>[{log.time.includes(' ') ? log.time.split(' ')[1] : log.time}]</span>
+                                        ) : log.created_at ? (
+                                            <span style={{ color: '#475569', marginRight: 8 }}>[{new Date(log.created_at).toLocaleTimeString('vi-VN')}]</span>
+                                        ) : null}
+                                        {log.message}
+                                    </div>
+                                ))
+                            )}
                         </div>
                     </div>
-                    <div style={{ maxHeight: 280, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {logs.length === 0 ? (
-                            <span style={{ color: '#64748b', fontStyle: 'italic' }}>Chưa có log. Bắt đầu crawl để xem nhật ký trực tiếp.</span>
-                        ) : (
-                            [...logs].reverse().slice(0, 100).map((log, idx) => (
-                                <div key={idx} style={{ color: log.message?.includes('Error') || log.message?.includes('Lỗi') || log.message?.includes('fail') ? '#fca5a5' : log.message?.includes('OK') || log.message?.includes('success') || log.message?.includes('Thành công') ? '#86efac' : '#e2e8f0' }}>
-                                    <span style={{ color: '#475569', marginRight: 8 }}>[{new Date(log.created_at || Date.now()).toLocaleTimeString('vi-VN')}]</span>{log.message}
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
+                )}
 
                 {/* 6. FAILED URLs & RETRY */}
                 <div className="card" style={{ padding: 24, background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: `1px solid ${failedUrls.count > 0 ? 'rgba(239,68,68,0.4)' : 'var(--border-color)'}`, boxShadow: 'var(--shadow-sm)' }}>

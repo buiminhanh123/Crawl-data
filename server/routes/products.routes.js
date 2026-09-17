@@ -1479,6 +1479,17 @@ router.get('/crawler/logs', async (req, res) => {
     }
 });
 
+// DELETE /api/products/crawler/logs — clear crawler logs
+router.delete('/crawler/logs', async (req, res) => {
+    try {
+        await productQueries.clearCrawlerLogs();
+        res.json({ message: 'Crawler logs cleared successfully.' });
+    } catch (err) {
+        console.error('Failed to clear crawler logs:', err);
+        res.status(500).json({ error: 'Failed to clear crawler logs.' });
+    }
+});
+
 // GET /api/products/crawler/failed — get list of permanently failed URLs
 router.get('/crawler/failed', async (req, res) => {
     try {
