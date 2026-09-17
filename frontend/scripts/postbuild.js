@@ -24,21 +24,22 @@ const ecosystemContent = `module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3002
+        PORT: 5105
       }
     },
     {
       name: 'crawl-data-frontend',
       cwd: '/srv/marketing/crawl-data/frontend',
       script: 'node_modules/next/dist/bin/next',
-      args: 'start',
+      args: 'start -p 5104',
       instances: 1,
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3000
+        PORT: 5104,
+        BACKEND_URL: 'http://127.0.0.1:5105'
       }
     }
   ]
@@ -51,24 +52,17 @@ try {
     console.log('[postbuild] Written fresh ecosystem.config.js to', ecosystemPath);
 
     try {
-        console.log('[postbuild] Contents of /etc/nginx/sites-available/crawl-data.conf:');
+        console.log('[postbuild] Checking processes on ports 5104 and 5105:');
         try {
-            console.log(fs.readFileSync('/etc/nginx/sites-available/crawl-data.conf', 'utf8'));
-        } catch (e) {
-            console.log('Error reading nginx conf:', e.message);
-        }
-
-        console.log('[postbuild] Checking process on port 3000:');
-        try {
-            console.log(execSync('fuser 3000/tcp || lsof -i :3000 || ss -lptn "sport = :3000" || true').toString());
+            console.log(execSync('fuser 5104/tcp 5105/tcp || lsof -i :5104 -i :5105 || ss -lptn "sport = :5104 or sport = :5105" || true').toString());
         } catch (e) {}
 
-        console.log('[postbuild] Freeing port 3000 if occupied by orphan process...');
+        console.log('[postbuild] Freeing ports 5104 and 5105 if occupied...');
         try {
-            execSync('fuser -k 3000/tcp || true', { stdio: 'inherit' });
+            execSync('fuser -k 5104/tcp 5105/tcp || true', { stdio: 'inherit' });
         } catch (e) {}
 
-        console.log('[postbuild] Resetting PM2 processes with clean start...');
+        console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105...');
         execSync('pm2 delete crawl-data-frontend crawl-data-backend || true', { stdio: 'inherit' });
         execSync(`pm2 start ${ecosystemPath} --update-env`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });

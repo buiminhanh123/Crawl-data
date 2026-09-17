@@ -10,21 +10,22 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3002
+        PORT: 5105
       }
     },
     {
       name: 'crawl-data-frontend',
       cwd: '/srv/marketing/crawl-data/frontend',
       script: 'node_modules/next/dist/bin/next',
-      args: 'start',
+      args: 'start -p 5104',
       instances: 1,
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3000
+        PORT: 5104,
+        BACKEND_URL: 'http://127.0.0.1:5105'
       }
     }
   ]
