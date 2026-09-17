@@ -19,6 +19,7 @@ const ecosystemContent = `module.exports = {
       cwd: '/srv/marketing/crawl-data/server',
       script: 'server.js',
       instances: 1,
+      exec_mode: 'fork',
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
@@ -33,6 +34,7 @@ const ecosystemContent = `module.exports = {
       script: 'node_modules/next/dist/bin/next',
       args: 'start -p 5104',
       instances: 1,
+      exec_mode: 'fork',
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
@@ -62,16 +64,16 @@ try {
             execSync('fuser -k 5104/tcp 5105/tcp || true', { stdio: 'inherit' });
         } catch (e) {}
 
-        console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105...');
+        console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105 (fork mode)...');
         execSync('pm2 delete crawl-data-frontend crawl-data-backend || true', { stdio: 'inherit' });
         execSync(`pm2 start ${ecosystemPath} --update-env`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });
         console.log('[postbuild] PM2 restarted and saved successfully.');
 
-        console.log('[postbuild] Waiting 3 seconds and checking PM2 error logs...');
+        console.log('[postbuild] Waiting 3 seconds and checking PM2 logs...');
         try {
             execSync('sleep 3', { stdio: 'inherit' });
-            console.log(execSync('pm2 logs crawl-data-frontend --lines 15 --nostream || true').toString());
+            console.log(execSync('cat /home/daco-local/.pm2/logs/crawl-data-frontend-error*.log | tail -n 25 || true').toString());
         } catch (e) {}
 
         console.log('[postbuild] PM2 status after clean start:');
