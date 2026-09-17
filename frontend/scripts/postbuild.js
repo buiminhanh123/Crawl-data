@@ -65,22 +65,20 @@ try {
         console.log(execSync('ps -ef | grep -E "node|5104|5105" || true').toString());
     } catch (e) {}
 
-    console.log('[postbuild] Forcibly killing any user process on port 5104 or 5105:');
+    console.log('[postbuild] Terminating user node processes on ports 5104/5105:');
     try {
-        execSync('pkill -f "next start|server.js|5104|5105" || true');
-        execSync('sudo -n kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || true');
-        execSync('sudo -n fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || true');
+        execSync('pkill -f "next start" || true');
+        execSync('pkill -f "server.js" || true');
+        execSync('kill -9 $(lsof -t -i:5104 -i:5105 2>/dev/null) 2>/dev/null || true');
     } catch (e) {}
 
-    console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105 (fork mode)...');
+    console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105...');
     try {
-        execSync('pm2 delete all || true', { stdio: 'inherit' });
-        execSync(`pm2 start ${ecosystemPath} --update-env`, { stdio: 'inherit' });
-        execSync('pm2 save', { stdio: 'inherit' });
+        execSync(`pm2 restart all --update-env || pm2 start ${ecosystemPath} --update-env || true`, { stdio: 'inherit' });
+        execSync('pm2 save || true', { stdio: 'inherit' });
         console.log('[postbuild] PM2 restarted and saved successfully.');
     } catch (err) {
-        console.warn('[postbuild] PM2 start error, trying restart:', err.message);
-        execSync('pm2 restart all --update-env || true', { stdio: 'inherit' });
+        console.warn('[postbuild] PM2 error:', err.message);
     }
 
     console.log('[postbuild] Waiting 3 seconds and checking PM2 logs...');

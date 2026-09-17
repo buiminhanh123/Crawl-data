@@ -810,6 +810,7 @@ function ProductsContent() {
 
     const handleLoadCheckConfig = async () => {
         if (!profileSlug) return;
+        const defaultSitemap = (profileSlug === 'newland' || profileSlug === 'default') ? 'https://daco.vn/sitemap.xml' : '';
         try {
             const cached = localStorage.getItem(`check_config_${profileSlug}`);
             if (cached) {
@@ -817,7 +818,7 @@ function ProductsContent() {
                 if (parsed) {
                     setCheckConfig({
                         mode: parsed.mode || 'sitemap',
-                        sitemapUrl: parsed.sitemapUrl || '',
+                        sitemapUrl: parsed.sitemapUrl || defaultSitemap,
                         apiUrl: parsed.apiUrl || '',
                         consumerKey: parsed.consumerKey || '',
                         consumerSecret: parsed.consumerSecret || '',
@@ -825,6 +826,11 @@ function ProductsContent() {
                         jsonContent: parsed.jsonContent || ''
                     });
                 }
+            } else if (defaultSitemap) {
+                setCheckConfig(prev => ({
+                    ...prev,
+                    sitemapUrl: prev.sitemapUrl || defaultSitemap
+                }));
             }
         } catch (e) {}
 
@@ -833,7 +839,7 @@ function ProductsContent() {
             if (res?.success && res.data) {
                 setCheckConfig(prev => ({
                     mode: res.data.mode || prev.mode || 'sitemap',
-                    sitemapUrl: res.data.sitemapUrl || prev.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || '',
+                    sitemapUrl: res.data.sitemapUrl || prev.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || defaultSitemap,
                     apiUrl: res.data.apiUrl || prev.apiUrl || '',
                     consumerKey: res.data.consumerKey || prev.consumerKey || '',
                     consumerSecret: res.data.consumerSecret || prev.consumerSecret || '',
@@ -870,7 +876,7 @@ function ProductsContent() {
         if (!profileSlug) return;
         setIsCheckingPublication(true);
         try {
-            const defaultSitemap = (profileSlug === 'newland' || profileSlug === 'default') ? 'https://newland.vn/sitemap.xml' : '';
+            const defaultSitemap = (profileSlug === 'newland' || profileSlug === 'default') ? 'https://daco.vn/sitemap.xml' : '';
             const effectiveSitemapUrl = checkConfig.sitemapUrl || currentProfile?.sitemap_url || currentProfile?.target_url || defaultSitemap;
             const configToSend = {
                 ...checkConfig,
@@ -966,7 +972,7 @@ function ProductsContent() {
                             name: p.name,
                             platform: 'Website (Sitemap)',
                             status: isFound ? 'posted' : 'pending',
-                            live_url: matchedLiveUrl || (p.customUrl ? (p.customUrl.startsWith('http') ? p.customUrl : `https://newland.vn/${p.customUrl.replace(/^\/+/, '')}`) : '')
+                            live_url: matchedLiveUrl || (p.customUrl ? (p.customUrl.startsWith('http') ? p.customUrl : `https://daco.vn/${p.customUrl.replace(/^\/+/, '')}`) : '')
                         };
                     });
                 } else {

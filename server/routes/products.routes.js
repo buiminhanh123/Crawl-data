@@ -2132,7 +2132,7 @@ router.post('/profiles/:slug/check-publication-status', async (req, res) => {
             }
             if (!targetSitemapUrl) {
                 if (slug === 'newland' || slug === 'default') {
-                    targetSitemapUrl = 'https://newland.vn/sitemap.xml';
+                    targetSitemapUrl = 'https://daco.vn/sitemap.xml';
                 }
             }
             if (!targetSitemapUrl) {
