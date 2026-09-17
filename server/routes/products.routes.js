@@ -1300,11 +1300,40 @@ router.get('/stats', async (req, res) => {
     }
 });
 
+let activeCrawlerProcess = null;
+
+function isProcessAlive(proc) {
+    if (!proc || !proc.pid) return false;
+    try {
+        if (proc.exitCode !== null || proc.signalCode !== null || proc.killed) return false;
+        return process.kill(proc.pid, 0);
+    } catch (e) {
+        return false;
+    }
+}
+
 // GET /api/products/crawler/status — get crawler progress/status
 router.get('/crawler/status', async (req, res) => {
     try {
         let status = await productQueries.getCrawlerStatus();
         const failed_items = await productQueries.getFailedCount();
+
+        // Auto-heal zombie Running/Starting status if no Python crawler is alive
+        if (status && (status.status === 'Running' || status.status === 'Starting')) {
+            const isAlive = activeCrawlerProcess && isProcessAlive(activeCrawlerProcess);
+            if (!isAlive) {
+                await productQueries.updateCrawlerStatus('Idle', 0, 0, 0, 'Ready', '');
+                status = {
+                    ...(status || {}),
+                    status: 'Idle',
+                    progress: 0,
+                    total_items: 0,
+                    current_item: 0,
+                    last_message: 'Ready',
+                    profile_slug: ''
+                };
+            }
+        }
 
         if (status && status.status === 'Completed') {
             const updatedAt = status.updated_at ? new Date(status.updated_at).getTime() : 0;
@@ -1343,18 +1372,6 @@ router.post('/crawler/reset', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
-let activeCrawlerProcess = null;
-
-function isProcessAlive(proc) {
-    if (!proc || !proc.pid) return false;
-    try {
-        if (proc.exitCode !== null || proc.signalCode !== null || proc.killed) return false;
-        return process.kill(proc.pid, 0);
-    } catch (e) {
-        return false;
-    }
-}
 
 // POST /api/products/crawler/trigger — trigger the crawler
 router.post('/crawler/trigger', async (req, res) => {
