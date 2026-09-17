@@ -51,19 +51,21 @@ try {
     console.log('[postbuild] Written fresh ecosystem.config.js to', ecosystemPath);
 
     try {
-        console.log('[postbuild] Checking Nginx config for crawl.dacoautomation.io.vn:');
+        console.log('[postbuild] Contents of /etc/nginx/sites-available/crawl-data.conf:');
         try {
-            console.log(execSync('grep -rn "crawl.dacoautomation.io.vn" /etc/nginx/ || true').toString());
+            console.log(fs.readFileSync('/etc/nginx/sites-available/crawl-data.conf', 'utf8'));
+        } catch (e) {
+            console.log('Error reading nginx conf:', e.message);
+        }
+
+        console.log('[postbuild] Checking process on port 3000:');
+        try {
+            console.log(execSync('fuser 3000/tcp || lsof -i :3000 || ss -lptn "sport = :3000" || true').toString());
         } catch (e) {}
 
-        console.log('[postbuild] Checking ports in use:');
+        console.log('[postbuild] Freeing port 3000 if occupied by orphan process...');
         try {
-            console.log(execSync('ss -tulnp | grep -E "3000|3001|3002|3003|3004|3005" || true').toString());
-        } catch (e) {}
-
-        console.log('[postbuild] PM2 logs of crawl-data-frontend before restart:');
-        try {
-            console.log(execSync('pm2 logs crawl-data-frontend --lines 20 --nostream || true').toString());
+            execSync('fuser -k 3000/tcp || true', { stdio: 'inherit' });
         } catch (e) {}
 
         console.log('[postbuild] Resetting PM2 processes with clean start...');
@@ -71,6 +73,12 @@ try {
         execSync(`pm2 start ${ecosystemPath} --update-env`, { stdio: 'inherit' });
         execSync('pm2 save', { stdio: 'inherit' });
         console.log('[postbuild] PM2 restarted and saved successfully.');
+
+        console.log('[postbuild] Waiting 3 seconds and checking PM2 error logs...');
+        try {
+            execSync('sleep 3', { stdio: 'inherit' });
+            console.log(execSync('pm2 logs crawl-data-frontend --lines 15 --nostream || true').toString());
+        } catch (e) {}
 
         console.log('[postbuild] PM2 status after clean start:');
         try {
