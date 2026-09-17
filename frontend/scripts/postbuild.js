@@ -54,14 +54,20 @@ try {
     console.log('[postbuild] Written fresh ecosystem.config.js to', ecosystemPath);
 
     try {
-        console.log('[postbuild] Checking processes on ports 5104 and 5105:');
+        console.log('[postbuild] Inspecting processes holding port 5104 or 5105:');
         try {
-            console.log(execSync('fuser 5104/tcp 5105/tcp || lsof -i :5104 -i :5105 || ss -lptn "sport = :5104 or sport = :5105" || true').toString());
+            console.log(execSync('ps -ef | grep -E "node|5104|5105" || true').toString());
         } catch (e) {}
 
-        console.log('[postbuild] Freeing ports 5104 and 5105 if occupied...');
+        console.log('[postbuild] Forcibly killing any process on port 5104 or 5105...');
         try {
-            execSync('fuser -k 5104/tcp 5105/tcp || true', { stdio: 'inherit' });
+            execSync('kill -9 $(lsof -t -i:5104 -i:5105) 2>/dev/null || true');
+            execSync('fuser -k -9 5104/tcp 5105/tcp 2>/dev/null || true');
+        } catch (e) {}
+
+        console.log('[postbuild] Verifying ports 5104 and 5105 are free:');
+        try {
+            console.log(execSync('ss -lptn "sport = :5104 or sport = :5105" || true').toString());
         } catch (e) {}
 
         console.log('[postbuild] Resetting PM2 processes with clean start on ports 5104/5105 (fork mode)...');
