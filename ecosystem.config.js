@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'crawl-data-backend',
       cwd: '/srv/marketing/crawl-data/server',
-      script: 'server.js',
+      script: '/srv/marketing/crawl-data/server/server.js',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
@@ -17,7 +17,7 @@ module.exports = {
     {
       name: 'crawl-data-frontend',
       cwd: '/srv/marketing/crawl-data/frontend',
-      script: 'node_modules/next/dist/bin/next',
+      script: '/srv/marketing/crawl-data/frontend/node_modules/next/dist/bin/next',
       args: 'start -p 5104',
       instances: 1,
       exec_mode: 'fork',

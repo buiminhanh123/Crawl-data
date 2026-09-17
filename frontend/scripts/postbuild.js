@@ -17,7 +17,7 @@ const ecosystemContent = `module.exports = {
     {
       name: 'crawl-data-backend',
       cwd: '/srv/marketing/crawl-data/server',
-      script: 'server.js',
+      script: '/srv/marketing/crawl-data/server/server.js',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
@@ -31,7 +31,7 @@ const ecosystemContent = `module.exports = {
     {
       name: 'crawl-data-frontend',
       cwd: '/srv/marketing/crawl-data/frontend',
-      script: 'node_modules/next/dist/bin/next',
+      script: '/srv/marketing/crawl-data/frontend/node_modules/next/dist/bin/next',
       args: 'start -p 5104',
       instances: 1,
       exec_mode: 'fork',
@@ -70,10 +70,15 @@ try {
         execSync('pm2 save', { stdio: 'inherit' });
         console.log('[postbuild] PM2 restarted and saved successfully.');
 
-        console.log('[postbuild] Waiting 3 seconds and checking PM2 logs...');
+        console.log('[postbuild] Waiting 4 seconds and checking PM2 logs...');
         try {
-            execSync('sleep 3', { stdio: 'inherit' });
-            console.log(execSync('cat /home/daco-local/.pm2/logs/crawl-data-frontend-error*.log | tail -n 25 || true').toString());
+            execSync('sleep 4', { stdio: 'inherit' });
+            console.log('--- PM2 describe crawl-data-frontend ---');
+            console.log(execSync('pm2 describe crawl-data-frontend || true').toString());
+            console.log('--- Last error log lines ---');
+            console.log(execSync('cat /home/daco-local/.pm2/logs/crawl-data-frontend-error*.log | tail -n 30 || true').toString());
+            console.log('--- Last out log lines ---');
+            console.log(execSync('cat /home/daco-local/.pm2/logs/crawl-data-frontend-out*.log | tail -n 30 || true').toString());
         } catch (e) {}
 
         console.log('[postbuild] PM2 status after clean start:');
