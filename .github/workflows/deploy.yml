@@ -52,5 +52,6 @@ jobs:
       # ================= RESTART PROCESSES VIA PM2 =================
       - name: Restart PM2 Apps
         run: |
-          pm2 reload /srv/marketing/crawl-data/ecosystem.config.js || pm2 start /srv/marketing/crawl-data/ecosystem.config.js
+          cp ecosystem.config.js /srv/marketing/crawl-data/ecosystem.config.js
+          pm2 startOrReload /srv/marketing/crawl-data/ecosystem.config.js --update-env || pm2 restart /srv/marketing/crawl-data/ecosystem.config.js --update-env
           pm2 save
